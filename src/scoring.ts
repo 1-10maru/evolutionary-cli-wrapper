@@ -13,7 +13,6 @@ import {
   TurnSummary,
 } from "./types";
 import { createCounterfactualPromptProfile } from "./promptProfile";
-import { dim, formatPanel } from "./terminalUi";
 
 export const SCORE_WEIGHTS = {
   filesRead: 1.2,
@@ -469,53 +468,26 @@ export function renderAdviceMessages(input: {
     return "次の一手で無駄ラリーをかなり減らせそうです";
   };
 
-  const pushPanel = (message: Omit<RenderedAdviceMessage, "text"> & {
-    title: string;
-    panelTone: "info" | "success" | "warning" | "danger" | "accent";
-    lines: string[];
-  }): void => {
-    pushIfFresh({
-      ...message,
-      text: formatPanel({
-        title: message.title,
-        tone: message.panelTone,
-        lines: message.lines,
-      }),
-    });
-  };
-
   if (input.loopSignals.editLoop) {
-    pushPanel({
+    pushIfFresh({
       key: "recovery-edit-loop",
       category: "recovery",
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      title: "🛟 Evo Rescue",
-      panelTone: "danger",
-      lines: [
-        "ここ、同じ修正点をぐるぐる回り始めています。",
-        "次は 現状 / 期待結果 / 失敗条件 を 3 行で渡すと抜けやすいです。",
-        dim("迷路脱出モード: まず要件を固定してから再挑戦"),
-      ],
+      text: "ここ、同じ修正点をぐるぐる回り始めています。現状 / 期待 / NG 条件 で切り直すと抜けやすいです。",
       lineBudget: 1,
     });
   }
 
   if (input.loopSignals.searchLoop) {
-    pushPanel({
+    pushIfFresh({
       key: "exploration-loop",
       category: "exploration_focus",
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      title: "🧭 Evo Focus",
-      panelTone: "warning",
-      lines: [
-        "探索範囲がちょっと広がりすぎています。",
-        "次は対象ファイルを 1 つに絞ると、かなり収束しやすいです。",
-        dim("おすすめ: ファイル名 + 直したい動作 を 1 行で指定"),
-      ],
+      text: "いま少し広いかも。次は見るファイルを 1 つに絞るとかなり収束しやすいです。",
       lineBudget: 1,
     });
   }
@@ -543,23 +515,17 @@ export function renderAdviceMessages(input: {
       exploration_focus: "次は最初に見るファイルを 1 つだけ指定する",
       praise: "今の進め方をそのまま続ける",
     };
-    const rewardLine =
+    const leadText =
       includePercent
-        ? `予測節約ボーナス: ${savingHeadline(bestNudge)}`
-        : "予測節約ボーナス: 次の往復をかなり短くしやすい形です";
-    pushPanel({
+        ? `${savingHeadline(bestNudge)}`
+        : "次の往復をかなり短くしやすい形です";
+    pushIfFresh({
       key: `nudge-${bestNudge.category}`,
       category: bestNudge.category,
       severity: bestNudge.predictedSavingRate >= 0.25 ? "medium" : "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      title: "⚡ Evo Bonus",
-      panelTone: bestNudge.predictedSavingRate >= 0.25 ? "accent" : "info",
-      lines: [
-        rewardLine,
-        `次にやると刺さりやすいこと: ${actionByCategory[bestNudge.category]}`,
-        `${evidenceText(bestNudge)} | ハマると +50 EXP ルート`,
-      ],
+      text: `${leadText} / 次は ${actionByCategory[bestNudge.category]} / ${evidenceText(bestNudge)}`,
       lineBudget: 1,
       predictedSavingRate: bestNudge.predictedSavingRate,
     });
@@ -590,18 +556,13 @@ export function renderAdviceMessages(input: {
               "今回の依頼、かなり気持ちよくハマっています。",
               "いい流れです。かなりスマートに前へ進めています。",
             ]);
-    pushPanel({
+    pushIfFresh({
       key: praiseKey,
       category: "praise",
       severity: "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      title: "🏆 Evo Combo",
-      panelTone: "success",
-      lines: [
-        praiseText,
-        `今回のごほうび: +50 EXP 候補 | 探索モード ${input.complexity.explorationMode}`,
-      ],
+      text: `${praiseText} / +50 EXP 候補 / 探索モード ${input.complexity.explorationMode}`,
       lineBudget: 1,
     });
   }

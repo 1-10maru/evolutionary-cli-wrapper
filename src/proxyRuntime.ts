@@ -7,6 +7,13 @@ import { detectCli, extractEventsFromLine, parseUsageObservation } from "./adapt
 import { diffSymbolSnapshots } from "./ast";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
+import {
+  loadMascotProfile,
+  renderMascotLevelUp,
+  renderMascotSpecialEvent,
+  renderMascotTurnLine,
+  updateMascotAfterEpisode,
+} from "./mascot";
 import { extractPromptProfile } from "./promptProfile";
 import {
   buildEpisodeComplexity,
@@ -159,6 +166,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const config = ensureEvoConfig(cwd);
   const cli = detectCli(options.cli, options.cli);
   const db = new EvoDatabase(cwd);
+  let mascotProfile = loadMascotProfile(cwd);
   const lightweightTracking = shouldUseLightweightTracking(cwd);
   const promptProfile = extractPromptProfile(options.args.join(" "));
   const startedAt = new Date().toISOString();
@@ -308,10 +316,24 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       events: [...turnState.events],
     });
     turnSummaries.push(summary);
-    for (const message of summary.adviceMessages) {
-      recentMessageKeys.push(message.key);
+    const leadMessage = summary.adviceMessages[0];
+    if (leadMessage) {
+      recentMessageKeys.push(leadMessage.key);
       if (recentMessageKeys.length > 12) recentMessageKeys.shift();
-      process.stdout.write(`\r\n${message.text}\r\n`);
+      const strongestSaving = Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0);
+      const special =
+        leadMessage.category === "recovery" ||
+        leadMessage.category === "exploration_focus" ||
+        strongestSaving >= 0.35;
+      const rendered = special
+        ? renderMascotSpecialEvent(mascotProfile, {
+            message: leadMessage,
+            summary,
+          })
+        : renderMascotTurnLine(mascotProfile, summary);
+      process.stdout.write(`\r\n${rendered}\r\n`);
+    } else {
+      process.stdout.write(`\r\n${renderMascotTurnLine(mascotProfile, summary)}\r\n`);
     }
     pushTurnEvent(
       createEvent("turn_closed", "proxy", {
@@ -466,6 +488,8 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     changedLinesCount,
     turns: turnSummaries,
   });
+  const mascotUpdate = updateMascotAfterEpisode(cwd, summary);
+  mascotProfile = loadMascotProfile(cwd);
 
   db.saveTurns(episodeId, turnRecords, turnSummaries);
   db.finishEpisode(episodeId, {
@@ -513,6 +537,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       nudges,
       loopSignals,
       summary,
+      mascot: mascotUpdate,
       tokenEstimate,
       usageObservations,
       events,

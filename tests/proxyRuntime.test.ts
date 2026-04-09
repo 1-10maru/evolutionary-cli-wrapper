@@ -81,6 +81,7 @@ describe("proxy runtime", () => {
 
     expect(result.artifacts.turns?.length).toBeGreaterThan(0);
     expect(result.artifacts.usageObservations.length).toBeGreaterThan(0);
+    expect(result.artifacts.mascot?.gainedExp).toBeGreaterThan(0);
     expect(explain?.turns.length).toBeGreaterThan(0);
     expect(storage.rowCounts.turns).toBeGreaterThan(0);
     expect(storage.rowCounts.turn_summaries).toBeGreaterThan(0);

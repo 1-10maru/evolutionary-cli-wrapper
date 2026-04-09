@@ -1,6 +1,8 @@
 export type SupportedCli = "codex" | "claude" | "generic";
 export type InterventionMode = "auto" | "active" | "quiet";
 export type InterventionDecisionMode = "active" | "quiet" | "silent";
+export type MascotStage = "egg" | "sprout" | "buddy" | "wizard" | "legend";
+export type MascotMood = "sleepy" | "happy" | "hyped" | "worried" | "proud";
 export type NudgeCategory =
   | "specificity"
   | "structure"
@@ -66,6 +68,37 @@ export interface TokenCalibrationEstimate {
   predictedTotalTokens: number;
   confidence: number;
   sampleSize: number;
+}
+
+export interface MascotProfile {
+  speciesId: string;
+  nickname: string;
+  stage: MascotStage;
+  totalBondExp: number;
+  mood: MascotMood;
+  streakDays: number;
+  lastSeenAt: string | null;
+  favoriteHintStyle: NudgeCategory | "none";
+  lastMessages: string[];
+}
+
+export interface MascotRenderState {
+  profile: MascotProfile;
+  progressPercent: number;
+  level: number;
+  avatar: string;
+  accentTone: "info" | "success" | "warning" | "danger" | "accent" | "magic";
+}
+
+export interface MascotEpisodeUpdate {
+  previousStage: MascotStage;
+  nextStage: MascotStage;
+  gainedExp: number;
+  totalBondExp: number;
+  progressPercent: number;
+  leveledUp: boolean;
+  stageChanged: boolean;
+  mood: MascotMood;
 }
 
 export interface RetentionPolicy {
@@ -328,6 +361,7 @@ export interface EpisodeArtifacts {
   nudges: PredictiveNudge[];
   loopSignals: LoopSignals;
   summary: EpisodeSummary;
+  mascot?: MascotEpisodeUpdate | null;
   tokenEstimate: TokenCalibrationEstimate | null;
   usageObservations: UsageObservation[];
   events: EpisodeEvent[];

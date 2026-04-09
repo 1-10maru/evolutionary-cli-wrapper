@@ -32,6 +32,16 @@ export function getEvoDir(cwd: string): string {
   return path.join(cwd, ".evo");
 }
 
+export function getGlobalEvoHome(cwd: string): string {
+  const fromEnv = process.env.EVO_HOME;
+  if (fromEnv && fromEnv.trim().length > 0) return path.resolve(fromEnv);
+  return path.resolve(cwd);
+}
+
+export function getGlobalEvoDir(cwd: string): string {
+  return path.join(getGlobalEvoHome(cwd), ".evo");
+}
+
 export function getConfigPath(cwd: string): string {
   return path.join(getEvoDir(cwd), "config.json");
 }

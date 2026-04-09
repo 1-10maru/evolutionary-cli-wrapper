@@ -1,4 +1,6 @@
 import {
+  MascotEpisodeUpdate,
+  MascotProfile,
   PredictiveNudge,
   ScoreBreakdown,
   StatsOverview,
@@ -8,6 +10,7 @@ import {
   UsageObservation,
 } from "./types";
 import { colorize, dim, formatPanel } from "./terminalUi";
+import { renderMascotLevelUp, renderMascotState } from "./mascot";
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -28,6 +31,7 @@ export function formatRunSummary(input: {
   fixLoopOccurred: boolean;
   searchLoopOccurred: boolean;
   predictedLossRate: number | null;
+  mascot?: MascotEpisodeUpdate | null;
   tokenEstimate: TokenCalibrationEstimate | null;
   usageObservations: UsageObservation[];
   turns?: TurnSummary[];
@@ -48,6 +52,28 @@ export function formatRunSummary(input: {
       ],
     }),
   );
+
+  if (input.mascot) {
+    lines.push(
+      dim(
+        `Mascot: total=${input.mascot.totalBondExp} EXP | stage=${input.mascot.nextStage} | mood=${input.mascot.mood} | bond=${input.mascot.progressPercent}%`,
+      ),
+    );
+    if (input.mascot.leveledUp || input.mascot.stageChanged) {
+      const pseudoProfile: MascotProfile = {
+        speciesId: "evo-drake",
+        nickname: "EvoPet",
+        stage: input.mascot.nextStage,
+        totalBondExp: input.mascot.totalBondExp,
+        mood: input.mascot.mood,
+        streakDays: 0,
+        lastSeenAt: null,
+        favoriteHintStyle: "none",
+        lastMessages: [],
+      };
+      lines.push(renderMascotLevelUp(pseudoProfile, input.mascot));
+    }
+  }
 
   if (input.turns && input.turns.length > 0) {
     const lastTurn = input.turns[input.turns.length - 1];
@@ -121,6 +147,19 @@ export function formatStats(overview: StatsOverview): string {
   }
 
   return lines.join("\n");
+}
+
+export function formatMascotStats(profile: MascotProfile): string {
+  const state = renderMascotState(profile);
+  return formatPanel({
+    title: "🐾 EvoPet Status",
+    tone: state.accentTone,
+    lines: [
+      `${state.avatar} ${profile.nickname} | stage=${profile.stage} | level=${state.level}`,
+      `bond=${profile.totalBondExp} EXP | progress=${state.progressPercent}% | mood=${profile.mood}`,
+      `favorite=${profile.favoriteHintStyle} | streak=${profile.streakDays}日`,
+    ],
+  });
 }
 
 export function formatStorage(report: StorageReport, compactedEpisodes = 0): string {

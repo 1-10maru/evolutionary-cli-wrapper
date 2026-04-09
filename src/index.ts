@@ -4,6 +4,7 @@ import { Command } from "commander";
 import path from "node:path";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
+import { loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import {
@@ -11,7 +12,7 @@ import {
   setupShellIntegration,
   undoShellIntegration,
 } from "./shellIntegration";
-import { formatExplain, formatRunSummary, formatStats, formatStorage } from "./ui";
+import { formatExplain, formatMascotStats, formatRunSummary, formatStats, formatStorage } from "./ui";
 
 const program = new Command();
 program.enablePositionalOptions();
@@ -66,6 +67,7 @@ program
         fixLoopOccurred: result.artifacts.summary.fixLoopOccurred,
         searchLoopOccurred: result.artifacts.summary.searchLoopOccurred,
         predictedLossRate: result.artifacts.summary.predictedLossRate,
+        mascot: result.artifacts.mascot,
         tokenEstimate: result.artifacts.tokenEstimate,
         usageObservations: result.artifacts.usageObservations,
         turns: result.artifacts.turns,
@@ -100,6 +102,7 @@ program
         fixLoopOccurred: result.artifacts.summary.fixLoopOccurred,
         searchLoopOccurred: result.artifacts.summary.searchLoopOccurred,
         predictedLossRate: result.artifacts.summary.predictedLossRate,
+        mascot: result.artifacts.mascot,
         tokenEstimate: result.artifacts.tokenEstimate,
         usageObservations: result.artifacts.usageObservations,
         turns: result.artifacts.turns,
@@ -274,7 +277,10 @@ program
   .description("Show episode history and current rank.")
   .option("--cwd <path>", "Project directory that owns the .evo database.", process.cwd())
   .action((options: Record<string, unknown>) => {
-    const db = new EvoDatabase(path.resolve(String(options.cwd)));
+    const cwd = path.resolve(String(options.cwd));
+    const db = new EvoDatabase(cwd);
+    console.log(formatMascotStats(loadMascotProfile(cwd)));
+    console.log("");
     console.log(formatStats(db.getStatsOverview()));
     db.close();
   });

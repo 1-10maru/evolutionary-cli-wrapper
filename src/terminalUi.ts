@@ -6,12 +6,13 @@ const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const BLUE = "\x1b[34m";
+const MAGENTA = "\x1b[35m";
 
 function supportsColor(): boolean {
   return Boolean(process.stdout.isTTY || process.stderr.isTTY);
 }
 
-export function toneColor(tone: "info" | "success" | "warning" | "danger" | "accent"): string {
+export function toneColor(tone: "info" | "success" | "warning" | "danger" | "accent" | "magic"): string {
   switch (tone) {
     case "success":
       return GREEN;
@@ -21,12 +22,14 @@ export function toneColor(tone: "info" | "success" | "warning" | "danger" | "acc
       return RED;
     case "accent":
       return BLUE;
+    case "magic":
+      return MAGENTA;
     default:
       return CYAN;
   }
 }
 
-export function colorize(text: string, tone: "info" | "success" | "warning" | "danger" | "accent", bold = false): string {
+export function colorize(text: string, tone: "info" | "success" | "warning" | "danger" | "accent" | "magic", bold = false): string {
   if (!supportsColor()) return text;
   return `${bold ? BOLD : ""}${toneColor(tone)}${text}${RESET}`;
 }
@@ -38,7 +41,7 @@ export function dim(text: string): string {
 
 export function formatPanel(input: {
   title: string;
-  tone: "info" | "success" | "warning" | "danger" | "accent";
+  tone: "info" | "success" | "warning" | "danger" | "accent" | "magic";
   lines: string[];
 }): string {
   const width = Math.max(
