@@ -35,6 +35,9 @@
 - 仕様判断をしたら `docs/DECISIONS.md` に残す
 - docs は UTF-8 で編集する
 - 再現した環境依存トラブルは `docs/knowledge/` に残す
+- 一区切りごとに `CHANGELOG.md` も確認し、必要なら更新する
+- こまめな milestone 単位で `commit -> push` を基本にする
+- push が止まった時は、その理由と次の打ち手を明示する
 
 ## ドキュメント更新ルール
 
