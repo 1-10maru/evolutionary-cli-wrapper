@@ -1,6 +1,6 @@
 # Codex Friction Capture
 
-This note documents the new internal-friction layer added in v2.3.
+This note documents the internal-friction layer added in v2.3.
 
 ## What Evo now tries to capture
 
@@ -13,7 +13,8 @@ This note documents the new internal-friction layer added in v2.3.
 ## Scope
 
 - Codex: deep capture first. Evo tries to read approval, retry, and tool-failure hints from the live proxy stream.
-- Claude / generic CLI: fallback only. Evo estimates friction from visible CLI output and result patterns.
+- Claude: dedicated adapter now exists, but signal quality still depends on what Claude prints to the terminal.
+- generic CLI: fallback only. Evo estimates friction from visible CLI output and result patterns.
 
 ## What the user sees
 
@@ -34,3 +35,13 @@ Friction capture is separate from:
 - future review loop
 
 Keep this layer reusable so it can move into a cross-repo orchestration stack later.
+
+## Parity goal
+
+The goal is shared scoring and shared friction logic across Codex and Claude.
+
+- adapters are CLI-specific
+- normalized friction events are shared
+- friction scoring and stop-and-reframe decisions are shared
+
+So the capture layer can differ, while the actual coaching logic stays aligned.

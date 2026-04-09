@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createClaudeCaptureAdapter } from "../src/capture/claudeCapture";
 import { createCodexCaptureAdapter } from "../src/capture/codexCapture";
 
 describe("codex friction capture", () => {
@@ -21,6 +22,29 @@ describe("codex friction capture", () => {
 
     expect(all).toContain("edit_attempt_failed");
     expect(all).toContain("tool_retry_requested");
+    expect(all).toContain("edit_attempt_recovered");
+  });
+
+  it("tracks Claude approval prompts and grants through the Claude adapter", () => {
+    const adapter = createClaudeCaptureAdapter();
+    const outputEvents = adapter.consumeOutputLine("stdout", "Permission required: allow Claude to run bash?");
+    const inputEvents = adapter.consumeInputChunk("yes\n");
+
+    expect(outputEvents.map((event) => event.type)).toContain("tool_approval_requested");
+    expect(inputEvents.map((event) => event.type)).toContain("tool_approval_granted");
+  });
+
+  it("tracks Claude retry and recovery signals", () => {
+    const adapter = createClaudeCaptureAdapter();
+    const first = adapter.consumeOutputLine("stderr", "edit failed with permission denied");
+    const second = adapter.consumeOutputLine("stdout", "trying again with a different approach");
+    const third = adapter.consumeOutputLine("stdout", "updated file successfully");
+
+    const all = [...first, ...second, ...third].map((event) => event.type);
+
+    expect(all).toContain("edit_attempt_failed");
+    expect(all).toContain("tool_retry_requested");
+    expect(all).toContain("tool_retry_succeeded");
     expect(all).toContain("edit_attempt_recovered");
   });
 });
