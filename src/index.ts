@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import { Command } from "commander";
 import path from "node:path";
-import { ensureEvoConfig, updateEvoConfig } from "./config";
+import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
@@ -107,6 +108,40 @@ program
   });
 
 program
+  .command("pause")
+  .description("Temporarily stop Evo auto-proxy for new PowerShell sessions.")
+  .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
+  .action((options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        enabled: false,
+      },
+    });
+    console.log("Evo auto-proxy paused for new PowerShell sessions.");
+  });
+
+program
+  .command("resume")
+  .description("Re-enable Evo auto-proxy for new PowerShell sessions.")
+  .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
+  .action((options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        enabled: true,
+      },
+    });
+    console.log("Evo auto-proxy resumed for new PowerShell sessions.");
+  });
+
+program
   .command("setup-shell")
   .description("Install PowerShell profile integration and proxy shims.")
   .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
@@ -135,6 +170,35 @@ program
     const cwd = path.resolve(String(options.cwd));
     const result = undoShellIntegration(cwd);
     console.log(`Shell integration removed from: ${result.profilePath}`);
+  });
+
+program
+  .command("forget")
+  .description("Delete local Evo history in the selected project folder.")
+  .option("--cwd <path>", "Project directory whose .evo folder should be removed.", process.cwd())
+  .action((options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    removeEvoData(cwd);
+    console.log(`Deleted local Evo data from ${path.join(cwd, ".evo")}`);
+  });
+
+program
+  .command("uninstall")
+  .description("Remove shell integration and optionally delete local Evo data.")
+  .option("--cwd <path>", "Install directory that owns Evo itself.", process.cwd())
+  .option("--purge-data", "Delete the selected folder's .evo data too.", false)
+  .action((options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    const result = undoShellIntegration(cwd);
+    fs.rmSync(getBinDir(cwd), { recursive: true, force: true });
+    if (Boolean(options.purgeData)) {
+      removeEvoData(cwd);
+    }
+    console.log(`Evo shell integration removed from: ${result.profilePath}`);
+    console.log(`Local shims removed from: ${getBinDir(cwd)}`);
+    if (Boolean(options.purgeData)) {
+      console.log(`Local Evo data deleted from: ${path.join(cwd, ".evo")}`);
+    }
   });
 
 const shell = program.command("shell").description("Inspect or toggle shell integration state.");

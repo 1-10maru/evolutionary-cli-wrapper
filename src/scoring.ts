@@ -13,6 +13,7 @@ import {
   TurnSummary,
 } from "./types";
 import { createCounterfactualPromptProfile } from "./promptProfile";
+import { dim, formatPanel } from "./terminalUi";
 
 export const SCORE_WEIGHTS = {
   filesRead: 1.2,
@@ -42,6 +43,24 @@ function clamp(value: number, min: number, max: number): number {
 
 function round(value: number, digits = 3): number {
   return Number(value.toFixed(digits));
+}
+
+function pickVariant(seed: string, variants: string[]): string {
+  const value = Number.parseInt(seed.slice(0, 6), 16);
+  return variants[Math.abs(value) % variants.length];
+}
+
+function compareBucketStrength(level: ExpectedCostEstimate["bucketLevel"]): number {
+  switch (level) {
+    case "exact":
+      return 4;
+    case "backoff1":
+      return 3;
+    case "backoff2":
+      return 2;
+    case "global":
+      return 1;
+  }
 }
 
 function collectAttentionPaths(events: EpisodeEvent[]): string[] {
@@ -285,6 +304,11 @@ export function computePredictiveNudges(
       confidence,
       explanation,
       category: categorizeCounterfactual(counterfactual),
+      supportSampleSize: Math.max(0, Math.min(currentEstimate.sampleSize, estimate.sampleSize)),
+      bucketLevel:
+        compareBucketStrength(currentEstimate.bucketLevel) <= compareBucketStrength(estimate.bucketLevel)
+          ? currentEstimate.bucketLevel
+          : estimate.bucketLevel,
     };
   });
 }
@@ -426,54 +450,116 @@ export function renderAdviceMessages(input: {
     messages.push(message);
   };
 
-  if (input.loopSignals.editLoop) {
+  const evidenceText = (nudge: PredictiveNudge): string => {
+    const evidenceLabel =
+      nudge.supportSampleSize >= 10
+        ? `あなたの類似履歴 ${nudge.supportSampleSize} 件`
+        : nudge.supportSampleSize >= 4
+          ? `最近の近い履歴 ${nudge.supportSampleSize} 件`
+          : nudge.bucketLevel === "global"
+            ? "履歴がまだ少ないので暫定予測"
+            : "履歴が薄いので軽めの予測";
+    return `${evidenceLabel} | 信頼度 ${Math.round(nudge.confidence * 100)}%`;
+  };
+
+  const savingHeadline = (nudge: PredictiveNudge): string => {
+    const percent = Math.max(0, Math.round(nudge.predictedSavingRate * 100));
+    if (percent >= 30) return `次の一手で ${percent}% 近い節約が見込めます`;
+    if (percent >= 15) return `次の一手で ${percent}% 前後の節約が見込めます`;
+    return "次の一手で無駄ラリーをかなり減らせそうです";
+  };
+
+  const pushPanel = (message: Omit<RenderedAdviceMessage, "text"> & {
+    title: string;
+    panelTone: "info" | "success" | "warning" | "danger" | "accent";
+    lines: string[];
+  }): void => {
     pushIfFresh({
+      ...message,
+      text: formatPanel({
+        title: message.title,
+        tone: message.panelTone,
+        lines: message.lines,
+      }),
+    });
+  };
+
+  if (input.loopSignals.editLoop) {
+    pushPanel({
       key: "recovery-edit-loop",
       category: "recovery",
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      text: "Evo: いま同じ修正点を回り始めています。現状・期待結果・失敗条件を3行で並べ直すと抜けやすいです。",
+      title: "Evo Rescue",
+      panelTone: "danger",
+      lines: [
+        "同じ修正点を回り始めています。",
+        "次は 現状 / 期待結果 / 失敗条件 を3行で渡すと抜けやすいです。",
+        dim("迷路脱出モード: まず要件を固定してから再実行"),
+      ],
       lineBudget: 1,
     });
   }
 
   if (input.loopSignals.searchLoop) {
-    pushIfFresh({
+    pushPanel({
       key: "exploration-loop",
       category: "exploration_focus",
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      text: "Evo: 探索範囲が広がりすぎています。次は対象ファイルを1つに絞って依頼すると収束しやすいです。",
+      title: "Evo Focus",
+      panelTone: "warning",
+      lines: [
+        "探索範囲が広がりすぎています。",
+        "次は対象ファイルを 1 つに絞ると、かなり収束しやすいです。",
+        dim("おすすめ: ファイル名 + 直したい動作 を1行で指定"),
+      ],
       lineBudget: 1,
     });
   }
 
   if (bestNudge && bestNudge.predictedSavingRate > 0) {
     const includePercent = bestNudge.confidence >= input.minConfidenceForPercent;
-    const textByCategory: Record<PredictiveNudge["category"], string> = {
-      specificity: includePercent
-        ? `Evo: 関数名や対象ファイルを足すと、約${Math.round(bestNudge.predictedSavingRate * 100)}%の節約が見込めます。`
-        : "Evo: 関数名や対象ファイルを足すと、次の往復をかなり減らしやすいです。",
-      structure: includePercent
-        ? `Evo: 箇条書きと完了条件を足すと、約${Math.round(bestNudge.predictedSavingRate * 100)}%の節約が見込めます。`
-        : "Evo: 箇条書きと完了条件を足すと、迷いが減って通りやすくなります。",
-      verification: includePercent
-        ? `Evo: 成功条件を1行足すと、約${Math.round(bestNudge.predictedSavingRate * 100)}%の節約が見込めます。`
-        : "Evo: 成功条件を1行足すと、やり直しの回数を抑えやすいです。",
-      scope_control: "Evo: 変更対象を一段小さく区切ると、次の応答が安定しやすいです。",
-      recovery: "Evo: 依頼を現状・期待・失敗条件に分けると、迷路から抜けやすいです。",
-      exploration_focus: "Evo: まず見るファイルを1つだけ指定すると、探索の散りが減ります。",
-      praise: "Evo: いい指示です。狙いが絞れていて進み方が安定しています。",
+    const actionByCategory: Record<PredictiveNudge["category"], string> = {
+      specificity: pickVariant(input.promptProfile.promptHash, [
+        "次は 関数名 か 対象ファイル名 を 1 個足す",
+        "次は どこを直すか を 1 行だけ具体化する",
+        "次は 対象シンボル を 1 つ名指しする",
+      ]),
+      structure: pickVariant(input.promptProfile.promptHash, [
+        "次は 箇条書き + 完了条件 を 2 行足す",
+        "次は やること と 終了条件 を分けて渡す",
+        "次は 制約 と ゴール を別行で置く",
+      ]),
+      verification: pickVariant(input.promptProfile.promptHash, [
+        "次は 成功条件 を 1 行足す",
+        "次は 何が通れば完了か を先に書く",
+        "次は テスト意図 を短く添える",
+      ]),
+      scope_control: "次は変更対象を一段小さく区切る",
+      recovery: "次は 現状 / 期待 / NG 条件 に分け直す",
+      exploration_focus: "次は最初に見るファイルを 1 つだけ指定する",
+      praise: "今の進め方をそのまま続ける",
     };
-    pushIfFresh({
+    const rewardLine =
+      includePercent
+        ? `予測節約ボーナス: ${savingHeadline(bestNudge)}`
+        : "予測節約ボーナス: 次の往復を短くしやすい形です";
+    pushPanel({
       key: `nudge-${bestNudge.category}`,
       category: bestNudge.category,
       severity: bestNudge.predictedSavingRate >= 0.25 ? "medium" : "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      text: textByCategory[bestNudge.category],
+      title: "Evo Bonus",
+      panelTone: bestNudge.predictedSavingRate >= 0.25 ? "accent" : "info",
+      lines: [
+        rewardLine,
+        `次にやると刺さりやすいこと: ${actionByCategory[bestNudge.category]}`,
+        `${evidenceText(bestNudge)} | 刺さると +50 EXP ルート`,
+      ],
       lineBudget: 1,
       predictedSavingRate: bestNudge.predictedSavingRate,
     });
@@ -488,17 +574,34 @@ export function renderAdviceMessages(input: {
           : "praise-clean";
     const praiseText =
       praiseKey === "praise-structured"
-        ? "Evo: 指示がかなり整っていて、無駄なく前進できています。"
+        ? pickVariant(input.promptProfile.promptHash, [
+            "構造化がかなり効いています。いまの頼み方は強いです。",
+            "要件の切り方がきれいです。かなり無駄なく進めています。",
+            "指示の骨組みが良く、手戻りを抑えられています。",
+          ])
         : praiseKey === "praise-converged"
-          ? "Evo: 探索の絞り込みがきれいです。この進め方はかなり強いです。"
-          : "Evo: きれいに通っています。今の頼み方はかなり素直です。";
-    pushIfFresh({
+          ? pickVariant(input.promptProfile.promptHash, [
+              "探索の絞り込みがきれいです。この進め方はかなり強いです。",
+              "見る場所の寄せ方が上手く、収束が速いです。",
+              "散らずに詰められています。この形は再現性があります。",
+            ])
+          : pickVariant(input.promptProfile.promptHash, [
+              "きれいに通っています。今の頼み方はかなり素直です。",
+              "今回の依頼は通りが良く、かなりスマートです。",
+              "無駄な往復が少なく、いいテンポで進んでいます。",
+            ]);
+    pushPanel({
       key: praiseKey,
       category: "praise",
       severity: "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      text: praiseText,
+      title: "Evo Combo",
+      panelTone: "success",
+      lines: [
+        praiseText,
+        `今回のごほうび: +50 EXP 候補 | 探索モード ${input.complexity.explorationMode}`,
+      ],
       lineBudget: 1,
     });
   }
@@ -557,6 +660,15 @@ export function buildTurnSummary(input: {
     recentNudgeEffectiveness,
     mode: input.mode,
   });
+  if (
+    decision.mode === "silent" &&
+    input.firstPassGreen &&
+    (input.promptProfile.structureScore >= 4 || input.complexity.attentionCompression > 0.1)
+  ) {
+    decision.mode = "active";
+    decision.reasonCodes = [...decision.reasonCodes, "praise_opportunity"];
+    decision.displayBudgetLines = 1;
+  }
   const adviceMessages = renderAdviceMessages({
     promptProfile: input.promptProfile,
     nudges,

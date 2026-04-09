@@ -7,6 +7,7 @@ import {
   TurnSummary,
   UsageObservation,
 } from "./types";
+import { colorize, dim, formatPanel } from "./terminalUi";
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -31,65 +32,62 @@ export function formatRunSummary(input: {
   usageObservations: UsageObservation[];
   turns?: TurnSummary[];
 }): string {
+  const bestNudge = [...input.nudges].sort((left, right) => right.predictedSavingRate - left.predictedSavingRate)[0];
   const lines: string[] = [];
   lines.push("");
-  lines.push("=== Evo Summary ===");
-  lines.push(`Episode #${input.episodeId}`);
-  lines.push(`Surrogate Cost: ${input.score.surrogateCost}`);
   lines.push(
-    `Context: files_read=${input.score.filesRead}, lines_read_norm=${input.score.linesReadNorm}, cross_file_spread=${input.score.crossFileSpread}`,
-  );
-  lines.push(
-    `Recovery: symbol_revisits=${input.score.symbolRevisits}, retries=${input.score.retryCount}, failed_verifications=${input.score.failedVerifications}, no_change_turns=${input.score.noChangeTurns}`,
-  );
-  lines.push(
-    `Exploration: entropy=${input.score.attentionEntropy}, compression=${input.score.attentionCompression}, novelty=${percent(input.score.noveltyRatio)}`,
+    formatPanel({
+      title: "Evo Recap",
+      tone: input.fixLoopOccurred || input.searchLoopOccurred ? "warning" : input.niceGuidanceAwarded ? "success" : "info",
+      lines: [
+        `Episode #${input.episodeId} | Surrogate Cost ${input.score.surrogateCost}`,
+        `探索 ${input.score.filesRead} 件 / 再試行 ${input.score.retryCount} 回 / novelty ${percent(input.score.noveltyRatio)}`,
+        input.niceGuidanceAwarded
+          ? `今回のごほうび: smart guidance bonus +${input.expAwarded} EXP`
+          : `今回のごほうび: +${input.expAwarded} EXP`,
+      ],
+    }),
   );
 
   if (input.turns && input.turns.length > 0) {
     const lastTurn = input.turns[input.turns.length - 1];
-    lines.push(
-      `Turns: ${input.turns.length} (last=${lastTurn.intervention.mode}, latency=${lastTurn.responseLatencyBucket}, advice=${lastTurn.adviceMessages.length})`,
-    );
-  }
-
-  if (input.niceGuidanceAwarded) {
-    lines.push(`Reward: smart guidance bonus +${input.expAwarded} EXP`);
-  } else {
-    lines.push(`EXP: +${input.expAwarded}`);
-  }
-
-  if (input.predictedLossRate !== null) {
-    lines.push(`Hint: a more structured request could likely save about ${percent(input.predictedLossRate)} here.`);
+    lines.push(dim(`Turns: ${input.turns.length} | last mode=${lastTurn.intervention.mode} | latency=${lastTurn.responseLatencyBucket}`));
   }
 
   if (input.fixLoopOccurred) {
-    lines.push("Loop Signal: edit loop detected. Reframing the request should help break the cycle.");
+    lines.push(colorize("Loop Signal: 同じ修正点を回っていました。次は現状 / 期待 / NG 条件で切ると抜けやすいです。", "danger", true));
   }
 
   if (input.searchLoopOccurred) {
-    lines.push("Search Signal: attention is spreading. Narrowing the next target file should help.");
+    lines.push(colorize("Search Signal: 探索が散っていました。次は対象ファイルを 1 つに絞るのがおすすめです。", "warning", true));
   }
 
-  if (input.nudges.length > 0) {
-    lines.push("Predictive Nudges:");
-    for (const nudge of input.nudges) {
-      lines.push(
-        `- ${nudge.explanation} saving=${percent(Math.max(nudge.predictedSavingRate, 0))} confidence=${percent(nudge.confidence)}`,
-      );
-    }
+  if (bestNudge && bestNudge.predictedSavingRate > 0) {
+    lines.push(
+      formatPanel({
+        title: "Next Bonus",
+        tone: bestNudge.predictedSavingRate >= 0.25 ? "accent" : "info",
+        lines: [
+          `${Math.round(bestNudge.predictedSavingRate * 100)}% 前後の節約見込み`,
+          bestNudge.explanation,
+          `${bestNudge.supportSampleSize > 0 ? `類似履歴 ${bestNudge.supportSampleSize} 件` : "履歴がまだ薄いので暫定"} | 信頼度 ${percent(bestNudge.confidence)}`,
+        ],
+      }),
+    );
+  } else if (input.predictedLossRate !== null) {
+    lines.push(colorize(`Next Bonus: 構造化すると ${percent(input.predictedLossRate)} 近い節約余地があります。`, "info", true));
   }
 
   if (input.tokenEstimate) {
     lines.push(
-      `Calibrated token proxy: total~${input.tokenEstimate.predictedTotalTokens} confidence=${percent(input.tokenEstimate.confidence)} samples=${input.tokenEstimate.sampleSize}`,
+      dim(`Token proxy: total~${input.tokenEstimate.predictedTotalTokens} | confidence=${percent(input.tokenEstimate.confidence)} | samples=${input.tokenEstimate.sampleSize}`),
     );
   }
 
   if (input.usageObservations.length > 0) {
     const latest = input.usageObservations[input.usageObservations.length - 1];
     lines.push(
-      `Usage capture: prompt=${latest.promptTokens ?? "?"}, completion=${latest.completionTokens ?? "?"}, total=${latest.totalTokens ?? "?"} (${latest.source})`,
+      dim(`Usage capture: prompt=${latest.promptTokens ?? "?"}, completion=${latest.completionTokens ?? "?"}, total=${latest.totalTokens ?? "?"} (${latest.source})`),
     );
   }
 

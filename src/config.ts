@@ -40,6 +40,10 @@ export function getBinDir(cwd: string): string {
   return path.join(cwd, "bin");
 }
 
+export function removeEvoData(cwd: string): void {
+  fs.rmSync(getEvoDir(cwd), { recursive: true, force: true });
+}
+
 export function getDefaultPowerShellProfilePath(): string {
   return path.join(os.homedir(), "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
 }

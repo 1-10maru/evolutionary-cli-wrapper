@@ -214,6 +214,8 @@ export interface PredictiveNudge {
   confidence: number;
   explanation: string;
   category: NudgeCategory;
+  supportSampleSize: number;
+  bucketLevel: ExpectedCostEstimate["bucketLevel"];
 }
 
 export interface RenderedAdviceMessage {
