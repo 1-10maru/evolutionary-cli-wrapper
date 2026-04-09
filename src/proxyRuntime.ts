@@ -12,6 +12,7 @@ import {
   loadMascotProfile,
   renderMascotLevelUp,
   renderMascotSpecialEvent,
+  renderMascotStartupLine,
   renderMascotTurnLine,
   updateMascotAfterEpisode,
 } from "./mascot";
@@ -188,6 +189,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   process.stderr.write(
     `Evo tracking ON | cli=${cli} | dir=${cwd} | mode=${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}\n`,
   );
+  process.stderr.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
 
   const beforeSnapshotPromise = lightweightTracking
     ? Promise.resolve(createEmptySnapshot())

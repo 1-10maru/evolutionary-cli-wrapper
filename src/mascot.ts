@@ -253,6 +253,23 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
   return `${prefix} ${moodText} | ${action} | ${savingLabel} | ${expLabel}`;
 }
 
+export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "claude" | "generic", lightweightTracking: boolean): string {
+  const state = renderMascotState(profile);
+  const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
+  const moodText = colorize(moodLabel(profile.mood), "info");
+  const action = colorize(
+    cli === "claude"
+      ? "いっしょに見守るよ。返事がひと段落したら声かけるね"
+      : cli === "codex"
+        ? "準備できてるよ。いいタイミングでそっと声かけるね"
+        : "準備できてるよ。流れを見ながらついていくね",
+    "accent",
+  );
+  const status = colorize(lightweightTracking ? "light tracking" : "tracking ready", lightweightTracking ? "warning" : "success", true);
+  const bond = dim(`Bond ${state.progressPercent}%`);
+  return `${prefix} ${moodText} | ${action} | ${status} | ${bond}`;
+}
+
 export function renderMascotSpecialEvent(profile: MascotProfile, input: {
   message: RenderedAdviceMessage;
   summary: TurnSummary;
