@@ -66,6 +66,62 @@ Evo tracking ON | cli=claude | dir=... | mode=auto
 Evo tracking ON | cli=claude | dir=... | mode=auto | light
 ```
 
+## スクリーンショット風の実行例
+
+### 1. セットアップ直後
+
+```text
+PS C:\work\evolutionary-cli-wrapper> npm install
+PS C:\work\evolutionary-cli-wrapper> npm run setup
+
+Setup complete. Open a new PowerShell session, then use codex or claude as usual.
+```
+
+### 2. Claude をいつも通り起動
+
+```text
+PS C:\work\my-app> claude
+Evo tracking ON | cli=claude | dir=C:\work\my-app | mode=auto
+
+ ▐▛███▜▌   Claude Code v2.1.92
+▝▜█████▛▘  Opus 4.6 (1M context) · Claude Max
+  ▘▘ ▝▝    C:\work\my-app
+```
+
+### 3. 親フォルダで起動した時の軽量モード
+
+```text
+PS C:\Users\name\Documents> claude
+Evo tracking ON | cli=claude | dir=C:\Users\name\Documents | mode=auto | light
+```
+
+### 4. セッション後に履歴を見る
+
+```text
+PS C:\work\my-app> evo stats --cwd .
+
+=== Evo Stats ===
+Episodes: 12
+Average Surrogate Cost: 8.4
+Total EXP: 540
+Recent Episodes:
+- #12 claude completed
+- #11 claude completed
+```
+
+### 5. 個別の採点理由を見る
+
+```text
+PS C:\work\my-app> evo explain 12 --cwd .
+
+Episode #12
+Surrogate Cost: 6.8
+Exploration Mode: balanced
+Nice Guidance: yes
+Predictive Nudges:
+- 対象ファイルや関数を少し具体化すると、探索の寄り道を減らしやすくなります。
+```
+
 ## 何が保存されるか
 
 保存先は、CLI を起動したフォルダの `.evo` です。
@@ -215,6 +271,11 @@ evo import-knowledge --cwd <project> --input evo-knowledge.json
 ### 動いているか分かりづらい
 
 起動直後に `Evo tracking ON | ...` が出ていれば、その session は Evo 経由です。
+
+### README や日本語表示が文字化けする
+
+README 自体は UTF-8 で保存しています。  
+PowerShell の既定表示で文字化けして見えても、GitHub 上の表示や UTF-8 前提のエディタでは正常です。
 
 ### 一時的に素の CLI を使いたい
 
