@@ -99,6 +99,23 @@ npm run setup
 - 詳細ルールは [VERSIONING.md](./VERSIONING.md)
 - 変更履歴は [CHANGELOG.md](./CHANGELOG.md)
 
+## 他の PC で clone して進める時
+
+このリポジトリは、他の PC で clone して未実装を確認したり、複数の人や AI エージェントが並列に進めやすい形で運用できるようにしてあります。
+
+- 未実装項目と優先度を見る: [ROADMAP.md](./ROADMAP.md)
+- 並列開発のルールを見る: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- 仕様判断の履歴を見る: [docs/DECISIONS.md](./docs/DECISIONS.md)
+- PR 時の更新漏れを防ぐ: [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)
+
+普段の流れはこれです。
+
+1. clone
+2. `npm install`
+3. `npm run setup`
+4. `ROADMAP.md` を見て担当を決める
+5. `codex/<topic>` ブランチを切って進める
+
 ## 使い始め
 
 ```powershell
