@@ -1,6 +1,6 @@
 {
   "name": "evolutionary-cli-wrapper",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "CLI wrapper that scores and guides LLM collaboration efficiency without depending on token access.",
   "type": "commonjs",
   "main": "dist/index.js",
@@ -13,7 +13,9 @@
     "postinstall": "npm run build",
     "setup": "node scripts/setup.mjs",
     "test": "vitest run tests",
-    "test:watch": "vitest tests"
+    "test:watch": "vitest tests",
+    "release:check": "npm run build && npm test",
+    "version:show": "node -p \"require('./package.json').version\""
   },
   "keywords": [],
   "author": "",

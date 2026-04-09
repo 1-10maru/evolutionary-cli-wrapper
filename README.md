@@ -91,6 +91,14 @@ npm run setup
 
 最短手順だけ見たい場合は [START_HERE_JA.md](./START_HERE_JA.md) を読んでください。
 
+## バージョン管理
+
+- バージョンは Semantic Versioning で管理します
+- タグは `vX.Y.Z`
+- 大きなメジャーアップデートごとに `release/vX` ブランチを切ります
+- 詳細ルールは [VERSIONING.md](./VERSIONING.md)
+- 変更履歴は [CHANGELOG.md](./CHANGELOG.md)
+
 ## 使い始め
 
 ```powershell
