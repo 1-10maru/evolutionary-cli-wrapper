@@ -113,7 +113,7 @@ program
 
 program
   .command("pause")
-  .description("Temporarily stop Evo auto-proxy for new PowerShell sessions.")
+  .description("Temporarily stop Evo auto-proxy for new terminal sessions.")
   .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
   .action((options: Record<string, unknown>) => {
     const cwd = path.resolve(String(options.cwd));
@@ -125,12 +125,12 @@ program
         enabled: false,
       },
     });
-    console.log("Evo auto-proxy paused for new PowerShell sessions.");
+    console.log("Evo auto-proxy paused for new terminal sessions.");
   });
 
 program
   .command("resume")
-  .description("Re-enable Evo auto-proxy for new PowerShell sessions.")
+  .description("Re-enable Evo auto-proxy for new terminal sessions.")
   .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
   .action((options: Record<string, unknown>) => {
     const cwd = path.resolve(String(options.cwd));
@@ -142,12 +142,12 @@ program
         enabled: true,
       },
     });
-    console.log("Evo auto-proxy resumed for new PowerShell sessions.");
+    console.log("Evo auto-proxy resumed for new terminal sessions.");
   });
 
 program
   .command("setup-shell")
-  .description("Install PowerShell profile integration and proxy shims.")
+  .description("Install terminal integration and proxy shims.")
   .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
   .option("--disable", "Disable shell integration instead of enabling it.", false)
   .action((options: Record<string, unknown>) => {
@@ -163,12 +163,12 @@ program
     console.log(`profile: ${result.profilePath}`);
     console.log(`codex: ${result.originalCommandMap.codex ?? "not found"}`);
     console.log(`claude: ${result.originalCommandMap.claude ?? "not found"}`);
-    console.log(`Open a new PowerShell session to start using codex/claude through Evo automatically.`);
+    console.log(`Open a new terminal session to start using codex/claude through Evo automatically.`);
   });
 
 program
   .command("undo-shell")
-  .description("Remove the managed PowerShell integration block.")
+  .description("Remove the managed shell integration block.")
   .option("--cwd <path>", "Project directory that owns the .evo config.", process.cwd())
   .action((options: Record<string, unknown>) => {
     const cwd = path.resolve(String(options.cwd));
@@ -219,7 +219,7 @@ shell
         enabled: true,
       },
     });
-    console.log("Evo shell integration is ON for new PowerShell sessions.");
+    console.log("Evo shell integration is ON for new terminal sessions.");
   });
 
 shell
@@ -235,7 +235,7 @@ shell
         enabled: false,
       },
     });
-    console.log("Evo shell integration is OFF for new PowerShell sessions.");
+    console.log("Evo shell integration is OFF for new terminal sessions.");
   });
 
 shell

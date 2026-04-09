@@ -29,5 +29,5 @@ if (shellSetup.status !== 0) {
 }
 
 if (existsSync(".evo/config.json")) {
-  console.log("Setup complete. Open a new PowerShell session, then use codex or claude as usual.");
+  console.log("Setup complete. Open a new terminal session, then use codex or claude as usual.");
 }
