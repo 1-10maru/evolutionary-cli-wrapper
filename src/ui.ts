@@ -79,6 +79,22 @@ export function formatRunSummary(input: {
   if (input.turns && input.turns.length > 0) {
     const lastTurn = input.turns[input.turns.length - 1];
     lines.push(dim(`Turns: ${input.turns.length} | last mode=${lastTurn.intervention.mode} | latency=${lastTurn.responseLatencyBucket}`));
+    if (lastTurn.friction.frictionScore > 0) {
+      lines.push(
+        dim(
+          `Friction: approvals=${lastTurn.friction.approvalCount}, tool_errors=${lastTurn.friction.toolErrorCount}, retries=${lastTurn.friction.toolRetryCount}, score=${lastTurn.friction.frictionScore}`,
+        ),
+      );
+    }
+    if (lastTurn.stopAndReframe.stopAndReframeSignal) {
+      lines.push(
+        colorize(
+          `Stop point: ${lastTurn.stopAndReframe.suggestedReframe} | ${lastTurn.stopAndReframe.avoidableCostLabel}`,
+          "warning",
+          true,
+        ),
+      );
+    }
   }
 
   if (input.fixLoopOccurred) {
@@ -216,13 +232,24 @@ export function formatExplain(explanation: {
   if (typeof explanation.summary.intervention_mode !== "undefined") {
     lines.push(`Intervention mode: ${explanation.summary.intervention_mode}`);
   }
+  if (typeof explanation.summary.friction_score !== "undefined") {
+    lines.push(
+      `Internal friction: approvals=${explanation.summary.approval_count ?? 0}, tool_errors=${explanation.summary.tool_error_count ?? 0}, retries=${explanation.summary.tool_retry_count ?? 0}, score=${explanation.summary.friction_score}`,
+    );
+    lines.push(
+      `Stop and reframe: ${Number(explanation.summary.stop_and_reframe_signal) === 1 ? "yes" : "no"} | best stop turn=${explanation.summary.best_stop_turn ?? "n/a"}`,
+    );
+    if (explanation.summary.suggested_reframe) {
+      lines.push(`Suggested reframe: ${explanation.summary.suggested_reframe}`);
+    }
+  }
 
   if (explanation.turns && explanation.turns.length > 0) {
     lines.push("");
     lines.push("Turns:");
     for (const turn of explanation.turns) {
       lines.push(
-        `- #${turn.turn_index} cost=${turn.surrogate_cost} mode=${turn.intervention_mode} latency=${turn.response_latency_bucket} reasons=${turn.reason_codes_json}`,
+        `- #${turn.turn_index} cost=${turn.surrogate_cost} friction=${turn.friction_score ?? 0} approvals=${turn.approval_count ?? 0} errors=${turn.tool_error_count ?? 0} retries=${turn.tool_retry_count ?? 0} mode=${turn.intervention_mode} latency=${turn.response_latency_bucket} stop=${turn.stop_category ?? "none"}`,
       );
     }
   }

@@ -9,6 +9,7 @@ import {
   computeInterventionDecision,
   StatsLookup,
 } from "../src/scoring";
+import { buildStopAndReframeDecision, summarizeFrictionEvents } from "../src/capture/frictionCore";
 import { extractPromptProfile } from "../src/promptProfile";
 import { EpisodeEvent } from "../src/types";
 
@@ -166,6 +167,28 @@ done when tests pass
       nudges,
       loopSignals: { editLoop: false, searchLoop: true, touchedStableSymbolIds: [] },
       complexity,
+      friction: {
+        approvalCount: 0,
+        approvalBurst: 0,
+        toolErrorCount: 0,
+        toolRetryCount: 0,
+        toolFailureStreak: 0,
+        editFailureCount: 0,
+        recoveryAttempts: 0,
+        humanConfirmationBurst: 0,
+        frictionScore: 0.2,
+        stopAndReframeSignal: false,
+        dominantSignal: "none",
+        confidence: 0.3,
+      },
+      stopAndReframe: {
+        stopAndReframeSignal: false,
+        category: "none",
+        confidence: 0.3,
+        reasonCodes: [],
+        suggestedReframe: "",
+        avoidableCostLabel: "",
+      },
       confidence: 0.8,
       assistantReaskRate: 0.3,
       turnRetryDepth: 2,
@@ -210,5 +233,27 @@ done when tests pass
 
     expect(turn.intervention.mode).toBe("active");
     expect(turn.adviceMessages.length).toBeGreaterThan(0);
+  });
+
+  it("summarizes approval bursts and recommends stopping to reframe", () => {
+    const frictionEvents: EpisodeEvent[] = [
+      { type: "tool_approval_requested", source: "proxy", timestamp: "2026-01-01T00:00:00.000Z", details: {} },
+      { type: "tool_approval_granted", source: "proxy", timestamp: "2026-01-01T00:00:01.000Z", details: {} },
+      { type: "tool_approval_requested", source: "proxy", timestamp: "2026-01-01T00:00:02.000Z", details: {} },
+      { type: "tool_approval_granted", source: "proxy", timestamp: "2026-01-01T00:00:03.000Z", details: {} },
+      { type: "tool_approval_requested", source: "proxy", timestamp: "2026-01-01T00:00:04.000Z", details: {} },
+    ];
+
+    const friction = summarizeFrictionEvents(frictionEvents);
+    const decision = buildStopAndReframeDecision({
+      friction,
+      events: frictionEvents,
+    });
+
+    expect(friction.approvalCount).toBe(3);
+    expect(friction.approvalBurst).toBeGreaterThanOrEqual(3);
+    expect(friction.stopAndReframeSignal).toBe(true);
+    expect(decision.stopAndReframeSignal).toBe(true);
+    expect(decision.category).toBe("approval_storm");
   });
 });

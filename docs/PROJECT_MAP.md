@@ -64,3 +64,9 @@
 - 学習データは project-local `.evo`
 - EvoPet は global 側に保存される
 - 将来の orchestration は本体 CLI と分離したモジュールとして切り出す
+## Friction Layer
+
+- `src/capture/frictionCore.ts` aggregates approvals, tool errors, retries, and stop-and-reframe signals.
+- `src/capture/codexCapture.ts` is the Codex-first adapter.
+- `src/capture/genericCapture.ts` is the fallback adapter for Claude / generic CLIs.
+- Keep this layer separate from future issue-intake / dispatch / review-loop modules.

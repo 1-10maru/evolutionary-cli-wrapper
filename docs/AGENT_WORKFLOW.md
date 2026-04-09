@@ -99,3 +99,8 @@ Next:
 - `area:proxy`
 - `area:ui`
 - `area:docs`
+
+## Friction Notes
+
+- If Codex work reveals repeated approval bursts, tool failures, or retry loops, add the reusable lesson to `docs/knowledge/codex-friction.md`.
+- If you change friction capture rules, update the runtime tests and the knowledge note in the same PR.

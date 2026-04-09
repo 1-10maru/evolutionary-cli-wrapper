@@ -4,14 +4,17 @@ import {
   EpisodeEvent,
   EpisodeSummary,
   ExpectedCostEstimate,
+  FrictionSummary,
   InterventionDecision,
   LoopSignals,
   PredictiveNudge,
   PromptProfile,
   RenderedAdviceMessage,
   ScoreBreakdown,
+  StopAndReframeDecision,
   TurnSummary,
 } from "./types";
+import { buildStopAndReframeDecision, findBestStopTurn, summarizeFrictionEvents } from "./capture/frictionCore";
 import { createCounterfactualPromptProfile } from "./promptProfile";
 
 export const SCORE_WEIGHTS = {
@@ -342,6 +345,8 @@ export function computeInterventionDecision(input: {
   nudges: PredictiveNudge[];
   loopSignals: LoopSignals;
   complexity: EpisodeComplexity;
+  friction: FrictionSummary;
+  stopAndReframe: StopAndReframeDecision;
   confidence: number;
   assistantReaskRate: number;
   turnRetryDepth: number;
@@ -370,9 +375,17 @@ export function computeInterventionDecision(input: {
   const reasonCodes: string[] = [];
   let score = 0;
 
+  if (input.stopAndReframe.stopAndReframeSignal) {
+    reasonCodes.push(...input.stopAndReframe.reasonCodes);
+    score += 0.9;
+  }
   if (input.loopSignals.editLoop || input.loopSignals.searchLoop) {
     reasonCodes.push("loop_signal");
     score += 0.8;
+  }
+  if (input.friction.frictionScore >= 1.6) {
+    reasonCodes.push("friction_pressure");
+    score += 0.4;
   }
   if (input.complexity.explorationMode === "scattered" || input.complexity.explorationMode === "loop-prone") {
     reasonCodes.push("exploration_scatter");
@@ -424,6 +437,8 @@ export function computeInterventionDecision(input: {
 export function renderAdviceMessages(input: {
   promptProfile: PromptProfile;
   nudges: PredictiveNudge[];
+  friction: FrictionSummary;
+  stopAndReframe: StopAndReframeDecision;
   loopSignals: LoopSignals;
   complexity: EpisodeComplexity;
   decision: InterventionDecision;
@@ -448,6 +463,26 @@ export function renderAdviceMessages(input: {
     if (messages.some((item) => item.key === message.key)) return;
     messages.push(message);
   };
+
+  if (input.stopAndReframe.stopAndReframeSignal) {
+    const stopLead =
+      input.stopAndReframe.category === "approval_storm"
+        ? "ここ、今止めるとかなり得です。承認ラッシュが続いています。"
+        : input.stopAndReframe.category === "error_spiral"
+          ? "いまは修正より整理のターンかも。失敗が連続しています。"
+          : input.stopAndReframe.category === "retry_loop"
+            ? "ここで切り直すと得です。再試行が連続しています。"
+            : "ここで一回絞ると次の往復が軽くなりそうです。";
+    pushIfFresh({
+      key: `friction-${input.stopAndReframe.category}`,
+      category: "recovery",
+      severity: input.friction.frictionScore >= 2 ? "high" : "medium",
+      tone: "corrective",
+      surface: "end_of_turn",
+      text: `${stopLead} / 次は ${input.stopAndReframe.suggestedReframe} / ${input.stopAndReframe.avoidableCostLabel}`,
+      lineBudget: input.friction.frictionScore >= 2 ? 2 : 1,
+    });
+  }
 
   const evidenceText = (nudge: PredictiveNudge): string => {
     const evidenceLabel =
@@ -600,6 +635,11 @@ export function buildTurnSummary(input: {
     stats: input.stats,
     firstPassGreen: input.firstPassGreen,
   });
+  const friction = summarizeFrictionEvents(input.events);
+  const stopAndReframe = buildStopAndReframeDecision({
+    friction,
+    events: input.events,
+  });
   const nudges = computePredictiveNudges(input.promptProfile, input.complexity, input.stats);
   const clarificationCount = input.events.filter((event) => event.type === "clarification_prompt").length;
   const assistantReaskRate = input.events.length === 0 ? 0 : clarificationCount / input.events.length;
@@ -615,6 +655,8 @@ export function buildTurnSummary(input: {
     nudges,
     loopSignals,
     complexity: input.complexity,
+    friction,
+    stopAndReframe,
     confidence,
     assistantReaskRate: round(assistantReaskRate),
     turnRetryDepth: input.turnRetryDepth,
@@ -633,6 +675,8 @@ export function buildTurnSummary(input: {
   const adviceMessages = renderAdviceMessages({
     promptProfile: input.promptProfile,
     nudges,
+    friction,
+    stopAndReframe,
     loopSignals,
     complexity: input.complexity,
     decision,
@@ -647,6 +691,8 @@ export function buildTurnSummary(input: {
     promptProfile: input.promptProfile,
     score,
     complexity: input.complexity,
+    friction,
+    stopAndReframe,
     loopSignals,
     nudges,
     intervention: decision,
@@ -673,6 +719,35 @@ export function buildEpisodeSummary(input: {
   changedLinesCount: number;
   turns?: TurnSummary[];
 }): EpisodeSummary {
+  const lastTurn = input.turns?.[input.turns.length - 1];
+  const bestStopTurn = input.turns ? findBestStopTurn(input.turns) : null;
+  const episodeFriction = summarizeFrictionEvents(
+    (input.turns ?? []).flatMap((turn) => {
+      return [];
+    }),
+  );
+  const frictionFromTurns =
+    input.turns && input.turns.length > 0
+      ? {
+          approvalCount: input.turns.reduce((sum, turn) => sum + turn.friction.approvalCount, 0),
+          approvalBurst: Math.max(...input.turns.map((turn) => turn.friction.approvalBurst), 0),
+          toolErrorCount: input.turns.reduce((sum, turn) => sum + turn.friction.toolErrorCount, 0),
+          toolRetryCount: input.turns.reduce((sum, turn) => sum + turn.friction.toolRetryCount, 0),
+          toolFailureStreak: Math.max(...input.turns.map((turn) => turn.friction.toolFailureStreak), 0),
+          editFailureCount: input.turns.reduce((sum, turn) => sum + turn.friction.editFailureCount, 0),
+          recoveryAttempts: input.turns.reduce((sum, turn) => sum + turn.friction.recoveryAttempts, 0),
+          humanConfirmationBurst: Math.max(...input.turns.map((turn) => turn.friction.humanConfirmationBurst), 0),
+          frictionScore: round(
+            input.turns.reduce((sum, turn) => sum + turn.friction.frictionScore, 0) /
+              Math.max(1, input.turns.length),
+          ),
+          stopAndReframeSignal: input.turns.some((turn) => turn.stopAndReframe.stopAndReframeSignal),
+          dominantSignal: lastTurn?.friction.dominantSignal ?? "none",
+          confidence: round(
+            input.turns.reduce((sum, turn) => sum + turn.friction.confidence, 0) / Math.max(1, input.turns.length),
+          ),
+        }
+      : episodeFriction;
   const predictedLossRate =
     input.promptProfile.promptLength < 15 && input.changedFilesCount > 2
       ? clamp(Math.max(...input.nudges.map((nudge) => nudge.predictedSavingRate), 0), 0, 0.8)
@@ -705,13 +780,26 @@ export function buildEpisodeSummary(input: {
     attentionCompression: input.score.attentionCompression,
     noveltyRatio: input.score.noveltyRatio,
     expectedCostConfidence: input.currentEstimate.confidence,
+    approvalCount: frictionFromTurns.approvalCount,
+    approvalBurst: frictionFromTurns.approvalBurst,
+    toolErrorCount: frictionFromTurns.toolErrorCount,
+    toolRetryCount: frictionFromTurns.toolRetryCount,
+    toolFailureStreak: frictionFromTurns.toolFailureStreak,
+    editFailureCount: frictionFromTurns.editFailureCount,
+    recoveryAttempts: frictionFromTurns.recoveryAttempts,
+    humanConfirmationBurst: frictionFromTurns.humanConfirmationBurst,
+    frictionScore: frictionFromTurns.frictionScore,
+    stopAndReframeSignal: frictionFromTurns.stopAndReframeSignal,
+    bestStopTurn,
+    suggestedReframe:
+      bestStopTurn !== null ? input.turns?.find((turn) => turn.turnIndex === bestStopTurn)?.stopAndReframe.suggestedReframe ?? null : null,
     fixLoopOccurred: input.loopSignals.editLoop,
     searchLoopOccurred: input.loopSignals.searchLoop,
     niceGuidanceAwarded,
     predictedLossRate: predictedLossRate !== null ? round(predictedLossRate) : null,
     expAwarded,
     turnCount: input.turns?.length ?? 0,
-    interventionMode: input.turns?.[input.turns.length - 1]?.intervention.mode ?? "quiet",
+    interventionMode: lastTurn?.intervention.mode ?? "quiet",
   };
 }
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import chokidar from "chokidar";
 import { detectCli, extractEventsFromLine, parseUsageObservation } from "./adapters";
+import { createFrictionCaptureAdapter } from "./capture";
 import { diffSymbolSnapshots } from "./ast";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
@@ -197,6 +198,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const turnRecords: TurnRecord[] = [];
   const turnSummaries: TurnSummary[] = [];
   const recentMessageKeys: string[] = [];
+  const frictionAdapter = createFrictionCaptureAdapter(cli);
   let turnState = createEmptyTurn();
   let turnIndex = 0;
 
@@ -242,6 +244,9 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     turnState.inputText += text;
     turnState.lastActivityAt = Date.now();
+    for (const event of frictionAdapter.consumeInputChunk(text)) {
+      pushTurnEvent(event);
+    }
     child.stdin?.write(chunk);
   };
   const attachStdin = Boolean(process.stdin.isTTY);
@@ -375,6 +380,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       }
       const extracted = extractEventsFromLine(line);
       for (const event of extracted) pushTurnEvent(event);
+      for (const event of frictionAdapter.consumeOutputLine(source, line)) pushTurnEvent(event);
     }
 
     restartIdleTimer();
@@ -404,6 +410,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     if (usage) usageObservations.push({ ...usage, turnIndex: turnIndex + 1 });
     const extracted = extractEventsFromLine(trailing);
     for (const event of extracted) pushTurnEvent(event);
+    for (const event of frictionAdapter.consumeOutputLine(source, trailing)) pushTurnEvent(event);
   }
 
   finalizeTurn();

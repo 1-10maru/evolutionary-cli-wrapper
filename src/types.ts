@@ -15,6 +15,27 @@ export type NudgeSeverity = "low" | "medium" | "high";
 export type NudgeTone = "concise" | "encouraging" | "corrective";
 export type NudgeSurface = "inline" | "end_of_turn" | "end_of_session";
 export type ProxyAdviceMode = "auto" | "active" | "quiet";
+export type FrictionEventType =
+  | "tool_call_started"
+  | "tool_call_succeeded"
+  | "tool_call_failed"
+  | "tool_approval_requested"
+  | "tool_approval_granted"
+  | "tool_approval_denied"
+  | "tool_retry_requested"
+  | "tool_retry_succeeded"
+  | "tool_retry_failed"
+  | "edit_attempt_started"
+  | "edit_attempt_failed"
+  | "edit_attempt_recovered"
+  | "error_recovery_started"
+  | "error_recovery_succeeded";
+export type FrictionSignalCategory =
+  | "none"
+  | "approval_storm"
+  | "error_spiral"
+  | "retry_loop"
+  | "stop_and_reframe";
 
 export type EpisodeEventType =
   | "prompt_submitted"
@@ -26,6 +47,7 @@ export type EpisodeEventType =
   | "build_run"
   | "no_code_change_response"
   | "clarification_prompt"
+  | FrictionEventType
   | "turn_closed"
   | "episode_closed";
 
@@ -270,6 +292,30 @@ export interface InterventionDecision {
   displayBudgetLines: number;
 }
 
+export interface FrictionSummary {
+  approvalCount: number;
+  approvalBurst: number;
+  toolErrorCount: number;
+  toolRetryCount: number;
+  toolFailureStreak: number;
+  editFailureCount: number;
+  recoveryAttempts: number;
+  humanConfirmationBurst: number;
+  frictionScore: number;
+  stopAndReframeSignal: boolean;
+  dominantSignal: FrictionSignalCategory;
+  confidence: number;
+}
+
+export interface StopAndReframeDecision {
+  stopAndReframeSignal: boolean;
+  category: FrictionSignalCategory;
+  confidence: number;
+  reasonCodes: string[];
+  suggestedReframe: string;
+  avoidableCostLabel: string;
+}
+
 export interface LoopSignals {
   editLoop: boolean;
   searchLoop: boolean;
@@ -281,6 +327,8 @@ export interface TurnSummary {
   promptProfile: PromptProfile;
   score: ScoreBreakdown;
   complexity: EpisodeComplexity;
+  friction: FrictionSummary;
+  stopAndReframe: StopAndReframeDecision;
   loopSignals: LoopSignals;
   nudges: PredictiveNudge[];
   intervention: InterventionDecision;
@@ -314,6 +362,18 @@ export interface EpisodeSummary {
   attentionCompression: number;
   noveltyRatio: number;
   expectedCostConfidence: number;
+  approvalCount: number;
+  approvalBurst: number;
+  toolErrorCount: number;
+  toolRetryCount: number;
+  toolFailureStreak: number;
+  editFailureCount: number;
+  recoveryAttempts: number;
+  humanConfirmationBurst: number;
+  frictionScore: number;
+  stopAndReframeSignal: boolean;
+  bestStopTurn: number | null;
+  suggestedReframe: string | null;
   fixLoopOccurred: boolean;
   searchLoopOccurred: boolean;
   niceGuidanceAwarded: boolean;

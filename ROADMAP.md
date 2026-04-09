@@ -57,3 +57,7 @@
 - 新しい未実装を見つけたらこのファイルへ追加する
 - 片付いたら `done` へ移す
 - 仕様判断が入ったら `docs/DECISIONS.md` に理由も残す
+## Friction Track
+
+- Now: Codex friction capture and stop-and-reframe feedback
+- Later: extract friction capture into a reusable cross-repo module

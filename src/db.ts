@@ -170,6 +170,18 @@ export class EvoDatabase {
         attention_compression REAL NOT NULL DEFAULT 0,
         novelty_ratio REAL NOT NULL DEFAULT 1,
         expected_cost_confidence REAL NOT NULL DEFAULT 0.2,
+        approval_count INTEGER NOT NULL DEFAULT 0,
+        approval_burst INTEGER NOT NULL DEFAULT 0,
+        tool_error_count INTEGER NOT NULL DEFAULT 0,
+        tool_retry_count INTEGER NOT NULL DEFAULT 0,
+        tool_failure_streak INTEGER NOT NULL DEFAULT 0,
+        edit_failure_count INTEGER NOT NULL DEFAULT 0,
+        recovery_attempts INTEGER NOT NULL DEFAULT 0,
+        human_confirmation_burst INTEGER NOT NULL DEFAULT 0,
+        friction_score REAL NOT NULL DEFAULT 0,
+        stop_and_reframe_signal INTEGER NOT NULL DEFAULT 0,
+        best_stop_turn INTEGER,
+        suggested_reframe TEXT,
         fix_loop_occurred INTEGER NOT NULL,
         search_loop_occurred INTEGER NOT NULL,
         nice_guidance_awarded INTEGER NOT NULL,
@@ -238,6 +250,19 @@ export class EvoDatabase {
         attention_entropy REAL NOT NULL,
         attention_compression REAL NOT NULL,
         novelty_ratio REAL NOT NULL,
+        approval_count INTEGER NOT NULL DEFAULT 0,
+        approval_burst INTEGER NOT NULL DEFAULT 0,
+        tool_error_count INTEGER NOT NULL DEFAULT 0,
+        tool_retry_count INTEGER NOT NULL DEFAULT 0,
+        tool_failure_streak INTEGER NOT NULL DEFAULT 0,
+        edit_failure_count INTEGER NOT NULL DEFAULT 0,
+        recovery_attempts INTEGER NOT NULL DEFAULT 0,
+        human_confirmation_burst INTEGER NOT NULL DEFAULT 0,
+        friction_score REAL NOT NULL DEFAULT 0,
+        stop_and_reframe_signal INTEGER NOT NULL DEFAULT 0,
+        stop_category TEXT NOT NULL DEFAULT 'none',
+        stop_confidence REAL NOT NULL DEFAULT 0,
+        suggested_reframe TEXT NOT NULL DEFAULT '',
         assistant_reask_rate REAL NOT NULL,
         turn_retry_depth INTEGER NOT NULL,
         response_latency_ms INTEGER NOT NULL,
@@ -308,8 +333,33 @@ export class EvoDatabase {
     this.ensureColumn("episode_summaries", "attention_compression", "REAL NOT NULL DEFAULT 0");
     this.ensureColumn("episode_summaries", "novelty_ratio", "REAL NOT NULL DEFAULT 1");
     this.ensureColumn("episode_summaries", "expected_cost_confidence", "REAL NOT NULL DEFAULT 0.2");
+    this.ensureColumn("episode_summaries", "approval_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "approval_burst", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "tool_error_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "tool_retry_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "tool_failure_streak", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "edit_failure_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "human_confirmation_burst", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "friction_score", "REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "stop_and_reframe_signal", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("episode_summaries", "best_stop_turn", "INTEGER");
+    this.ensureColumn("episode_summaries", "suggested_reframe", "TEXT");
     this.ensureColumn("episode_summaries", "turn_count", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("episode_summaries", "intervention_mode", "TEXT NOT NULL DEFAULT 'quiet'");
+    this.ensureColumn("turn_summaries", "approval_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "approval_burst", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "tool_error_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "tool_retry_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "tool_failure_streak", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "edit_failure_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "human_confirmation_burst", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "friction_score", "REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "stop_and_reframe_signal", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "stop_category", "TEXT NOT NULL DEFAULT 'none'");
+    this.ensureColumn("turn_summaries", "stop_confidence", "REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("turn_summaries", "suggested_reframe", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("stats_buckets", "ema_cost", "REAL NOT NULL DEFAULT 0");
     this.ensureColumn("stats_buckets", "m2_cost", "REAL NOT NULL DEFAULT 0");
     this.ensureColumn("stats_buckets", "last_updated_at", "TEXT");
@@ -498,12 +548,18 @@ export class EvoDatabase {
     const summaryStatement = this.db.prepare(`
       INSERT OR REPLACE INTO turn_summaries (
         episode_id, turn_index, surrogate_cost, exploration_mode, attention_entropy, attention_compression,
-        novelty_ratio, assistant_reask_rate, turn_retry_depth, response_latency_ms, response_latency_bucket,
+        novelty_ratio, approval_count, approval_burst, tool_error_count, tool_retry_count, tool_failure_streak,
+        edit_failure_count, recovery_attempts, human_confirmation_burst, friction_score,
+        stop_and_reframe_signal, stop_category, stop_confidence, suggested_reframe,
+        assistant_reask_rate, turn_retry_depth, response_latency_ms, response_latency_bucket,
         mid_episode_novelty_drop, recent_nudge_effectiveness, intervention_mode, intervention_confidence,
         reason_codes_json, advice_messages_json
       ) VALUES (
         @episodeId, @turnIndex, @surrogateCost, @explorationMode, @attentionEntropy, @attentionCompression,
-        @noveltyRatio, @assistantReaskRate, @turnRetryDepth, @responseLatencyMs, @responseLatencyBucket,
+        @noveltyRatio, @approvalCount, @approvalBurst, @toolErrorCount, @toolRetryCount, @toolFailureStreak,
+        @editFailureCount, @recoveryAttempts, @humanConfirmationBurst, @frictionScore,
+        @stopAndReframeSignal, @stopCategory, @stopConfidence, @suggestedReframe,
+        @assistantReaskRate, @turnRetryDepth, @responseLatencyMs, @responseLatencyBucket,
         @midEpisodeNoveltyDrop, @recentNudgeEffectiveness, @interventionMode, @interventionConfidence,
         @reasonCodesJson, @adviceMessagesJson
       )
@@ -549,6 +605,19 @@ export class EvoDatabase {
           attentionEntropy: summary.complexity.attentionEntropy,
           attentionCompression: summary.complexity.attentionCompression,
           noveltyRatio: summary.complexity.noveltyRatio,
+          approvalCount: summary.friction.approvalCount,
+          approvalBurst: summary.friction.approvalBurst,
+          toolErrorCount: summary.friction.toolErrorCount,
+          toolRetryCount: summary.friction.toolRetryCount,
+          toolFailureStreak: summary.friction.toolFailureStreak,
+          editFailureCount: summary.friction.editFailureCount,
+          recoveryAttempts: summary.friction.recoveryAttempts,
+          humanConfirmationBurst: summary.friction.humanConfirmationBurst,
+          frictionScore: summary.friction.frictionScore,
+          stopAndReframeSignal: Number(summary.stopAndReframe.stopAndReframeSignal),
+          stopCategory: summary.stopAndReframe.category,
+          stopConfidence: summary.stopAndReframe.confidence,
+          suggestedReframe: summary.stopAndReframe.suggestedReframe,
           assistantReaskRate: summary.assistantReaskRate,
           turnRetryDepth: summary.turnRetryDepth,
           responseLatencyMs: summary.responseLatencyMs,
@@ -608,6 +677,9 @@ export class EvoDatabase {
           changed_files_count, changed_symbols_count, changed_lines_count, first_pass_green,
           prompt_length_bucket, structure_score, scope_bucket, exploration_mode,
           attention_entropy, attention_compression, novelty_ratio, expected_cost_confidence,
+          approval_count, approval_burst, tool_error_count, tool_retry_count, tool_failure_streak,
+          edit_failure_count, recovery_attempts, human_confirmation_burst, friction_score,
+          stop_and_reframe_signal, best_stop_turn, suggested_reframe,
           fix_loop_occurred, search_loop_occurred, nice_guidance_awarded,
           predicted_loss_rate, exp_awarded, turn_count, intervention_mode
         ) VALUES (
@@ -616,6 +688,9 @@ export class EvoDatabase {
           @changedFilesCount, @changedSymbolsCount, @changedLinesCount, @firstPassGreen,
           @promptLengthBucket, @structureScore, @scopeBucket, @explorationMode,
           @attentionEntropy, @attentionCompression, @noveltyRatio, @expectedCostConfidence,
+          @approvalCount, @approvalBurst, @toolErrorCount, @toolRetryCount, @toolFailureStreak,
+          @editFailureCount, @recoveryAttempts, @humanConfirmationBurst, @frictionScore,
+          @stopAndReframeSignal, @bestStopTurn, @suggestedReframe,
           @fixLoopOccurred, @searchLoopOccurred, @niceGuidanceAwarded,
           @predictedLossRate, @expAwarded, @turnCount, @interventionMode
         )
@@ -624,6 +699,7 @@ export class EvoDatabase {
         episodeId,
         ...summary,
         firstPassGreen: Number(summary.firstPassGreen),
+        stopAndReframeSignal: Number(summary.stopAndReframeSignal),
         fixLoopOccurred: Number(summary.fixLoopOccurred),
         searchLoopOccurred: Number(summary.searchLoopOccurred),
         niceGuidanceAwarded: Number(summary.niceGuidanceAwarded),
@@ -1419,6 +1495,13 @@ export class EvoDatabase {
         SELECT
           turns.turn_index,
           turn_summaries.surrogate_cost,
+          turn_summaries.friction_score,
+          turn_summaries.approval_count,
+          turn_summaries.tool_error_count,
+          turn_summaries.tool_retry_count,
+          turn_summaries.stop_and_reframe_signal,
+          turn_summaries.stop_category,
+          turn_summaries.suggested_reframe,
           turn_summaries.intervention_mode,
           turn_summaries.response_latency_bucket,
           turn_summaries.reason_codes_json
