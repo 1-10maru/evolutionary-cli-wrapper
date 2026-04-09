@@ -467,12 +467,12 @@ export function renderAdviceMessages(input: {
   if (input.stopAndReframe.stopAndReframeSignal) {
     const stopLead =
       input.stopAndReframe.category === "approval_storm"
-        ? "ここ、今止めるとかなり得です。承認ラッシュが続いています。"
+        ? "いま、承認がどどっと続いてるよ。ここで整えるとかなり得かも。"
         : input.stopAndReframe.category === "error_spiral"
-          ? "いまは修正より整理のターンかも。失敗が連続しています。"
+          ? "あわわ、失敗が続いてるよ。いまは直すより整理のターンかも。"
           : input.stopAndReframe.category === "retry_loop"
-            ? "ここで切り直すと得です。再試行が連続しています。"
-            : "ここで一回絞ると次の往復が軽くなりそうです。";
+            ? "くるくる再試行モードかも。ここで切り直すとかなり楽になりそう。"
+            : "ここで一回きゅっと絞ると、次の往復が軽くなりそうだよ。";
     pushIfFresh({
       key: `friction-${input.stopAndReframe.category}`,
       category: "recovery",
@@ -498,9 +498,9 @@ export function renderAdviceMessages(input: {
 
   const savingHeadline = (nudge: PredictiveNudge): string => {
     const percent = Math.max(0, Math.round(nudge.predictedSavingRate * 100));
-    if (percent >= 30) return `次の一手で ${percent}% 近い節約が見込めます`;
-    if (percent >= 15) return `次の一手で ${percent}% 前後の節約が見込めます`;
-    return "次の一手で無駄ラリーをかなり減らせそうです";
+    if (percent >= 30) return `次の一手、${percent}% 近く浮くかも`;
+    if (percent >= 15) return `次の一手で ${percent}% 前後、軽くできそう`;
+    return "次の一手でムダ往復をけっこう減らせそう";
   };
 
   if (input.loopSignals.editLoop) {
@@ -510,7 +510,7 @@ export function renderAdviceMessages(input: {
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      text: "ここ、同じ修正点をぐるぐる回り始めています。現状 / 期待 / NG 条件 で切り直すと抜けやすいです。",
+      text: "ここ、同じ修正点をぐるぐるし始めてるよ。現状 / 期待 / NG 条件 に分けると抜けやすいかも。",
       lineBudget: 1,
     });
   }
@@ -522,7 +522,7 @@ export function renderAdviceMessages(input: {
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      text: "いま少し広いかも。次は見るファイルを 1 つに絞るとかなり収束しやすいです。",
+      text: "いま少し広がり気味かも。次は見るファイルを 1 つに絞ると、かなり収束しやすいよ。",
       lineBudget: 1,
     });
   }
@@ -531,29 +531,29 @@ export function renderAdviceMessages(input: {
     const includePercent = bestNudge.confidence >= input.minConfidenceForPercent;
     const actionByCategory: Record<PredictiveNudge["category"], string> = {
       specificity: pickVariant(input.promptProfile.promptHash, [
-        "次は 関数名 か 対象ファイル名 を 1 個足す",
+        "次は 関数名 か 対象ファイル名 を 1 個だけ足す",
         "次は どこを直すか を 1 行だけ具体化する",
-        "次は 対象シンボル を 1 つ名指しする",
+        "次は 対象シンボル を 1 つだけ名指しする",
       ]),
       structure: pickVariant(input.promptProfile.promptHash, [
-        "次は 箇条書き + 完了条件 を 2 行足す",
+        "次は 箇条書き + 完了条件 を 2 行だけ足す",
         "次は やること と 終了条件 を分けて渡す",
         "次は 制約 と ゴール を別行で置く",
       ]),
       verification: pickVariant(input.promptProfile.promptHash, [
-        "次は 成功条件 を 1 行足す",
+        "次は 成功条件 を 1 行だけ足す",
         "次は 何が通れば完了か を先に書く",
         "次は テスト意図 を短く添える",
       ]),
-      scope_control: "次は変更対象を一段小さく区切る",
+      scope_control: "次は変更対象をもう一段小さく切る",
       recovery: "次は 現状 / 期待 / NG 条件 に分け直す",
       exploration_focus: "次は最初に見るファイルを 1 つだけ指定する",
-      praise: "今の進め方をそのまま続ける",
+      praise: "いまの進め方をそのまま続ける",
     };
     const leadText =
       includePercent
         ? `${savingHeadline(bestNudge)}`
-        : "次の往復をかなり短くしやすい形です";
+        : "次の往復をかなり短くしやすい流れだよ";
     pushIfFresh({
       key: `nudge-${bestNudge.category}`,
       category: bestNudge.category,
@@ -576,20 +576,20 @@ export function renderAdviceMessages(input: {
     const praiseText =
       praiseKey === "praise-structured"
         ? pickVariant(input.promptProfile.promptHash, [
-            "ナイス。構造化がかなり効いていて、かなり通りがいいです。",
-            "その切り方、かなり経験値うまいです。無駄ラリーを抑えられています。",
-            "今回の頼み方、かなり当たりです。きれいに刺さっています。",
+            "えへへ、その頼み方かなりえらい。するっと通りやすい形だよ。",
+            "その切り方、かなりEXPおいしいやつ。ムダ往復をちゃんと抑えられてる。",
+            "今回の頼み方、かなり当たりだよ。きれいに刺さってる。",
           ])
         : praiseKey === "praise-converged"
           ? pickVariant(input.promptProfile.promptHash, [
-              "探索の寄せ方がかなり上手いです。いい感じに収束できています。",
-              "見る場所の絞り方がきれいで、かなりロスが少ないです。",
-              "散らずに詰められています。この流れ、かなり気持ちいいです。",
+              "探索の寄せ方がじょうず。いい感じにきゅっと収束できてるよ。",
+              "見る場所の絞り方がきれい。かなりロス少なめで進められてる。",
+              "散らずに詰められてるね。この流れ、かなり気持ちいいやつ。",
             ])
           : pickVariant(input.promptProfile.promptHash, [
-              "ナイス。今回はかなり通りがよく、無駄ラリーを抑えられています。",
-              "今回の依頼、かなり気持ちよくハマっています。",
-              "いい流れです。かなりスマートに前へ進めています。",
+              "ナイス。今回はかなり通りがいいよ。ムダ往復も少なめ。",
+              "今回の依頼、かなり気持ちよくハマってる。",
+              "いい流れいい流れ。そのまま前へ進めそう。",
             ]);
     pushIfFresh({
       key: praiseKey,
@@ -597,7 +597,7 @@ export function renderAdviceMessages(input: {
       severity: "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      text: `${praiseText} / +50 EXP 候補 / 探索モード ${input.complexity.explorationMode}`,
+      text: `${praiseText} / うまく刺さると +50 EXP ルート / 探索モード ${input.complexity.explorationMode}`,
       lineBudget: 1,
     });
   }

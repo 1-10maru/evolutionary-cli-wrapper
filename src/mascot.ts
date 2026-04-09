@@ -216,17 +216,17 @@ function categoryHint(message: RenderedAdviceMessage | undefined): string {
   if (!message) return "いまは静かに見守り中";
   switch (message.category) {
     case "specificity":
-      return "関数名か対象ファイルを1個足すと刺さりやすい";
+      return "関数名か対象ファイルを1こ足すと、ぐっと刺さりやすいよ";
     case "structure":
-      return "やること / 完了条件 の2行でかなり通りやすくなる";
+      return "やること / 完了条件 の2行だけで、かなり通りやすくなるよ";
     case "verification":
-      return "成功条件を1行足すとやり直しを削りやすい";
+      return "成功条件を1行足すだけで、やり直しを減らしやすいよ";
     case "exploration_focus":
-      return "次は見るファイルを1つに絞ろう";
+      return "次は見るファイルを1つに絞ると、迷いにくいよ";
     case "recovery":
-      return "現状 / 期待 / NG 条件 で切り直すと抜けやすい";
+      return "現状 / 期待 / NG 条件 に分けると、ここ抜けやすいよ";
     case "praise":
-      return "かなり気持ちよくハマってる";
+      return "えへへ、いまの頼み方かなりハマってる";
     default:
       return message.text;
   }
@@ -242,7 +242,7 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
       ? `${saving}%浮きそう`
       : summary.loopSignals.editLoop || summary.loopSignals.searchLoop
         ? "迷子回避チャンス"
-        : "じわっと育成中";
+        : "こつこつ育成中";
   const expText = `Bond ${state.progressPercent}%`;
   const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
   const moodText = colorize(moodLabel(mood), mood === "worried" ? "warning" : mood === "proud" ? "success" : mood === "hyped" ? "accent" : "info");
@@ -279,7 +279,7 @@ export function renderMascotSpecialEvent(profile: MascotProfile, input: {
     lines: [
       `${state.avatar} ${profile.nickname} | ${moodLabel(mood)} | Level ${state.level}`,
       categoryHint(input.message),
-      saving > 0 ? `いまの節約見込み ${saving}% | Bond ${state.progressPercent}%` : `Bond ${state.progressPercent}% | 次の一手で流れを戻そう`,
+      saving > 0 ? `いまの節約見込み ${saving}% | Bond ${state.progressPercent}%` : `Bond ${state.progressPercent}% | 次の一手で流れを戻そうね`,
     ],
   });
 }
