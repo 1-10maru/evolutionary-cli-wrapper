@@ -47,6 +47,11 @@ interface ProxyTurnState {
   lastActivityAt: number;
 }
 
+const TURN_NOISE_PATTERNS = [
+  /no stdin data received in \d+s/i,
+  /input must be provided either through stdin or as a prompt argument/i,
+];
+
 function createEvent(
   type: EpisodeEvent["type"],
   source: EpisodeEvent["source"],
@@ -69,6 +74,27 @@ function createEmptyTurn(): ProxyTurnState {
     events: [],
     lastActivityAt: Date.now(),
   };
+}
+
+function normalizeTurnOutput(outputText: string): string {
+  return outputText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function shouldSuppressTurnFeedback(turnState: ProxyTurnState): boolean {
+  const normalizedOutput = normalizeTurnOutput(turnState.outputText);
+  if (!normalizedOutput) return false;
+
+  const outputLines = normalizedOutput.split("\n");
+  const hasOnlyNoiseOutput = outputLines.every((line) =>
+    TURN_NOISE_PATTERNS.some((pattern) => pattern.test(line)),
+  );
+  const hasMeaningfulInput = turnState.inputText.trim().length > 0;
+
+  return hasOnlyNoiseOutput && !hasMeaningfulInput;
 }
 
 function hasProjectMarkers(cwd: string): boolean {
@@ -275,6 +301,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   const finalizeTurn = (): void => {
     if (!turnState.inputText.trim() && !turnState.outputText.trim() && turnState.events.length === 0) {
+      turnState = createEmptyTurn();
+      return;
+    }
+
+    if (shouldSuppressTurnFeedback(turnState)) {
       turnState = createEmptyTurn();
       return;
     }

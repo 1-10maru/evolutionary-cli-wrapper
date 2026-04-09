@@ -87,4 +87,46 @@ describe("proxy runtime", () => {
     expect(storage.rowCounts.turn_summaries).toBeGreaterThan(0);
     db.close();
   });
+
+  it("suppresses startup-noise-only turns", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-proxy-noise-"));
+    tempDirs.push(cwd);
+    const fakeCliPath = path.join(cwd, "fake-noise-cli.js");
+    fs.writeFileSync(
+      fakeCliPath,
+      [
+        "console.log('Warning: no stdin data received in 3s, proceeding without it.');",
+        "setTimeout(() => {",
+        "  console.log('Error: Input must be provided either through stdin or as a prompt argument when using --print');",
+        "}, 100);",
+        "setTimeout(() => process.exit(1), 200);",
+      ].join("\n"),
+    );
+
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: {
+          ...config.shellIntegration.originalCommandMap,
+          claude: process.execPath,
+        },
+      },
+      proxy: {
+        ...config.proxy,
+        turnIdleMs: 50,
+        defaultMode: "active",
+      },
+    });
+
+    const result = await runProxySession({
+      cwd,
+      cli: "claude",
+      args: [fakeCliPath],
+      mode: "active",
+    });
+
+    expect(result.artifacts.turns ?? []).toHaveLength(0);
+  });
 });
