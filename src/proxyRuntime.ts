@@ -189,7 +189,6 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   process.stderr.write(
     `Evo tracking ON | cli=${cli} | dir=${cwd} | mode=${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}\n`,
   );
-  process.stderr.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
 
   const beforeSnapshotPromise = lightweightTracking
     ? Promise.resolve(createEmptySnapshot())
@@ -267,8 +266,8 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
     startupNoticeTimer = setTimeout(() => {
       startupNoticeShown = true;
-      process.stderr.write(`\r\n[Evo ON] ${cli} session is being tracked.\r\n`);
-    }, Math.max(400, Math.min(1200, Math.floor(idleMs / 2))));
+      process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
+    }, Math.max(1200, Math.min(2200, idleMs + 250)));
   };
 
   const finalizeTurn = (): void => {
