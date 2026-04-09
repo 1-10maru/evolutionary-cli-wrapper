@@ -15,21 +15,44 @@ import { colorize, dim, formatPanel } from "./terminalUi";
 
 const MASCOT_FILE = "mascot.json";
 
-const STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minExp: number; avatar: string; tone: MascotRenderState["accentTone"] }> = [
-  { stage: "egg", minExp: 0, avatar: "🥚", tone: "info" },
-  { stage: "sprout", minExp: 120, avatar: "🐣", tone: "success" },
-  { stage: "buddy", minExp: 320, avatar: "🐲", tone: "accent" },
-  { stage: "wizard", minExp: 720, avatar: "🦕", tone: "magic" },
-  { stage: "legend", minExp: 1400, avatar: "🐉", tone: "magic" },
+const STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minExp: number; tone: MascotRenderState["accentTone"] }> = [
+  { stage: "egg", minExp: 0, tone: "info" },
+  { stage: "sprout", minExp: 120, tone: "success" },
+  { stage: "buddy", minExp: 320, tone: "accent" },
+  { stage: "wizard", minExp: 720, tone: "magic" },
+  { stage: "legend", minExp: 1400, tone: "magic" },
 ];
+
+export const MASCOT_SPECIES = [
+  { id: "chick", emoji: "🐣", name: "ひよこ" },
+  { id: "cat", emoji: "🐱", name: "ねこ" },
+  { id: "dog", emoji: "🐶", name: "いぬ" },
+  { id: "fox", emoji: "🦊", name: "きつね" },
+  { id: "rabbit", emoji: "🐰", name: "うさぎ" },
+  { id: "bear", emoji: "🐻", name: "くま" },
+  { id: "panda", emoji: "🐼", name: "ぱんだ" },
+  { id: "koala", emoji: "🐨", name: "こあら" },
+  { id: "tiger", emoji: "🐯", name: "とら" },
+  { id: "penguin", emoji: "🐧", name: "ぺんぎん" },
+] as const;
+
+export type MascotSpeciesId = (typeof MASCOT_SPECIES)[number]["id"];
 
 function mascotPath(cwd: string): string {
   return path.join(getGlobalEvoDir(cwd), MASCOT_FILE);
 }
 
+function mascotSpecies(speciesId: string) {
+  return MASCOT_SPECIES.find((item) => item.id === speciesId) ?? MASCOT_SPECIES[0];
+}
+
+function mascotSpeciesStrict(speciesId: string) {
+  return MASCOT_SPECIES.find((item) => item.id === speciesId) ?? null;
+}
+
 function defaultMascot(): MascotProfile {
   return {
-    speciesId: "evo-drake",
+    speciesId: "chick",
     nickname: "EvoPet",
     stage: "egg",
     totalBondExp: 0,
@@ -109,13 +132,32 @@ export function saveMascotProfile(cwd: string, profile: MascotProfile): void {
 
 export function renderMascotState(profile: MascotProfile): MascotRenderState {
   const threshold = STAGE_THRESHOLDS.find((item) => item.stage === profile.stage) ?? STAGE_THRESHOLDS[0];
+  const species = mascotSpecies(profile.speciesId);
   return {
     profile,
     progressPercent: progressPercent(profile.totalBondExp),
     level: stageIndex(profile.stage) + 1,
-    avatar: threshold.avatar,
+    avatar: species.emoji,
     accentTone: threshold.tone,
   };
+}
+
+export function listMascotSpecies(): Array<{ id: string; emoji: string; name: string }> {
+  return [...MASCOT_SPECIES];
+}
+
+export function chooseMascotSpecies(cwd: string, speciesId: string): MascotProfile {
+  const current = loadMascotProfile(cwd);
+  const species = mascotSpeciesStrict(speciesId);
+  if (!species) {
+    throw new Error(`Unknown EvoPet species: ${speciesId}`);
+  }
+  const next = {
+    ...current,
+    speciesId: species.id,
+  };
+  saveMascotProfile(cwd, next);
+  return next;
 }
 
 export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary): MascotEpisodeUpdate {
@@ -135,6 +177,7 @@ export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary): 
   saveMascotProfile(cwd, nextProfile);
 
   return {
+    speciesId: nextProfile.speciesId,
     previousStage,
     nextStage,
     gainedExp: summary.expAwarded,
@@ -254,4 +297,8 @@ export function renderMascotLevelUp(profile: MascotProfile, update: MascotEpisod
       `気分: ${moodLabel(update.mood)} | Bond ${update.progressPercent}%`,
     ],
   });
+}
+
+export function formatMascotSpeciesList(): string {
+  return MASCOT_SPECIES.map((item) => `${item.emoji} ${item.id} (${item.name})`).join("\n");
 }

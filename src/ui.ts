@@ -61,7 +61,7 @@ export function formatRunSummary(input: {
     );
     if (input.mascot.leveledUp || input.mascot.stageChanged) {
       const pseudoProfile: MascotProfile = {
-        speciesId: "evo-drake",
+        speciesId: input.mascot.speciesId,
         nickname: "EvoPet",
         stage: input.mascot.nextStage,
         totalBondExp: input.mascot.totalBondExp,
@@ -155,7 +155,7 @@ export function formatMascotStats(profile: MascotProfile): string {
     title: "🐾 EvoPet Status",
     tone: state.accentTone,
     lines: [
-      `${state.avatar} ${profile.nickname} | stage=${profile.stage} | level=${state.level}`,
+      `${state.avatar} ${profile.nickname} | species=${profile.speciesId} | stage=${profile.stage} | level=${state.level}`,
       `bond=${profile.totalBondExp} EXP | progress=${state.progressPercent}% | mood=${profile.mood}`,
       `favorite=${profile.favoriteHintStyle} | streak=${profile.streakDays}日`,
     ],

@@ -208,9 +208,23 @@ export function createProxyShims(cwd: string): string[] {
   );
   created.push(evoShimPath);
 
+  const evoPs1Path = path.join(binDir, "evo.ps1");
+  fs.writeFileSync(
+    evoPs1Path,
+    [
+      "#!/usr/bin/env pwsh",
+      `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
+      `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
+      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' @args`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"),
+  );
+  created.push(evoPs1Path);
+
   for (const cli of ["codex", "claude"] as const) {
-    const shimPath = path.join(binDir, `${cli}.cmd`);
-    const content = [
+    const cmdShimPath = path.join(binDir, `${cli}.cmd`);
+    const cmdContent = [
       "@echo off",
       "setlocal",
       `set "EVO_HOME=${cwd}"`,
@@ -219,8 +233,32 @@ export function createProxyShims(cwd: string): string[] {
       `node "%~dp0..\\dist\\index.js" proxy --cli ${cli} -- %*`,
       "",
     ].join("\r\n");
-    fs.writeFileSync(shimPath, content);
-    created.push(shimPath);
+    fs.writeFileSync(cmdShimPath, cmdContent);
+    created.push(cmdShimPath);
+
+    const ps1ShimPath = path.join(binDir, `${cli}.ps1`);
+    const ps1Content = [
+      "#!/usr/bin/env pwsh",
+      `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
+      `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
+      `$Host.UI.RawUI.WindowTitle = '${escapePowerShellSingleQuotes(`${cli} [Evo ON]`)}'`,
+      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' proxy --cli ${cli} -- @args`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n");
+    fs.writeFileSync(ps1ShimPath, ps1Content);
+    created.push(ps1ShimPath);
+
+    const shShimPath = path.join(binDir, cli);
+    const shContent = [
+      "#!/bin/sh",
+      `EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
+      `EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
+      `exec node "${path.join(cwd, "dist", "index.js").replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
+      "",
+    ].join("\n");
+    fs.writeFileSync(shShimPath, shContent);
+    created.push(shShimPath);
   }
 
   return created;

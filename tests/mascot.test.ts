@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadMascotProfile, renderMascotTurnLine, updateMascotAfterEpisode } from "../src/mascot";
+import {
+  chooseMascotSpecies,
+  listMascotSpecies,
+  loadMascotProfile,
+  renderMascotTurnLine,
+  updateMascotAfterEpisode,
+} from "../src/mascot";
 import { EpisodeSummary, TurnSummary } from "../src/types";
 
 const tempDirs: string[] = [];
@@ -59,6 +65,19 @@ describe("mascot", () => {
 
     expect(profile.nickname).toBe("EvoPet");
     expect(fs.existsSync(path.join(home, ".evo", "mascot.json"))).toBe(true);
+  });
+
+  it("supports choosing from a built-in emoji species list", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+
+    const species = listMascotSpecies();
+    const chosen = chooseMascotSpecies(project, "fox");
+
+    expect(species.length).toBeGreaterThanOrEqual(10);
+    expect(chosen.speciesId).toBe("fox");
   });
 
   it("levels up the mascot with accumulated EXP", () => {

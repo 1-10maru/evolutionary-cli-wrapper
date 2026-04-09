@@ -91,6 +91,7 @@ export interface MascotRenderState {
 }
 
 export interface MascotEpisodeUpdate {
+  speciesId: string;
   previousStage: MascotStage;
   nextStage: MascotStage;
   gainedExp: number;

@@ -4,7 +4,7 @@ import { Command } from "commander";
 import path from "node:path";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
-import { loadMascotProfile } from "./mascot";
+import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import {
@@ -283,6 +283,26 @@ program
     console.log("");
     console.log(formatStats(db.getStatsOverview()));
     db.close();
+  });
+
+const pet = program.command("pet").description("Inspect or customize EvoPet.");
+pet
+  .command("list")
+  .description("Show the available EvoPet species.")
+  .action(() => {
+    console.log(formatMascotSpeciesList());
+  });
+
+pet
+  .command("choose")
+  .description("Choose your EvoPet species.")
+  .argument("<speciesId>", "Species id from `evo pet list`.")
+  .option("--cwd <path>", "Project directory used to resolve EVO_HOME.", process.cwd())
+  .action((speciesId: string, options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    const profile = chooseMascotSpecies(cwd, speciesId);
+    console.log(`EvoPet is now ${profile.speciesId}.`);
+    console.log(formatMascotStats(profile));
   });
 
 program
