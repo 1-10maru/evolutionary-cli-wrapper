@@ -34,6 +34,7 @@
 - 未実装を触ったら、対応後に `ROADMAP.md` の状態も更新する
 - 仕様判断をしたら `docs/DECISIONS.md` に残す
 - docs は UTF-8 で編集する
+- 再現した環境依存トラブルは `docs/knowledge/` に残す
 
 ## ドキュメント更新ルール
 

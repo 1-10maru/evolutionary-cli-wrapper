@@ -4,6 +4,7 @@ import { Command } from "commander";
 import path from "node:path";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
+import { readIssueIntake } from "./issueIntake";
 import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
@@ -12,7 +13,7 @@ import {
   setupShellIntegration,
   undoShellIntegration,
 } from "./shellIntegration";
-import { formatExplain, formatMascotStats, formatRunSummary, formatStats, formatStorage } from "./ui";
+import { formatExplain, formatIssueIntake, formatMascotStats, formatRunSummary, formatStats, formatStorage } from "./ui";
 
 const program = new Command();
 program.enablePositionalOptions();
@@ -283,6 +284,32 @@ program
     console.log("");
     console.log(formatStats(db.getStatsOverview()));
     db.close();
+  });
+
+const issue = program.command("issue").description("Read GitHub issues for agent intake.");
+issue
+  .command("show")
+  .description("Show an issue summary optimized for AI agent intake.")
+  .argument("<number>", "Issue number")
+  .option("--cwd <path>", "Repo directory used for gh context.", process.cwd())
+  .option("--repo <owner/name>", "Explicit GitHub repo when cwd should not be used.")
+  .action((number: string, options: Record<string, unknown>) => {
+    const cwd = path.resolve(String(options.cwd));
+    const issueNumber = Number(number);
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error("Issue number must be a positive integer.");
+    }
+    const result = readIssueIntake({
+      cwd,
+      issueNumber,
+      repo: options.repo ? String(options.repo) : undefined,
+    });
+    if (!result.ok) {
+      console.log(result.message);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatIssueIntake(result.summary));
   });
 
 const pet = program.command("pet").description("Inspect or customize EvoPet.");

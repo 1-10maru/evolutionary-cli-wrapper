@@ -10,6 +10,9 @@
 - GitHub Actions CI and PR docs warning workflow
 - Dependabot configuration for npm and GitHub Actions
 - Agent workflow, project map, and review playbook docs
+- `evo issue show` for agent intake via GitHub CLI
+- `docs/knowledge/` for environment-specific troubleshooting knowledge
+- future doc for modular AI orchestration design
 
 ### Changed
 

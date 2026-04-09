@@ -18,10 +18,11 @@
 - shared-risk area を触る issue は同時に 1 本までを推奨
 - 実装変更時は関連 docs を同じ PR に含める
 - docs は UTF-8 で編集する
+- 再現した環境事故や運用事故は `docs/knowledge/` に残す
 
 ## 受けた issue から着手する流れ
 
-1. issue を読む
+1. `evo issue show <number>` で issue を読む
 2. 完了条件と out-of-scope を確認する
 3. `ROADMAP.md` の shared-risk area と重ならないか見る
 4. branch を切る
@@ -38,6 +39,7 @@
 - セットアップ導線が変わる: `START_HERE_JA.md`
 - 優先度や未実装が変わる: `ROADMAP.md`
 - 判断理由を残す: `docs/DECISIONS.md`
+- 再発防止ノウハウを残す: `docs/knowledge/`
 - repo の構造理解が変わる: `docs/PROJECT_MAP.md`
 - レビュー観点が増える: `docs/REVIEW_PLAYBOOK.md`
 
@@ -97,4 +99,3 @@ Next:
 - `area:proxy`
 - `area:ui`
 - `area:docs`
-

@@ -18,6 +18,8 @@
   - EvoPet の状態と表示
 - `src/shellIntegration.ts`
   - shell integration と shim 管理
+- `src/issueIntake.ts`
+  - GitHub issue を agent intake 向けに読む
 - `scripts/setup.mjs`
   - セットアップ処理
 
@@ -37,6 +39,12 @@
   - AI エージェント向け作業手順
 - `docs/REVIEW_PLAYBOOK.md`
   - レビュー観点
+- `docs/issue-intake.md`
+  - `evo issue show` の目的と使い方
+- `docs/knowledge/`
+  - 環境依存や運用事故の再発防止ノウハウ
+- `docs/future/`
+  - 将来のモジュール構想
 
 ## Shared-Risk Areas
 
@@ -55,4 +63,4 @@
 - 広すぎるフォルダでは `light` モードに落ちる
 - 学習データは project-local `.evo`
 - EvoPet は global 側に保存される
-
+- 将来の orchestration は本体 CLI と分離したモジュールとして切り出す

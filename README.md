@@ -120,9 +120,11 @@ npm run setup
 - repo 全体の地図を見る: [ROADMAP.md](./ROADMAP.md)
 - 並列開発のルールを見る: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - AI の作業手順を見る: [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md)
+- agent intake の入口を見る: [docs/issue-intake.md](./docs/issue-intake.md)
 - 仕様判断の履歴を見る: [docs/DECISIONS.md](./docs/DECISIONS.md)
 - repo の入口を見る: [docs/PROJECT_MAP.md](./docs/PROJECT_MAP.md)
 - レビュー観点を見る: [docs/REVIEW_PLAYBOOK.md](./docs/REVIEW_PLAYBOOK.md)
+- 環境依存の再発防止ノウハウ: [docs/knowledge/README.md](./docs/knowledge/README.md)
 - PR 時の更新漏れを防ぐ: [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)
 
 普段の流れはこれです。

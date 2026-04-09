@@ -15,6 +15,7 @@
 - pause / resume / forget / uninstall
 - Semantic Versioning と `release/v2`
 - GitHub Issues / PR / CI 中心の共同開発基盤
+- GitHub issue reader for agent intake
 
 ## Next
 
@@ -31,6 +32,7 @@
 - 収束予測の説明性向上
 - token calibration の自動再学習
 - UI テーマ切り替え
+- Modular AI orchestration across Claude/Codex/Copilot
 
 ## Good First Parallel Tasks
 

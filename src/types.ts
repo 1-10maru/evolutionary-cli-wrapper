@@ -389,3 +389,17 @@ export interface StatsOverview {
   archivedEpisodeCount: number;
   recentEpisodes: Array<Record<string, unknown>>;
 }
+
+export interface IssueIntakeSummary {
+  number: number;
+  title: string;
+  url: string;
+  labels: string[];
+  objective: string | null;
+  scope: string | null;
+  outOfScope: string | null;
+  acceptance: string | null;
+  docsNeeded: string | null;
+  reviewer: string | null;
+  rawBody: string;
+}

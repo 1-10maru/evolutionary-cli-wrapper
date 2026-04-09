@@ -9,6 +9,7 @@ body:
       value: |
         Codex / Claude / Copilot などの AI エージェント向けタスクです。
         1 issue = 1 branch = 1 PR を前提に、判断不要で着手できる形にします。
+        `evo issue show <number>` は、この見出しをそのまま読んで intake 表示を作ります。
   - type: textarea
     id: objective
     attributes:
@@ -67,4 +68,3 @@ body:
         - 人間 + AI 両方
     validations:
       required: true
-

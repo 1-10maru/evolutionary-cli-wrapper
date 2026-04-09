@@ -1,4 +1,5 @@
 import {
+  IssueIntakeSummary,
   MascotEpisodeUpdate,
   MascotProfile,
   PredictiveNudge,
@@ -234,4 +235,28 @@ export function formatExplain(explanation: {
   }
 
   return lines.join("\n");
+}
+
+export function formatIssueIntake(summary: IssueIntakeSummary): string {
+  const nextActions = [
+    "1. ROADMAP.md で shared-risk area を確認",
+    "2. `codex/<issue-or-topic>` ブランチを切る",
+    "3. 完了条件を満たす差分だけに絞って着手",
+  ];
+
+  return formatPanel({
+    title: `🧠 Agent Intake #${summary.number}`,
+    tone: "accent",
+    lines: [
+      `${summary.title}`,
+      `URL: ${summary.url}`,
+      `labels: ${summary.labels.length > 0 ? summary.labels.join(", ") : "none"}`,
+      `objective: ${summary.objective ?? "not specified"}`,
+      `scope: ${summary.scope ?? "not specified"}`,
+      `out-of-scope: ${summary.outOfScope ?? "not specified"}`,
+      `acceptance: ${summary.acceptance ?? "not specified"}`,
+      `docs: ${summary.docsNeeded ?? "not specified"} | reviewer: ${summary.reviewer ?? "not specified"}`,
+      `next: ${nextActions.join(" / ")}`,
+    ],
+  });
 }
