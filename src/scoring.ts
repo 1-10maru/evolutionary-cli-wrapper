@@ -491,12 +491,12 @@ export function renderAdviceMessages(input: {
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      title: "Evo Rescue",
+      title: "🛟 Evo Rescue",
       panelTone: "danger",
       lines: [
-        "同じ修正点を回り始めています。",
-        "次は 現状 / 期待結果 / 失敗条件 を3行で渡すと抜けやすいです。",
-        dim("迷路脱出モード: まず要件を固定してから再実行"),
+        "ここ、同じ修正点をぐるぐる回り始めています。",
+        "次は 現状 / 期待結果 / 失敗条件 を 3 行で渡すと抜けやすいです。",
+        dim("迷路脱出モード: まず要件を固定してから再挑戦"),
       ],
       lineBudget: 1,
     });
@@ -509,12 +509,12 @@ export function renderAdviceMessages(input: {
       severity: "high",
       tone: "corrective",
       surface: "end_of_turn",
-      title: "Evo Focus",
+      title: "🧭 Evo Focus",
       panelTone: "warning",
       lines: [
-        "探索範囲が広がりすぎています。",
+        "探索範囲がちょっと広がりすぎています。",
         "次は対象ファイルを 1 つに絞ると、かなり収束しやすいです。",
-        dim("おすすめ: ファイル名 + 直したい動作 を1行で指定"),
+        dim("おすすめ: ファイル名 + 直したい動作 を 1 行で指定"),
       ],
       lineBudget: 1,
     });
@@ -546,19 +546,19 @@ export function renderAdviceMessages(input: {
     const rewardLine =
       includePercent
         ? `予測節約ボーナス: ${savingHeadline(bestNudge)}`
-        : "予測節約ボーナス: 次の往復を短くしやすい形です";
+        : "予測節約ボーナス: 次の往復をかなり短くしやすい形です";
     pushPanel({
       key: `nudge-${bestNudge.category}`,
       category: bestNudge.category,
       severity: bestNudge.predictedSavingRate >= 0.25 ? "medium" : "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      title: "Evo Bonus",
+      title: "⚡ Evo Bonus",
       panelTone: bestNudge.predictedSavingRate >= 0.25 ? "accent" : "info",
       lines: [
         rewardLine,
         `次にやると刺さりやすいこと: ${actionByCategory[bestNudge.category]}`,
-        `${evidenceText(bestNudge)} | 刺さると +50 EXP ルート`,
+        `${evidenceText(bestNudge)} | ハマると +50 EXP ルート`,
       ],
       lineBudget: 1,
       predictedSavingRate: bestNudge.predictedSavingRate,
@@ -575,20 +575,20 @@ export function renderAdviceMessages(input: {
     const praiseText =
       praiseKey === "praise-structured"
         ? pickVariant(input.promptProfile.promptHash, [
-            "構造化がかなり効いています。いまの頼み方は強いです。",
-            "要件の切り方がきれいです。かなり無駄なく進めています。",
-            "指示の骨組みが良く、手戻りを抑えられています。",
+            "ナイス。構造化がかなり効いていて、かなり通りがいいです。",
+            "その切り方、かなり経験値うまいです。無駄ラリーを抑えられています。",
+            "今回の頼み方、かなり当たりです。きれいに刺さっています。",
           ])
         : praiseKey === "praise-converged"
           ? pickVariant(input.promptProfile.promptHash, [
-              "探索の絞り込みがきれいです。この進め方はかなり強いです。",
-              "見る場所の寄せ方が上手く、収束が速いです。",
-              "散らずに詰められています。この形は再現性があります。",
+              "探索の寄せ方がかなり上手いです。いい感じに収束できています。",
+              "見る場所の絞り方がきれいで、かなりロスが少ないです。",
+              "散らずに詰められています。この流れ、かなり気持ちいいです。",
             ])
           : pickVariant(input.promptProfile.promptHash, [
-              "きれいに通っています。今の頼み方はかなり素直です。",
-              "今回の依頼は通りが良く、かなりスマートです。",
-              "無駄な往復が少なく、いいテンポで進んでいます。",
+              "ナイス。今回はかなり通りがよく、無駄ラリーを抑えられています。",
+              "今回の依頼、かなり気持ちよくハマっています。",
+              "いい流れです。かなりスマートに前へ進めています。",
             ]);
     pushPanel({
       key: praiseKey,
@@ -596,7 +596,7 @@ export function renderAdviceMessages(input: {
       severity: "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      title: "Evo Combo",
+      title: "🏆 Evo Combo",
       panelTone: "success",
       lines: [
         praiseText,

@@ -37,7 +37,7 @@ export function formatRunSummary(input: {
   lines.push("");
   lines.push(
     formatPanel({
-      title: "Evo Recap",
+      title: input.fixLoopOccurred || input.searchLoopOccurred ? "🧾 Evo Recap" : "🎮 Evo Recap",
       tone: input.fixLoopOccurred || input.searchLoopOccurred ? "warning" : input.niceGuidanceAwarded ? "success" : "info",
       lines: [
         `Episode #${input.episodeId} | Surrogate Cost ${input.score.surrogateCost}`,
@@ -55,17 +55,17 @@ export function formatRunSummary(input: {
   }
 
   if (input.fixLoopOccurred) {
-    lines.push(colorize("Loop Signal: 同じ修正点を回っていました。次は現状 / 期待 / NG 条件で切ると抜けやすいです。", "danger", true));
+    lines.push(colorize("🛟 Loop Signal: 同じ修正点を回っていました。次は 現状 / 期待 / NG 条件 で切ると抜けやすいです。", "danger", true));
   }
 
   if (input.searchLoopOccurred) {
-    lines.push(colorize("Search Signal: 探索が散っていました。次は対象ファイルを 1 つに絞るのがおすすめです。", "warning", true));
+    lines.push(colorize("🧭 Search Signal: 探索が散っていました。次は対象ファイルを 1 つに絞るのがおすすめです。", "warning", true));
   }
 
   if (bestNudge && bestNudge.predictedSavingRate > 0) {
     lines.push(
       formatPanel({
-        title: "Next Bonus",
+        title: "🎁 Next Bonus",
         tone: bestNudge.predictedSavingRate >= 0.25 ? "accent" : "info",
         lines: [
           `${Math.round(bestNudge.predictedSavingRate * 100)}% 前後の節約見込み`,
@@ -75,7 +75,7 @@ export function formatRunSummary(input: {
       }),
     );
   } else if (input.predictedLossRate !== null) {
-    lines.push(colorize(`Next Bonus: 構造化すると ${percent(input.predictedLossRate)} 近い節約余地があります。`, "info", true));
+    lines.push(colorize(`🎁 Next Bonus: 構造化すると ${percent(input.predictedLossRate)} 近い節約余地があります。`, "info", true));
   }
 
   if (input.tokenEstimate) {
