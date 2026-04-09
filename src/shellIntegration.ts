@@ -1,11 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { ensureEvoConfig, getBinDir, updateEvoConfig } from "./config";
+import {
+  ensureEvoConfig,
+  getBinDir,
+  getCmdAutoRunScriptPath,
+  getDefaultPowerShellProfilePath,
+  getDefaultPwshProfilePath,
+  updateEvoConfig,
+} from "./config";
 import { SupportedCli } from "./types";
 
 const PROFILE_START = "# >>> evo shell integration >>>";
 const PROFILE_END = "# <<< evo shell integration <<<";
+const CMD_AUTORUN_REG_PATH = "HKCU\\Software\\Microsoft\\Command Processor";
+const CMD_AUTORUN_VALUE = "AutoRun";
+let testCmdAutoRunValue: string | null = null;
 
 function escapePowerShellSingleQuotes(value: string): string {
   return value.replace(/'/g, "''");
@@ -26,12 +36,127 @@ function normalize(p: string): string {
   return path.resolve(p).toLowerCase();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function runPowerShell(command: string): string {
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+    {
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(String(result.stderr ?? result.stdout ?? "PowerShell command failed").trim());
+  }
+  return String(result.stdout ?? "").trim();
+}
+
 function getShellHome(cwd: string): string {
   const fromEnv = process.env.EVO_HOME;
   if (fromEnv && fs.existsSync(fromEnv)) {
     return path.resolve(fromEnv);
   }
   return cwd;
+}
+
+function getCmdAutoRunScriptCommand(cwd: string): string {
+  return `call "${getCmdAutoRunScriptPath(cwd)}"`;
+}
+
+function getCmdAutoRunValue(): string | null {
+  if (process.env.EVO_TEST_MODE === "1") {
+    return testCmdAutoRunValue;
+  }
+  try {
+    const value = runPowerShell(
+      [
+        `$path = 'HKCU:\\Software\\Microsoft\\Command Processor'`,
+        "try {",
+        "  $value = (Get-ItemProperty -Path $path -Name AutoRun -ErrorAction Stop).AutoRun",
+        "  if ($null -ne $value -and $value.ToString().Trim().Length -gt 0) { Write-Output $value }",
+        "} catch { }",
+      ].join("; "),
+    );
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function stripManagedCmdAutoRun(value: string | null, cwd: string): string | null {
+  if (!value) return null;
+  const command = getCmdAutoRunScriptCommand(cwd);
+  const lowerManaged = command.toLowerCase();
+  const parts = value
+    .split(/\s*&\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => {
+      const lower = part.toLowerCase();
+      return !lower.includes("evo-cmd-autorun.cmd") && lower !== lowerManaged;
+    });
+  return parts.join(" & ").trim() || null;
+}
+
+function setCmdAutoRunValue(value: string | null): void {
+  if (process.env.EVO_TEST_MODE === "1") {
+    testCmdAutoRunValue = value && value.trim() ? value : null;
+    return;
+  }
+  const escaped = value ? escapePowerShellSingleQuotes(value) : "";
+  if (!value || !value.trim()) {
+    runPowerShell(
+      [
+        `$path = 'HKCU:\\Software\\Microsoft\\Command Processor'`,
+        "if (Test-Path $path) {",
+        "  try { Remove-ItemProperty -Path $path -Name AutoRun -ErrorAction Stop } catch { }",
+        "}",
+      ].join("; "),
+    );
+    return;
+  }
+  runPowerShell(
+    [
+      `$path = 'HKCU:\\Software\\Microsoft\\Command Processor'`,
+      "New-Item -Path $path -Force | Out-Null",
+      `$value = '${escaped}'`,
+      "$existing = Get-ItemProperty -Path $path -Name AutoRun -ErrorAction SilentlyContinue",
+      "if ($null -eq $existing) {",
+      "  New-ItemProperty -Path $path -Name AutoRun -Value $value -PropertyType String -Force | Out-Null",
+      "} else {",
+      "  Set-ItemProperty -Path $path -Name AutoRun -Value $value",
+      "}",
+    ].join("; "),
+  );
+}
+
+function normalizeCmdAutoRunValue(value: string | null): string | null {
+  if (!value) return null;
+  const staleCondaHook = 'if exist "C:\\ProgramData\\Anaconda3\\condabin\\conda_hook.bat" "C:\\ProgramData\\Anaconda3\\condabin\\conda_hook.bat"';
+  const miniCondaHook = path.join(process.env.USERPROFILE ?? "", "miniconda3", "condabin", "conda_hook.bat");
+  if (value.trim().toLowerCase() === staleCondaHook.toLowerCase() && fs.existsSync(miniCondaHook)) {
+    return `if exist "${miniCondaHook}" "${miniCondaHook}"`;
+  }
+  return value;
+}
+
+function getManagedPowerShellProfilePaths(cwd: string): string[] {
+  const config = ensureEvoConfig(cwd);
+  return Array.from(
+    new Set(
+      [config.shellIntegration.profilePath, getDefaultPowerShellProfilePath(), getDefaultPwshProfilePath()]
+        .filter(Boolean)
+        .map((entry) => path.resolve(entry)),
+    ),
+  );
+}
+
+function buildCmdAutoRunChain(cwd: string, original: string | null): string {
+  const managed = getCmdAutoRunScriptCommand(cwd);
+  return original && original.trim().length > 0 ? `${managed} & ${original}` : managed;
 }
 
 export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
@@ -159,6 +284,29 @@ function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: "codex" | "claude"
   ].join("\n");
 }
 
+function buildCmdAutoRunScript(cwd: string): string {
+  const configPath = path.join(cwd, ".evo", "config.json");
+  return [
+    "@echo off",
+    "setlocal",
+    `set "EVO_HOME=${cwd}"`,
+    `set "EVO_CONFIG=${configPath}"`,
+    "if defined ZELLIJ goto :eof",
+    "if defined EVO_ZELLIJ_BOOTSTRAPPED goto :eof",
+    "echo %CMDCMDLINE% | findstr /I /C:\" /c \" >nul && goto :eof",
+    "set \"EVO_ZELLIJ_ENABLED=1\"",
+    "if exist \"%EVO_CONFIG%\" (",
+    "  for /f \"usebackq delims=\" %%A in (`powershell -NoProfile -Command \"$cfg=Get-Content -Raw '%EVO_CONFIG%' | ConvertFrom-Json; if(($cfg.shellIntegration.enabled) -and ($cfg.shellIntegration.zellijAutoStart)){'1'}else{'0'}\"`) do set \"EVO_ZELLIJ_ENABLED=%%A\"",
+    ")",
+    "if not \"%EVO_ZELLIJ_ENABLED%\"==\"1\" goto :eof",
+    "where zellij >nul 2>nul || goto :eof",
+    "set \"EVO_ZELLIJ_BOOTSTRAPPED=1\"",
+    "if defined EVO_ZELLIJ_AUTOSTART_LOG >> \"%EVO_ZELLIJ_AUTOSTART_LOG%\" echo cmd^|%DATE% %TIME%^|%CD%",
+    "zellij",
+    "",
+  ].join("\r\n");
+}
+
 function installCommandWrappers(cwd: string): Partial<Record<SupportedCli, string>> {
   const originalCommandMap: Partial<Record<SupportedCli, string>> = {};
   for (const cli of ["codex", "claude"] as const) {
@@ -237,6 +385,10 @@ export function createProxyShims(cwd: string): string[] {
   );
   created.push(evoPs1Path);
 
+  const cmdAutoRunPath = getCmdAutoRunScriptPath(cwd);
+  fs.writeFileSync(cmdAutoRunPath, buildCmdAutoRunScript(cwd));
+  created.push(cmdAutoRunPath);
+
   for (const cli of ["codex", "claude"] as const) {
     const cmdShimPath = path.join(binDir, `${cli}.cmd`);
     const cmdContent = [
@@ -307,6 +459,28 @@ export function buildPowerShellProfileBlock(cwd: string): string {
     "    $env:Path = \"$evoBin;$env:Path\"",
     "  }",
     "}",
+    "$evoZellijEnabled = $evoEnabled",
+    "if (Test-Path $evoConfigPath) {",
+    "  try {",
+    "    $evoConfig = Get-Content -Raw $evoConfigPath | ConvertFrom-Json",
+    "    if ($null -ne $evoConfig.shellIntegration.zellijAutoStart) {",
+    "      $evoZellijEnabled = $evoEnabled -and [bool]$evoConfig.shellIntegration.zellijAutoStart",
+    "    }",
+    "  } catch {",
+    "    $evoZellijEnabled = $evoEnabled",
+    "  }",
+    "}",
+    "if ($evoZellijEnabled -and -not $env:ZELLIJ -and -not $env:EVO_ZELLIJ_BOOTSTRAPPED) {",
+    "  $commandLine = [Environment]::CommandLine",
+    "  if ($commandLine -notmatch '(?i)\\s-(command|c)\\b') {",
+    "    $zellij = Get-Command zellij -ErrorAction SilentlyContinue",
+    "    if ($zellij) {",
+    "      $env:EVO_ZELLIJ_BOOTSTRAPPED = '1'",
+    "      if ($env:EVO_ZELLIJ_AUTOSTART_LOG) { Add-Content -Path $env:EVO_ZELLIJ_AUTOSTART_LOG -Value (\"powershell|\" + (Get-Date -Format o) + \"|\" + (Get-Location)) }",
+    "      & $zellij.Source",
+    "    }",
+    "  }",
+    "}",
     PROFILE_END,
     "",
   ].join("\r\n");
@@ -329,6 +503,12 @@ export function setupShellIntegration(cwd: string): {
   const config = ensureEvoConfig(cwd);
   createProxyShims(cwd);
   const originalCommandMap = installCommandWrappers(cwd);
+  const currentCmdAutoRun = getCmdAutoRunValue();
+  const storedOriginalCmdAutoRun = normalizeCmdAutoRunValue(
+    stripManagedCmdAutoRun(config.shellIntegration.originalCmdAutoRun, cwd),
+  );
+  const originalCmdAutoRun =
+    storedOriginalCmdAutoRun ?? normalizeCmdAutoRunValue(stripManagedCmdAutoRun(currentCmdAutoRun, cwd));
 
   const nextConfig = {
     ...config,
@@ -337,14 +517,19 @@ export function setupShellIntegration(cwd: string): {
       enabled: true,
       binDir: getBinDir(cwd),
       originalCommandMap,
+      originalCmdAutoRun,
+      cmdAutoRunScriptPath: getCmdAutoRunScriptPath(cwd),
     },
   };
   updateEvoConfig(cwd, nextConfig);
 
   const profilePath = nextConfig.shellIntegration.profilePath;
-  fs.mkdirSync(path.dirname(profilePath), { recursive: true });
-  const existing = fs.existsSync(profilePath) ? fs.readFileSync(profilePath, "utf8") : "";
-  fs.writeFileSync(profilePath, replaceManagedBlock(existing, buildPowerShellProfileBlock(cwd)));
+  for (const targetProfilePath of getManagedPowerShellProfilePaths(cwd)) {
+    fs.mkdirSync(path.dirname(targetProfilePath), { recursive: true });
+    const existing = fs.existsSync(targetProfilePath) ? fs.readFileSync(targetProfilePath, "utf8") : "";
+    fs.writeFileSync(targetProfilePath, replaceManagedBlock(existing, buildPowerShellProfileBlock(cwd)));
+  }
+  setCmdAutoRunValue(buildCmdAutoRunChain(cwd, originalCmdAutoRun));
 
   return {
     profilePath,
@@ -360,14 +545,19 @@ export function undoShellIntegration(cwd: string): { profilePath: string; remove
   restoreCommandWrappers(cwd);
 
   if (fs.existsSync(profilePath)) {
-    const existing = fs.readFileSync(profilePath, "utf8");
+    removed = false;
+  }
+
+  for (const targetProfilePath of getManagedPowerShellProfilePaths(cwd)) {
+    if (!fs.existsSync(targetProfilePath)) continue;
+    const existing = fs.readFileSync(targetProfilePath, "utf8");
     const blockRe = new RegExp(
       `${PROFILE_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${PROFILE_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n?`,
       "g",
     );
     const updated = existing.replace(blockRe, "").trimEnd();
-    fs.writeFileSync(profilePath, updated ? `${updated}\r\n` : "");
-    removed = updated !== existing;
+    fs.writeFileSync(targetProfilePath, updated ? `${updated}\r\n` : "");
+    removed = removed || updated !== existing;
   }
 
   updateEvoConfig(cwd, {
@@ -377,6 +567,7 @@ export function undoShellIntegration(cwd: string): { profilePath: string; remove
       enabled: false,
     },
   });
+  setCmdAutoRunValue(config.shellIntegration.originalCmdAutoRun);
 
   return { profilePath, removed };
 }
@@ -394,6 +585,7 @@ export function setShellEnabled(cwd: string, enabled: boolean): void {
 
 export function getShellStatus(cwd: string): {
   enabled: boolean;
+  zellijAutoStart: boolean;
   binDir: string;
   profilePath: string;
   currentSessionDisabled: boolean;
@@ -402,6 +594,7 @@ export function getShellStatus(cwd: string): {
   const config = ensureEvoConfig(cwd);
   return {
     enabled: config.shellIntegration.enabled,
+    zellijAutoStart: config.shellIntegration.zellijAutoStart,
     binDir: config.shellIntegration.binDir,
     profilePath: config.shellIntegration.profilePath,
     currentSessionDisabled: process.env.EVO_PROXY_DISABLED === "1",

@@ -136,6 +136,9 @@ export interface ShellIntegrationConfig {
   binDir: string;
   originalCommandMap: Partial<Record<SupportedCli, string>>;
   profilePath: string;
+  zellijAutoStart: boolean;
+  cmdAutoRunScriptPath: string;
+  originalCmdAutoRun: string | null;
 }
 
 export interface ProxyConfig {

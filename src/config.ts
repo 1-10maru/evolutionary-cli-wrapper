@@ -16,6 +16,9 @@ const DEFAULT_CONFIG: EvoConfig = {
     binDir: "",
     originalCommandMap: {},
     profilePath: getDefaultPowerShellProfilePath(),
+    zellijAutoStart: true,
+    cmdAutoRunScriptPath: "",
+    originalCmdAutoRun: null,
   },
   proxy: {
     defaultMode: "auto",
@@ -50,12 +53,20 @@ export function getBinDir(cwd: string): string {
   return path.join(cwd, "bin");
 }
 
+export function getCmdAutoRunScriptPath(cwd: string): string {
+  return path.join(getBinDir(cwd), "evo-cmd-autorun.cmd");
+}
+
 export function removeEvoData(cwd: string): void {
   fs.rmSync(getEvoDir(cwd), { recursive: true, force: true });
 }
 
 export function getDefaultPowerShellProfilePath(): string {
   return path.join(os.homedir(), "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
+}
+
+export function getDefaultPwshProfilePath(): string {
+  return path.join(os.homedir(), "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1");
 }
 
 export function ensureEvoConfig(cwd: string): EvoConfig {
@@ -69,6 +80,7 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
       ...DEFAULT_CONFIG.shellIntegration,
       binDir: getBinDir(cwd),
       profilePath: getDefaultPowerShellProfilePath(),
+      cmdAutoRunScriptPath: getCmdAutoRunScriptPath(cwd),
     },
   };
 

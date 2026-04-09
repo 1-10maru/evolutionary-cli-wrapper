@@ -12,6 +12,7 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  delete process.env.EVO_TEST_MODE;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
@@ -20,6 +21,7 @@ afterEach(() => {
 
 describe("shell integration", () => {
   it("creates shims and a managed PowerShell profile block", () => {
+    process.env.EVO_TEST_MODE = "1";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-"));
     tempDirs.push(cwd);
     const profilePath = path.join(cwd, "PowerShell", "profile.ps1");
@@ -37,6 +39,7 @@ describe("shell integration", () => {
 
     expect(fs.existsSync(path.join(cwd, "bin", "codex.cmd"))).toBe(true);
     expect(fs.existsSync(path.join(cwd, "bin", "claude.cmd"))).toBe(true);
+    expect(fs.existsSync(path.join(cwd, "bin", "evo-cmd-autorun.cmd"))).toBe(true);
     expect(fs.readFileSync(path.join(cwd, "bin", "claude.cmd"), "utf8")).toContain("title claude [Evo ON]");
     expect(fs.readFileSync(profilePath, "utf8")).toContain("evo shell integration");
     expect(result.profilePath).toBe(profilePath);
@@ -44,6 +47,7 @@ describe("shell integration", () => {
   });
 
   it("removes the managed PowerShell profile block", () => {
+    process.env.EVO_TEST_MODE = "1";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-undo-"));
     tempDirs.push(cwd);
     const profilePath = path.join(cwd, "PowerShell", "profile.ps1");
