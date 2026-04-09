@@ -1,0 +1,40 @@
+{
+  "name": "evolutionary-cli-wrapper",
+  "version": "1.0.0",
+  "description": "CLI wrapper that scores and guides LLM collaboration efficiency without depending on token access.",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "bin": {
+    "evo": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "postinstall": "npm run build",
+    "setup": "node scripts/setup.mjs",
+    "test": "vitest run tests",
+    "test:watch": "vitest tests"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "chokidar": "^5.0.0",
+    "commander": "^14.0.3",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "strip-ansi": "^7.2.0",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-javascript": "^0.21.4",
+    "tree-sitter-python": "^0.21.0",
+    "tree-sitter-typescript": "^0.23.2"
+  }
+}

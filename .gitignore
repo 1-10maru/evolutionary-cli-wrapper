@@ -1,0 +1,7 @@
+dist/
+coverage/
+.evo/
+node_modules/
+bin/
+.claude/
+.tmp-import/
