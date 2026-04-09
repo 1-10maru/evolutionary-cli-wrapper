@@ -261,14 +261,17 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   let startupNoticeTimer: NodeJS.Timeout | null = null;
   let startupNoticeShown = false;
 
-  const scheduleStartupNotice = (): void => {
+  const showStartupNotice = (): void => {
     if (startupNoticeShown || !process.stderr.isTTY) return;
-    if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
-    startupNoticeTimer = setTimeout(() => {
-      startupNoticeShown = true;
-      process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
-    }, Math.max(1200, Math.min(2200, idleMs + 250)));
+    startupNoticeShown = true;
+    process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
   };
+
+  if (process.stderr.isTTY) {
+    startupNoticeTimer = setTimeout(() => {
+      showStartupNotice();
+    }, attachStdin ? 2200 : 1200);
+  }
 
   const finalizeTurn = (): void => {
     if (!turnState.inputText.trim() && !turnState.outputText.trim() && turnState.events.length === 0) {
@@ -385,7 +388,6 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     }
 
     restartIdleTimer();
-    scheduleStartupNotice();
   };
 
   child.stdout?.on("data", (chunk: Buffer) => consumeStream("stdout", chunk));

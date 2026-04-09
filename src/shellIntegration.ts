@@ -89,6 +89,13 @@ function getWrapperTargets(basePath: string): Array<{ path: string; backupPath: 
   ];
 }
 
+function normalizeResolvedWrapperBase(resolved: string): string {
+  const normalizedResolved = resolved.replace(/\.evo-original(\.(cmd|ps1))?$/i, "");
+  return normalizedResolved.endsWith(".cmd") || normalizedResolved.endsWith(".ps1")
+    ? normalizedResolved.replace(/\.(cmd|ps1)$/i, "")
+    : normalizedResolved;
+}
+
 function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: "codex" | "claude", cwd: string): string {
   const mainPath = path.join(cwd, "dist", "index.js");
   const configPath = path.join(cwd, ".evo", "config.json");
@@ -156,22 +163,30 @@ function installCommandWrappers(cwd: string): Partial<Record<SupportedCli, strin
   const originalCommandMap: Partial<Record<SupportedCli, string>> = {};
   for (const cli of ["codex", "claude"] as const) {
     const resolved = resolveOriginalCommand(cwd, cli);
-    if (!resolved) continue;
-    const normalizedResolved = resolved.replace(/\.evo-original(\.(cmd|ps1))?$/i, "");
-    const basePath =
-      normalizedResolved.endsWith(".cmd") || normalizedResolved.endsWith(".ps1")
-        ? normalizedResolved.replace(/\.(cmd|ps1)$/i, "")
-        : normalizedResolved;
-    const targets = getWrapperTargets(basePath);
-    for (const target of targets) {
-      if (fs.existsSync(target.path) && !fs.existsSync(target.backupPath)) {
-        fs.copyFileSync(target.path, target.backupPath);
+    const candidateBases = new Set<string>();
+    if (resolved) candidateBases.add(normalizeResolvedWrapperBase(resolved));
+    const appDataBase = path.join(process.env.APPDATA ?? "", "npm", cli);
+    if (process.env.APPDATA) candidateBases.add(appDataBase);
+
+    for (const basePath of candidateBases) {
+      const targets = getWrapperTargets(basePath);
+      for (const target of targets) {
+        if (fs.existsSync(target.path) && !fs.existsSync(target.backupPath)) {
+          fs.copyFileSync(target.path, target.backupPath);
+        }
+        const content = buildWrapperContent(target.kind, cli, cwd);
+        fs.writeFileSync(target.path, content);
       }
-      const content = buildWrapperContent(target.kind, cli, cwd);
-      fs.writeFileSync(target.path, content);
     }
-    const backupCmd = `${basePath}.evo-original.cmd`;
-    originalCommandMap[cli] = fs.existsSync(backupCmd) ? backupCmd : resolved;
+
+    const preferredBackup = `${appDataBase}.evo-original.cmd`;
+    if (fs.existsSync(preferredBackup)) {
+      originalCommandMap[cli] = preferredBackup;
+    } else if (resolved) {
+      const resolvedBase = normalizeResolvedWrapperBase(resolved);
+      const backupCmd = `${resolvedBase}.evo-original.cmd`;
+      originalCommandMap[cli] = fs.existsSync(backupCmd) ? backupCmd : resolved;
+    }
   }
   return originalCommandMap;
 }
