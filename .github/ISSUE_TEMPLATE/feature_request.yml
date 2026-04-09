@@ -1,0 +1,44 @@
+name: Feature request
+description: 新機能や改善案を追加するための issue
+title: "[Feature] "
+labels:
+  - type:feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        追加したい機能や改善案をまとめる issue です。
+        未実装の全体像は `ROADMAP.md` も確認してください。
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目的
+      description: 何をできるようにしたいですか？
+      placeholder: 例: `evo explain` を研究モードとして読みやすくしたい
+    validations:
+      required: true
+  - type: textarea
+    id: user_value
+    attributes:
+      label: 価値
+      description: これが入ると誰にどう嬉しいですか？
+      placeholder: 例: 他 PC から参加した AI が改善点をすぐ理解できる
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ
+      description: 触る想定の範囲、または想定している対象ファイルや機能
+      placeholder: 例: README、docs、stats UI
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      description: 何ができたら完了ですか？
+      placeholder: |
+        - README から GitHub Issues への導線がある
+        - stats の見え方が改善している
+    validations:
+      required: true
+

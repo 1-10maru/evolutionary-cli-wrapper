@@ -1,0 +1,48 @@
+name: Bug report
+description: 不具合を報告する issue
+title: "[Bug] "
+labels:
+  - type:bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        再現性と影響範囲が分かる形で書いてください。
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 症状
+      description: 何が起きていますか？
+      placeholder: 例: `claude` 起動後に tracking 表示が出ず、stats にも残らない
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 再現手順
+      description: 手順を順番に書いてください
+      placeholder: |
+        1. `claude` を起動
+        2. 1 回やり取り
+        3. `evo stats --cwd .` を確認
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待していた動作
+      placeholder: 例: Evo tracking ON が表示され、episode が増える
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 環境
+      description: OS / shell / CLI など
+      placeholder: 例: Windows 11 / PowerShell / Claude Code v2.1.92
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: エラーログや関連情報があれば
+

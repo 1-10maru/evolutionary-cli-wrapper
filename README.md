@@ -1,5 +1,7 @@
 # Evolutionary CLI Wrapper
 
+[![CI](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml/badge.svg)](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml)
+
 LLM への頼み方を、あとから反省するだけじゃなく、その場で育てていくためのローカルコーチです 🎮
 
 「その一言を足すと、次の往復がかなり短くなる」  
@@ -103,9 +105,13 @@ npm run setup
 
 このリポジトリは、他の PC で clone して未実装を確認したり、複数の人や AI エージェントが並列に進めやすい形で運用できるようにしてあります。
 
-- 未実装項目と優先度を見る: [ROADMAP.md](./ROADMAP.md)
+- 日々の未実装を回す: GitHub Issues
+- repo 全体の地図を見る: [ROADMAP.md](./ROADMAP.md)
 - 並列開発のルールを見る: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- AI の作業手順を見る: [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md)
 - 仕様判断の履歴を見る: [docs/DECISIONS.md](./docs/DECISIONS.md)
+- repo の入口を見る: [docs/PROJECT_MAP.md](./docs/PROJECT_MAP.md)
+- レビュー観点を見る: [docs/REVIEW_PLAYBOOK.md](./docs/REVIEW_PLAYBOOK.md)
 - PR 時の更新漏れを防ぐ: [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)
 
 普段の流れはこれです。
@@ -113,8 +119,17 @@ npm run setup
 1. clone
 2. `npm install`
 3. `npm run setup`
-4. `ROADMAP.md` を見て担当を決める
-5. `codex/<topic>` ブランチを切って進める
+4. GitHub Issues から 1 つ選ぶ
+5. `ROADMAP.md` で shared-risk area を確認する
+6. `codex/<topic>` ブランチを切って進める
+
+GitHub Projects を使うなら、列は次を推奨します。
+
+- `Backlog`
+- `Ready`
+- `Active`
+- `Review`
+- `Done`
 
 ## 使い始め
 

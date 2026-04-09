@@ -1,10 +1,18 @@
+## Linked Issue
+
+- Closes #
+
 ## Summary
 
 - What changed?
 
-## Why
+## Acceptance
 
-- Why is this change needed?
+- What issue-level acceptance criteria are now satisfied?
+
+## AI Self-Review
+
+- What did you double-check before asking for review?
 
 ## Docs
 
@@ -12,8 +20,13 @@
 - [ ] START_HERE_JA updated if setup flow changed
 - [ ] ROADMAP updated if scope or status changed
 - [ ] DECISIONS updated if a new product or architecture decision was made
+- [ ] PROJECT_MAP / REVIEW_PLAYBOOK updated if the collaboration flow changed
 
 ## Checks
 
 - [ ] `npm run build`
 - [ ] `npm test`
+
+## Notes for Reviewer
+
+- Risks, follow-ups, or specific areas you want reviewed

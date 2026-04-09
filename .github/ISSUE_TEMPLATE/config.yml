@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Roadmap
+    url: https://github.com/1-10maru/evolutionary-cli-wrapper/blob/main/ROADMAP.md
+    about: 中期の未実装一覧と優先度を見る
+  - name: Contributing
+    url: https://github.com/1-10maru/evolutionary-cli-wrapper/blob/main/CONTRIBUTING.md
+    about: 並列開発と PR 運用のルールを見る
+

@@ -1,0 +1,70 @@
+name: Agent task
+description: AI エージェントに渡す実行単位の issue
+title: "[Agent Task] "
+labels:
+  - type:feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Codex / Claude / Copilot などの AI エージェント向けタスクです。
+        1 issue = 1 branch = 1 PR を前提に、判断不要で着手できる形にします。
+  - type: textarea
+    id: objective
+    attributes:
+      label: 目的
+      description: この task のゴール
+      placeholder: 例: GitHub CI の docs チェック warning を追加する
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対象範囲
+      description: 触ってよい範囲
+      placeholder: |
+        - `.github/workflows/`
+        - `README.md`
+        - `CONTRIBUTING.md`
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 触らない範囲
+      description: 変更対象外にしたい場所
+      placeholder: 例: `src/proxyRuntime.ts` には触らない
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      description: 実装後に満たすべき条件
+      placeholder: |
+        - workflow が追加されている
+        - README に導線がある
+        - `npm test` が通る
+    validations:
+      required: true
+  - type: dropdown
+    id: docs_needed
+    attributes:
+      label: ドキュメント更新
+      description: docs 更新は必要ですか？
+      options:
+        - 必須
+        - できれば更新
+        - 不要
+    validations:
+      required: true
+  - type: dropdown
+    id: reviewer
+    attributes:
+      label: 推奨レビュー担当
+      description: まず誰に見てもらう想定ですか？
+      options:
+        - 人間レビュー
+        - 別の AI レビュー
+        - 人間 + AI 両方
+    validations:
+      required: true
+

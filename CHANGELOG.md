@@ -2,6 +2,21 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## [Unreleased]
+
+### Added
+
+- GitHub Issue Forms for feature, bug, and agent-task intake
+- GitHub Actions CI and PR docs warning workflow
+- Dependabot configuration for npm and GitHub Actions
+- Agent workflow, project map, and review playbook docs
+
+### Changed
+
+- CONTRIBUTING を GitHub Issues / PR 中心の運用に拡張
+- ROADMAP を `Now / Next / Later` ベースに整理
+- README に GitHub backlog / CI / AI 並列開発の導線を追加
+
 ## [2.0.0] - 2026-04-09
 
 ### Added

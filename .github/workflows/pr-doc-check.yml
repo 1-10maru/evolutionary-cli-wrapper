@@ -1,0 +1,71 @@
+name: PR Docs Check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  doc-hints:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check docs alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          git diff --name-only "$base" "$head" > changed_files.txt
+
+          has_src=0
+          has_core_docs=0
+          has_setup_related=0
+          has_setup_docs=0
+
+          grep -q '^src/' changed_files.txt && has_src=1 || true
+          grep -Eq '^(README\.md|ROADMAP\.md|docs/DECISIONS\.md)$' changed_files.txt && has_core_docs=1 || true
+          grep -Eq '^(scripts/setup\.mjs|setup\.cmd|src/shellIntegration\.ts|src/proxyRuntime\.ts|src/index\.ts)$' changed_files.txt && has_setup_related=1 || true
+          grep -q '^START_HERE_JA\.md$' changed_files.txt && has_setup_docs=1 || true
+
+          warnings=0
+
+          if [ "$has_src" -eq 1 ] && [ "$has_core_docs" -eq 0 ]; then
+            echo "::warning title=PR Docs Check::src/ を変更していますが、README.md / ROADMAP.md / docs/DECISIONS.md の更新が見当たりません。必要なら docs も追随してください。"
+            {
+              echo "## PR Docs Check"
+              echo
+              echo "- src/ が変更されています"
+              echo "- README.md / ROADMAP.md / docs/DECISIONS.md の更新は見当たりません"
+              echo "- 仕様や見え方が変わる場合は docs 更新を検討してください"
+            } >> "$GITHUB_STEP_SUMMARY"
+            warnings=1
+          fi
+
+          if [ "$has_setup_related" -eq 1 ] && [ "$has_setup_docs" -eq 0 ]; then
+            echo "::warning title=PR Docs Check::setup や shell integration 周辺が変わっていますが、START_HERE_JA.md の更新が見当たりません。導線変更があるなら追随してください。"
+            {
+              echo
+              echo "- setup / shell integration 周辺が変更されています"
+              echo "- START_HERE_JA.md の更新は見当たりません"
+              echo "- セットアップ導線が変わる場合は更新してください"
+            } >> "$GITHUB_STEP_SUMMARY"
+            warnings=1
+          fi
+
+          if [ "$warnings" -eq 0 ]; then
+            {
+              echo "## PR Docs Check"
+              echo
+              echo "- docs 更新の大きな抜けは見当たりませんでした"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
