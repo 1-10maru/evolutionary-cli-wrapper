@@ -52,6 +52,16 @@ const TURN_NOISE_PATTERNS = [
   /input must be provided either through stdin or as a prompt argument/i,
 ];
 
+const NON_INTERACTIVE_FLAGS = new Set([
+  "--print",
+  "-p",
+  "--version",
+  "-v",
+  "--help",
+  "-h",
+  "--json",
+]);
+
 function createEvent(
   type: EpisodeEvent["type"],
   source: EpisodeEvent["source"],
@@ -74,6 +84,12 @@ function createEmptyTurn(): ProxyTurnState {
     events: [],
     lastActivityAt: Date.now(),
   };
+}
+
+function shouldUseInteractivePassthrough(args: string[]): boolean {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) return false;
+  if (args.length === 0) return true;
+  return !args.some((arg) => NON_INTERACTIVE_FLAGS.has(arg.toLowerCase()));
 }
 
 function normalizeTurnOutput(outputText: string): string {
@@ -145,6 +161,7 @@ function spawnInteractiveCommand(
   commandPath: string,
   args: string[],
   cwd: string,
+  inheritStdio = false,
 ): ReturnType<typeof spawn> {
   const extension = path.extname(commandPath).toLowerCase();
   if (extension === ".cmd" || extension === ".bat") {
@@ -152,7 +169,7 @@ function spawnInteractiveCommand(
     return spawn(`"${commandPath}" ${quotedArgs}`.trim(), {
       cwd,
       shell: true,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: inheritStdio ? "inherit" : ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         EVO_PROXY_ACTIVE: "1",
@@ -165,7 +182,7 @@ function spawnInteractiveCommand(
     return spawn("powershell", ["-NoLogo", "-NoProfile", "-File", commandPath, ...args], {
       cwd,
       shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: inheritStdio ? "inherit" : ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         EVO_PROXY_ACTIVE: "1",
@@ -177,7 +194,7 @@ function spawnInteractiveCommand(
   return spawn(commandPath, args, {
     cwd,
     shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: inheritStdio ? "inherit" : ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
       EVO_PROXY_ACTIVE: "1",
@@ -212,6 +229,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     throw new Error(`Could not resolve the original ${cli} command. Run npm run setup again.`);
   }
 
+  const interactivePassthrough = shouldUseInteractivePassthrough(options.args);
   process.stderr.write(
     `Evo tracking ON | cli=${cli} | dir=${cwd} | mode=${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}\n`,
   );
@@ -265,7 +283,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     // Skip permission-denied watcher paths and keep the session alive.
   });
 
-  const child = spawnInteractiveCommand(originalCommand, options.args, cwd);
+  if (interactivePassthrough) {
+    process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+  }
+
+  const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
   const stdinListener = (chunk: Buffer | string): void => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
@@ -276,7 +298,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     }
     child.stdin?.write(chunk);
   };
-  const attachStdin = Boolean(process.stdin.isTTY);
+  const attachStdin = Boolean(process.stdin.isTTY) && !interactivePassthrough;
   if (attachStdin) {
     process.stdin.resume();
     process.stdin.on("data", stdinListener);
@@ -293,7 +315,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
   };
 
-  if (process.stderr.isTTY) {
+  if (process.stderr.isTTY && !interactivePassthrough) {
     startupNoticeTimer = setTimeout(() => {
       showStartupNotice();
     }, attachStdin ? 2200 : 1200);
@@ -421,8 +443,10 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     restartIdleTimer();
   };
 
-  child.stdout?.on("data", (chunk: Buffer) => consumeStream("stdout", chunk));
-  child.stderr?.on("data", (chunk: Buffer) => consumeStream("stderr", chunk));
+  if (!interactivePassthrough) {
+    child.stdout?.on("data", (chunk: Buffer) => consumeStream("stdout", chunk));
+    child.stderr?.on("data", (chunk: Buffer) => consumeStream("stderr", chunk));
+  }
 
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
@@ -435,16 +459,18 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     process.stdin.off("data", stdinListener);
   }
 
-  for (const [source, trailing] of [
-    ["stdout", lineBuffer.stdout] as const,
-    ["stderr", lineBuffer.stderr] as const,
-  ]) {
-    if (!trailing.trim()) continue;
-    const usage = parseUsageObservation(cli, source, trailing);
-    if (usage) usageObservations.push({ ...usage, turnIndex: turnIndex + 1 });
-    const extracted = extractEventsFromLine(trailing);
-    for (const event of extracted) pushTurnEvent(event);
-    for (const event of frictionAdapter.consumeOutputLine(source, trailing)) pushTurnEvent(event);
+  if (!interactivePassthrough) {
+    for (const [source, trailing] of [
+      ["stdout", lineBuffer.stdout] as const,
+      ["stderr", lineBuffer.stderr] as const,
+    ]) {
+      if (!trailing.trim()) continue;
+      const usage = parseUsageObservation(cli, source, trailing);
+      if (usage) usageObservations.push({ ...usage, turnIndex: turnIndex + 1 });
+      const extracted = extractEventsFromLine(trailing);
+      for (const event of extracted) pushTurnEvent(event);
+      for (const event of frictionAdapter.consumeOutputLine(source, trailing)) pushTurnEvent(event);
+    }
   }
 
   finalizeTurn();

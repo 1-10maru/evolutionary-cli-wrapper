@@ -286,11 +286,13 @@ function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: "codex" | "claude"
 
 function buildCmdAutoRunScript(cwd: string): string {
   const configPath = path.join(cwd, ".evo", "config.json");
+  const binDir = getBinDir(cwd);
   return [
     "@echo off",
-    "setlocal",
     `set "EVO_HOME=${cwd}"`,
     `set "EVO_CONFIG=${configPath}"`,
+    `set "EVO_BIN=${binDir}"`,
+    "echo ;%PATH%; | findstr /I /C:\";%EVO_BIN%;\" >nul || set \"PATH=%EVO_BIN%;%PATH%\"",
     "if defined ZELLIJ goto :eof",
     "if defined EVO_ZELLIJ_BOOTSTRAPPED goto :eof",
     "echo %CMDCMDLINE% | findstr /I /C:\" /c \" >nul && goto :eof",
