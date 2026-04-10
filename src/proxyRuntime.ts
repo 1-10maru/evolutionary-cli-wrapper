@@ -18,7 +18,7 @@ import {
   renderMascotTurnLine,
   updateMascotAfterEpisode,
 } from "./mascot";
-import { detectLiveSignals, generateTopAdvice } from "./signalDetector";
+import { detectLiveSignals, generateTopAdvice, pickTip } from "./signalDetector";
 import { computeLiveGrade } from "./sessionGrade";
 import { extractPromptProfile } from "./promptProfile";
 import {
@@ -494,12 +494,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         liveState.signalKind = topAdvice.signal.kind;
         liveState.beforeExample = topAdvice.beforeExample ?? "";
         liveState.afterExample = topAdvice.afterExample ?? "";
-      } else if (liveState.turns >= 3) {
-        liveState.advice = "順調 — いい流れ!";
-        liveState.adviceDetail = "";
-        liveState.signalKind = "";
-        liveState.beforeExample = "";
-        liveState.afterExample = "";
+      } else {
+        // No signal fired — show a rotating tip from the tips library
+        const tip = pickTip(liveState.turns);
+        liveState.advice = tip.headline;
+        liveState.adviceDetail = tip.detail;
+        liveState.signalKind = "tip";
+        liveState.beforeExample = tip.beforeExample ?? "";
+        liveState.afterExample = tip.afterExample ?? "";
       }
 
       // Update session grade

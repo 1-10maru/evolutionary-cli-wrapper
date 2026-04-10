@@ -505,3 +505,138 @@ export function generateTopAdvice(
     category: signalCategory(top.kind),
   };
 }
+
+// ── Tips Library: always-on friendly advice for when no signal fires ──
+// These rotate based on turn number so the user always sees something new.
+// Mix of: official Claude Code tips (JP), common beginner mistakes, prompt patterns, encouragement
+
+export const TIPS_LIBRARY: Array<{
+  headline: string;
+  detail: string;
+  beforeExample?: string;
+  afterExample?: string;
+}> = [
+  // ── プロンプトの書き方 ──
+  {
+    headline: "「何を・どこを・どうなればOK」の3点セットで指示の精度がグンと上がるよ!",
+    detail: "AIは超能力者じゃないから、あなたの頭の中は見えないの。でも「何を変えたいか」「どのファイルか」「どうなれば完了か」の3つを書くだけで、一発で通る確率がめちゃくちゃ上がるよ!",
+    beforeExample: "ログイン画面を直して",
+    afterExample: "src/Login.tsx のフォーム送信で、空パスワードでもsubmitできるバグを修正。空欄ならボタンをdisabledにして。",
+  },
+  {
+    headline: "ファイル名を1つ書くだけで、AIの探索が半分になるって知ってた?",
+    detail: "ファイル名がないと、AIは「どのファイルの話?」ってまずプロジェクト全体を探しに行くの。ファイル名を1つ書くだけで、その探索がまるごと省けるよ。時間もトークンも節約!",
+    beforeExample: "バリデーションにメールアドレスのチェックを追加して",
+    afterExample: "src/validators.ts にメールアドレスのバリデーションを追加して。@を含まない文字列はエラーにする",
+  },
+  {
+    headline: "箇条書きで指示すると、AIが見落としにくくなるよ!",
+    detail: "長い文章で指示すると、AIも人間と同じで後半の条件を見落とすことがあるの。箇条書きで「1. これして 2. これも 3. これはしない」って書くと、漏れが減ってやり直しも減るよ!",
+    beforeExample: "ユーザー登録の機能をつくって、メール確認もして、パスワードは8文字以上にして",
+    afterExample: "ユーザー登録機能を作成:\n- POST /register エンドポイント追加\n- パスワードは8文字以上でバリデーション\n- 登録後にメール確認リンクを送信\n- テストも書く",
+  },
+  {
+    headline: "「直して」だけだと、AIは何をどう直すかを推測するところからスタートしちゃうよ",
+    detail: "「直して」「なんかおかしい」みたいな指示だと、AIはまず「何が壊れてるんだろう?」って調査フェーズに入るの。エラーメッセージやどんな状況で起きるかを一言添えるだけで、調査がスキップできてめちゃ速くなるよ!",
+    beforeExample: "なんかエラー出る、直して",
+    afterExample: "npm run build で TypeError: Cannot read property 'name' of undefined って出る。src/utils.ts の getUser 関数が null を返してるっぽい",
+  },
+  {
+    headline: "「〜しないで」って制約を伝えるのも大事だよ!",
+    detail: "AIは良かれと思って余計なことをしがちなの。「既存のテストは変えないで」「他のファイルは触らないで」って書くだけで、思わぬ変更を防げるよ。",
+    beforeExample: "リファクタして",
+    afterExample: "src/api.ts の fetchUser 関数をリファクタして。他のファイルは変更しないこと。既存テストが通ること。",
+  },
+  // ── Claude Code Tips (公式) ──
+  {
+    headline: "知ってた? /clear でコンテキストをリセットすると、AIの応答が速くなるよ!",
+    detail: "会話が長くなると、AIは過去の全部を読み返しながら答えるの。タスクが変わったら /clear でリセットすると、新鮮な状態で高速に応答してくれるよ。トークンの節約にもなる!",
+  },
+  {
+    headline: "CLAUDE.md にプロジェクトのルールを書いておくと、毎回説明しなくて済むよ!",
+    detail: "「TypeScriptで書いて」「テストはvitest使って」みたいなお決まりのルールは、プロジェクトのCLAUDE.mdに書いておけばAIが最初から知ってる状態でスタートするよ。毎回言う手間が省ける!",
+  },
+  {
+    headline: "大きなタスクは小さく分割! 一度に全部頼むと精度が下がるよ",
+    detail: "「認証機能を全部作って」より「まずログインAPIだけ作って」の方が、AIの出力精度がずっと高いの。1つずつ確認しながら進めると、手戻りが激減するよ!",
+    beforeExample: "ECサイトのバックエンドを全部作って",
+    afterExample: "まず商品一覧のGET /products APIだけ作って。DBはSQLiteでいい。他の機能は次のターンで頼む",
+  },
+  {
+    headline: "Claudeに「なぜそうしたか」を聞くと、理解が深まるよ!",
+    detail: "AIが書いたコードの意図がわからない時は「なんでこの実装にしたの?」って聞いてみて。説明を読むことでコードの理解も深まるし、間違いにも気づきやすくなるよ!",
+  },
+  {
+    headline: "エラーが出たら、エラーメッセージをそのまま貼るのが最速の解決法だよ!",
+    detail: "「動かない」より「TypeError: xxx at line 42」って貼る方が、AIは原因に直行できるの。ターミナルのエラーをコピペするだけでOK!",
+    beforeExample: "動かないんだけど",
+    afterExample: "このエラーが出る:\nTypeError: Cannot read properties of undefined (reading 'map')\n  at UserList (src/UserList.tsx:15:23)",
+  },
+  {
+    headline: "1つの指示で1つのこと。欲張ると精度が落ちるよ!",
+    detail: "「あれもこれもそれも」って1つの指示に詰め込むと、AIは全部を同時にやろうとして、どれも中途半端になりがちなの。1つずつ順番にお願いする方が、結果的に速くて確実だよ!",
+  },
+  // ── よくある失敗パターン ──
+  {
+    headline: "同じ指示を繰り返しても、同じ結果になるだけだよ!",
+    detail: "「直して」→失敗→「直して」→失敗…ってなってない? 同じ言い方を繰り返しても、AIは同じアプローチを取りがち。「さっき○○を試したけどダメだった。△△を試して」って、前回の失敗を伝えると別のルートで解決してくれるよ!",
+    beforeExample: "（3回目）直して",
+    afterExample: "さっきnullチェックを追加する方法を試したけど、別の箇所でまたnullが出る。getUserById の戻り値の型自体を Optional にする方向で修正して",
+  },
+  {
+    headline: "AIに長いコードを読ませるより、該当箇所を教える方が効率的!",
+    detail: "「このファイル全部見て」より「42行目あたりの関数」って指定する方が、AIはピンポイントで対応できるの。行番号やエラーメッセージの行数を添えるだけで、無駄な読み込みが減るよ!",
+  },
+  {
+    headline: "テストを先に書いてもらうと、実装の品質がグンと上がるよ!",
+    detail: "「テスト書いて→実装して」の順番で頼むと、AIは先にゴールを理解してから実装するから精度が高くなるの。TDD (テスト駆動開発) をAIにもやらせてみて!",
+    beforeExample: "ソート機能を追加して",
+    afterExample: "配列をソートする sortByDate 関数を作って。先にテストを書いてから実装して。昇順/降順の両方のケースをカバーすること",
+  },
+  // ── 励まし・モチベーション系 ──
+  {
+    headline: "ここまで順調だよ! いい指示の出し方を続けていこう!",
+    detail: "プロンプトを意識して書くだけで、AIとの作業効率は劇的に変わるの。最初は面倒に感じるかもしれないけど、慣れると自然にできるようになるよ。その分、もっと難しいことにAIを使えるようになる!",
+  },
+  {
+    headline: "AIは道具じゃなくて、ペアプロのパートナーだよ!",
+    detail: "一方的に「やれ」って命令するより、「こういう問題があるんだけど、どう思う?」って相談する方が、AIは良い提案を出しやすいの。質問と指示をうまく混ぜて使ってみて!",
+  },
+  {
+    headline: "指示に迷ったら、まず「今の状況」を書くところから始めよう!",
+    detail: "何を頼んでいいかわからない時は、「いまこうなってる」「こうしたい」「でもこれが邪魔してる」の3つを書くだけでOK。AIがそこから最適な方法を提案してくれるよ!",
+  },
+  {
+    headline: "コードの変更後は、動作確認を忘れずに!",
+    detail: "AIが「修正しました!」って言っても、実際に動かしてみないと本当に直ったかはわからないの。テスト実行や手動確認をセットで依頼すると安心だよ!",
+    beforeExample: "バグ修正して",
+    afterExample: "バグ修正して、修正後にnpm testを実行して結果を見せて",
+  },
+  {
+    headline: "わからないことは「わからない」って言っていいんだよ!",
+    detail: "AIへの指示で専門用語を使わなくても大丈夫。「ユーザーが登録するやつ」みたいな平易な言い方でもAIは理解できるよ。ただし「どのファイルの」「どの画面の」は具体的に!",
+  },
+  {
+    headline: "完了条件を1つだけ書くだけで、やり直し率が大幅に下がるよ!",
+    detail: "「〇〇が通ればOK」「〇〇が表示されれば完了」みたいに、ゴールを1行だけ足すだけでいいの。AIが「いつ止まるか」を判断できて、余計なことをしなくなるよ!",
+    beforeExample: "検索機能を追加して",
+    afterExample: "検索機能を追加して。完了条件: 検索窓にキーワードを入力したら、一致する結果だけが表示される",
+  },
+  {
+    headline: "Gitでコミットはこまめにね! 巻き戻せる安心感が大事だよ",
+    detail: "AIに大きな変更を頼む前に、今の状態をコミットしておくと安心。もし変更がうまくいかなくても、すぐ元に戻せるよ。",
+  },
+];
+
+/** Pick a tip based on turn number (rotates through the library) */
+export function pickTip(turnIndex: number): ActionableAdvice {
+  const tip = TIPS_LIBRARY[turnIndex % TIPS_LIBRARY.length];
+  return {
+    signal: { kind: "first_pass_success", confidence: 0, severity: "low", context: {} },
+    headline: tip.headline,
+    detail: tip.detail,
+    beforeExample: tip.beforeExample,
+    afterExample: tip.afterExample,
+    category: "praise",
+  };
+}
