@@ -1,0 +1,4 @@
+#!/bin/sh
+export EVO_HOME="C:/Users/coldv/Documents/PythonScripts/Codex/evolutionary-cli-wrapper"
+export EVO_CONFIG="C:/Users/coldv/Documents/PythonScripts/Codex/evolutionary-cli-wrapper/.evo/config.json"
+exec node "C:/Users/coldv/Documents/PythonScripts/Codex/evolutionary-cli-wrapper/dist/index.js" proxy --cli codex -- "$@"

@@ -100,6 +100,11 @@ function getShellHome(cwd: string): string {
   if (fromEnv && fs.existsSync(fromEnv)) {
     return path.resolve(fromEnv);
   }
+  // Fallback: derive evo root from dist/ directory (this file compiles to dist/shellIntegration.js)
+  const projectRoot = path.resolve(__dirname, "..");
+  if (fs.existsSync(path.join(projectRoot, ".evo", "config.json"))) {
+    return projectRoot;
+  }
   return cwd;
 }
 
@@ -418,8 +423,8 @@ export function createProxyShims(cwd: string): string[] {
     const shShimPath = path.join(binDir, cli);
     const shContent = [
       "#!/bin/sh",
-      `EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
-      `EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
+      `export EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
+      `export EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
       `exec node "${path.join(cwd, "dist", "index.js").replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
       "",
     ].join("\n");
