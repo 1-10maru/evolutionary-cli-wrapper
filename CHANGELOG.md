@@ -36,6 +36,25 @@
 - `89f6761` README visuals and mascot tone polish
 - `5c75b13` Claude friction adapter
 
+## [2.1.0] - 2026-04-10
+
+### Added
+
+- JSONL transcript watcher: Claude Code の JSONL トランスクリプトを監視し、ターン数・ツール使用数をリアルタイム追跡
+- `.evo/live-state.json` によるプロセス間通信: Evo wrapper → Claude Code statusline.py へ EvoPet 状態を受け渡し
+- Claude Code ステータスライン統合: 下部ステータスバーに EvoPet（アバター・ムード・ターン数・アドバイス・Bond%）をカラフル表示
+- `~/.bash_profile` への Evo PATH 前置（Git Bash / Zellij 対応）
+
+### Changed
+
+- cmd.exe AutoRun スクリプトの PATH チェックを `echo | findstr` パイプから単純 `set PATH=` に変更（パイプが AutoRun コンテキストでハングする問題を修正）
+- EXP 計算: 何もしていないセッション（ターンなし・ファイル変更なし・ファイル読み取りなし）では EXP を 0 に（空セッションで +37 EXP が付いていたバグを修正）
+
+### Removed
+
+- DECSTBM row 1 ペイント: Claude Code TUI の alternate screen buffer と干渉してレイアウトを破壊するため完全削除
+- OSC 0 ターミナルタイトル書き込み: Zellij ペイン名とちかちか競合するため削除
+
 ## [2.0.0] - 2026-04-09
 
 ### Added

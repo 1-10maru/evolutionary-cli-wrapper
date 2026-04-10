@@ -288,7 +288,7 @@ function buildCmdAutoRunScript(cwd: string): string {
     `set "EVO_HOME=${cwd}"`,
     `set "EVO_CONFIG=${configPath}"`,
     `set "EVO_BIN=${binDir}"`,
-    "echo ;%PATH%; | findstr /I /C:\";%EVO_BIN%;\" >nul || set \"PATH=%EVO_BIN%;%PATH%\"",
+    "set \"PATH=%EVO_BIN%;%PATH%\"",
     "",
   ].join("\r\n");
 }

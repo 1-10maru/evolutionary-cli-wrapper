@@ -13,6 +13,7 @@ import {
   renderMascotLevelUp,
   renderMascotSpecialEvent,
   renderMascotStartupLine,
+  renderMascotState,
   renderMascotTurnLine,
   updateMascotAfterEpisode,
 } from "./mascot";
@@ -287,6 +288,171 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
   }
 
+  // ── JSONL watcher + live-state file for statusline integration ──
+  // No terminal painting or title bar writes — those break Claude Code's TUI
+  // and conflict with Zellij pane names. Instead, write state to a file that
+  // ~/.claude/statusline.py reads.
+  let jsonlWatcher: fs.FSWatcher | null = null;
+  let jsonlPollTimer: NodeJS.Timeout | null = null;
+  const liveTrackingEnabled =
+    interactivePassthrough &&
+    process.stderr.isTTY &&
+    process.env.EVO_LIVE_TRACKING !== "0";
+  const liveStateFile = path.join(cwd, ".evo", "live-state.json");
+
+  // Live session state tracked via JSONL monitoring
+  const liveState = {
+    turns: 0,
+    toolCalls: 0,
+    lastTool: "",
+    sessionStartMs: Date.now(),
+    advice: "",
+  };
+
+  const writeLiveState = (): void => {
+    const state = renderMascotState(mascotProfile);
+    const payload = {
+      turns: liveState.turns,
+      toolCalls: liveState.toolCalls,
+      advice: liveState.advice,
+      mood: mascotProfile.mood,
+      avatar: state.avatar,
+      nickname: mascotProfile.nickname,
+      bond: state.progressPercent,
+      updatedAt: Date.now(),
+    };
+    try { fs.writeFileSync(liveStateFile, JSON.stringify(payload)); } catch { /* ignore */ }
+  };
+
+  const teardownLiveTracking = (): void => {
+    if (jsonlPollTimer) { clearInterval(jsonlPollTimer); jsonlPollTimer = null; }
+    if (jsonlWatcher) { jsonlWatcher.close(); jsonlWatcher = null; }
+    try { fs.unlinkSync(liveStateFile); } catch { /* ignore */ }
+  };
+
+  // ── JSONL transcript watcher ──
+  const startJsonlWatcher = (): void => {
+    const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
+    if (!fs.existsSync(claudeProjectsDir)) return;
+
+    const encodedCwd = cwd.replace(/[\\/]/g, "-").replace(/:/g, "-");
+    let projectDir = "";
+    try {
+      for (const entry of fs.readdirSync(claudeProjectsDir)) {
+        if (entry.toLowerCase() === encodedCwd.toLowerCase()) {
+          projectDir = path.join(claudeProjectsDir, entry);
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+    if (!projectDir || !fs.existsSync(projectDir)) return;
+
+    let newestJsonl = "";
+    let newestMtime = 0;
+    let jsonlReadOffset = 0;
+
+    const findNewestJsonl = (): void => {
+      try {
+        for (const entry of fs.readdirSync(projectDir)) {
+          if (!entry.endsWith(".jsonl")) continue;
+          const fullPath = path.join(projectDir, entry);
+          const stat = fs.statSync(fullPath);
+          if (stat.mtimeMs > newestMtime) {
+            newestMtime = stat.mtimeMs;
+            newestJsonl = fullPath;
+          }
+        }
+      } catch { /* ignore */ }
+    };
+
+    const processNewLines = (): void => {
+      if (!newestJsonl) return;
+      try {
+        const stat = fs.statSync(newestJsonl);
+        if (stat.size <= jsonlReadOffset) return;
+        const fd = fs.openSync(newestJsonl, "r");
+        const buf = Buffer.alloc(Math.min(stat.size - jsonlReadOffset, 64 * 1024));
+        fs.readSync(fd, buf, 0, buf.length, jsonlReadOffset);
+        fs.closeSync(fd);
+        jsonlReadOffset += buf.length;
+        for (const line of buf.toString("utf8").split("\n")) {
+          if (!line.trim()) continue;
+          try { processJsonlEntry(JSON.parse(line)); } catch { /* skip */ }
+        }
+      } catch { /* ignore */ }
+    };
+
+    const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
+      if (entry.type === "user") {
+        liveState.turns += 1;
+        updateAdvice();
+      } else if (entry.type === "assistant") {
+        const content = entry.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if ((block as Record<string, unknown>).type === "tool_use") {
+              liveState.toolCalls += 1;
+              liveState.lastTool = String((block as Record<string, unknown>).name ?? "");
+            }
+          }
+        }
+      }
+    };
+
+    const updateAdvice = (): void => {
+      const elapsedMin = (Date.now() - liveState.sessionStartMs) / 60_000;
+      const { turns, toolCalls } = liveState;
+
+      if (turns >= 8 && toolCalls / Math.max(turns, 1) > 5) {
+        liveState.advice = "ツール多用 - プロンプトを具体的に";
+      } else if (turns >= 10) {
+        liveState.advice = "10T超 - タスク分割を検討";
+      } else if (turns >= 5 && elapsedMin > 15) {
+        liveState.advice = "長セッション - ゴール再確認";
+      } else if (elapsedMin > 30) {
+        liveState.advice = "30分超 - コミットしよう";
+      } else if (turns >= 3) {
+        liveState.advice = "順調";
+      }
+    };
+
+    findNewestJsonl();
+    if (newestJsonl) {
+      try { jsonlReadOffset = fs.statSync(newestJsonl).size; } catch { /* ignore */ }
+    }
+
+    try {
+      jsonlWatcher = fs.watch(projectDir, { persistent: false }, (_ev, filename) => {
+        if (filename && filename.endsWith(".jsonl")) {
+          const fullPath = path.join(projectDir, filename);
+          if (fullPath !== newestJsonl) {
+            try {
+              const stat = fs.statSync(fullPath);
+              if (stat.mtimeMs > newestMtime) {
+                newestMtime = stat.mtimeMs;
+                newestJsonl = fullPath;
+                jsonlReadOffset = stat.size;
+              }
+            } catch { /* ignore */ }
+          }
+          processNewLines();
+        }
+      });
+      if (typeof (jsonlWatcher as unknown as { unref?: () => void }).unref === "function") {
+        (jsonlWatcher as unknown as { unref: () => void }).unref();
+      }
+    } catch { /* ignore */ }
+
+    jsonlPollTimer = setInterval(() => { findNewestJsonl(); processNewLines(); writeLiveState(); }, 2000);
+    if (typeof jsonlPollTimer.unref === "function") jsonlPollTimer.unref();
+  };
+
+  if (liveTrackingEnabled) {
+    startJsonlWatcher();
+    // Write initial state immediately
+    writeLiveState();
+  }
+
   const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
   const stdinListener = (chunk: Buffer | string): void => {
@@ -453,6 +619,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     child.on("close", (code) => resolve(code ?? 1));
   });
 
+  teardownLiveTracking();
   if (idleTimer) clearTimeout(idleTimer);
   if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
   if (attachStdin) {

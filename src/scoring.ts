@@ -753,11 +753,16 @@ export function buildEpisodeSummary(input: {
       ? clamp(Math.max(...input.nudges.map((nudge) => nudge.predictedSavingRate), 0), 0, 0.8)
       : null;
   const niceGuidanceAwarded = input.promptProfile.structureScore >= 3 && input.firstPassGreen;
-  const expAwarded =
-    (niceGuidanceAwarded ? 50 : 15) +
-    (input.loopSignals.editLoop ? 0 : 10) +
-    (input.loopSignals.searchLoop ? 0 : 5) +
-    Math.round(input.currentEstimate.confidence * 10);
+  // No EXP for empty sessions (no turns, no file changes, no events)
+  const hasActivity = (input.turns?.length ?? 0) > 0 ||
+    input.changedFilesCount > 0 ||
+    input.score.filesRead > 0;
+  const expAwarded = hasActivity
+    ? (niceGuidanceAwarded ? 50 : 15) +
+      (input.loopSignals.editLoop ? 0 : 10) +
+      (input.loopSignals.searchLoop ? 0 : 5) +
+      Math.round(input.currentEstimate.confidence * 10)
+    : 0;
 
   return {
     surrogateCost: input.score.surrogateCost,
