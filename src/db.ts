@@ -368,6 +368,47 @@ export class EvoDatabase {
     this.ensureColumn("archived_episodes", "novelty_ratio", "REAL NOT NULL DEFAULT 1");
     this.ensureColumn("archived_episodes", "expected_cost_confidence", "REAL NOT NULL DEFAULT 0.2");
     this.ensureColumn("usage_observations", "turn_index", "INTEGER");
+
+    // v3.0: achievements table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS achievements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        earned_at TEXT NOT NULL,
+        episode_id INTEGER,
+        bonus_exp INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+  }
+
+  getRecentStructureScoreAverage(limit = 10): number {
+    const result = this.db.prepare(`
+      SELECT AVG(structure_score) AS avg_score
+      FROM (
+        SELECT structure_score FROM episode_summaries
+        ORDER BY episode_id DESC LIMIT ?
+      )
+    `).get(limit) as { avg_score: number | null } | undefined;
+    return result?.avg_score ?? 0;
+  }
+
+  getPreviousEpisodeLoopOccurred(): boolean {
+    const row = this.db.prepare(`
+      SELECT fix_loop_occurred, search_loop_occurred
+      FROM episode_summaries
+      ORDER BY episode_id DESC LIMIT 1
+    `).get() as { fix_loop_occurred: number; search_loop_occurred: number } | undefined;
+    return (row?.fix_loop_occurred ?? 0) !== 0 || (row?.search_loop_occurred ?? 0) !== 0;
+  }
+
+  getRecentStructureScores(limit = 5): number[] {
+    const rows = this.db.prepare(`
+      SELECT structure_score FROM episode_summaries
+      ORDER BY episode_id DESC LIMIT ?
+    `).all(limit) as Array<{ structure_score: number }>;
+    return rows.map((r) => r.structure_score).reverse();
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {

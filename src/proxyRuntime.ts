@@ -9,6 +9,7 @@ import { diffSymbolSnapshots } from "./ast";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import {
+  comboMilestoneMessage,
   loadMascotProfile,
   renderMascotLevelUp,
   renderMascotSpecialEvent,
@@ -17,6 +18,8 @@ import {
   renderMascotTurnLine,
   updateMascotAfterEpisode,
 } from "./mascot";
+import { detectLiveSignals, generateTopAdvice } from "./signalDetector";
+import { computeLiveGrade } from "./sessionGrade";
 import { extractPromptProfile } from "./promptProfile";
 import {
   buildEpisodeComplexity,
@@ -305,8 +308,27 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     turns: 0,
     toolCalls: 0,
     lastTool: "",
+    lastFile: "",
     sessionStartMs: Date.now(),
     advice: "",
+    adviceDetail: "",
+    signalKind: "" as string,
+    beforeExample: "",
+    afterExample: "",
+    sessionGrade: "C" as string,
+    promptScore: 0,
+    efficiencyScore: 0,
+    comboCount: mascotProfile.comboCount,
+    // Tracking maps for signal detection
+    filePatchCounts: new Map<string, number>(),
+    symbolTouchCounts: new Map<string, number>(),
+    lastPromptLength: 0,
+    lastHasFileRefs: false,
+    lastHasSymbolRefs: false,
+    lastHasAcceptanceRef: false,
+    lastHasTestRef: false,
+    lastStructureScore: 0,
+    lastFirstPassGreen: true,
   };
 
   const writeLiveState = (): void => {
@@ -320,6 +342,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       nickname: mascotProfile.nickname,
       bond: state.progressPercent,
       updatedAt: Date.now(),
+      sessionGrade: liveState.sessionGrade,
+      promptScore: liveState.promptScore,
+      efficiencyScore: liveState.efficiencyScore,
+      comboCount: liveState.comboCount,
+      adviceDetail: liveState.adviceDetail,
+      signalKind: liveState.signalKind,
+      beforeExample: liveState.beforeExample,
+      afterExample: liveState.afterExample,
     };
     try { fs.writeFileSync(liveStateFile, JSON.stringify(payload)); } catch { /* ignore */ }
   };
@@ -385,14 +415,45 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
       if (entry.type === "user") {
         liveState.turns += 1;
+        // Extract prompt features for signal detection
+        const content = (entry as Record<string, unknown>).message;
+        if (content && typeof content === "object") {
+          const msgContent = (content as Record<string, unknown>).content;
+          if (typeof msgContent === "string") {
+            liveState.lastPromptLength = msgContent.length;
+            liveState.lastHasFileRefs = /\.[a-z]{1,5}\b/i.test(msgContent) || /\//g.test(msgContent);
+            liveState.lastHasSymbolRefs = /[A-Z][a-z]+[A-Z]|[a-z]+_[a-z]+|\(\)/.test(msgContent);
+            liveState.lastHasAcceptanceRef = /完了|done|accept|pass|通[れる]|OK/.test(msgContent);
+            liveState.lastHasTestRef = /test|テスト|spec|assert/.test(msgContent);
+            // Simple structure score: count bullets, numbered items, section markers
+            const bullets = (msgContent.match(/^[-*•]\s/gm) ?? []).length;
+            const numbered = (msgContent.match(/^\d+\.\s/gm) ?? []).length;
+            liveState.lastStructureScore = Math.min(5, bullets + numbered + (liveState.lastHasAcceptanceRef ? 1 : 0) + (liveState.lastHasFileRefs ? 1 : 0));
+            // Update prompt score for grade
+            const structurePart = Math.min(40, (liveState.lastStructureScore / 5) * 40);
+            const specificityPart = (liveState.lastHasFileRefs || liveState.lastHasSymbolRefs) ? 30 : 0;
+            const verificationPart = (liveState.lastHasAcceptanceRef || liveState.lastHasTestRef) ? 30 : 0;
+            liveState.promptScore = Math.round(structurePart + specificityPart + verificationPart);
+          }
+        }
         updateAdvice();
       } else if (entry.type === "assistant") {
         const content = entry.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
-            if ((block as Record<string, unknown>).type === "tool_use") {
+            const b = block as Record<string, unknown>;
+            if (b.type === "tool_use") {
               liveState.toolCalls += 1;
-              liveState.lastTool = String((block as Record<string, unknown>).name ?? "");
+              liveState.lastTool = String(b.name ?? "");
+              // Track file edits for same_file_revisit detection
+              if (liveState.lastTool === "Edit" || liveState.lastTool === "Write") {
+                const input = b.input as Record<string, unknown> | undefined;
+                const filePath = typeof input?.file_path === "string" ? input.file_path : "";
+                if (filePath) {
+                  liveState.lastFile = filePath;
+                  liveState.filePatchCounts.set(filePath, (liveState.filePatchCounts.get(filePath) ?? 0) + 1);
+                }
+              }
             }
           }
         }
@@ -400,20 +461,58 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     };
 
     const updateAdvice = (): void => {
-      const elapsedMin = (Date.now() - liveState.sessionStartMs) / 60_000;
-      const { turns, toolCalls } = liveState;
+      const adviceConfig = config.advice ?? {
+        vaguePromptThreshold: 30,
+        sameFileRevisitThreshold: 3,
+        scopeCreepFileThreshold: 5,
+        scopeCreepEntropyThreshold: 0.85,
+        showBeforeAfterExamples: true,
+      };
 
-      if (turns >= 8 && toolCalls / Math.max(turns, 1) > 5) {
-        liveState.advice = "ツール多用 - プロンプトを具体的に";
-      } else if (turns >= 10) {
-        liveState.advice = "10T超 - タスク分割を検討";
-      } else if (turns >= 5 && elapsedMin > 15) {
-        liveState.advice = "長セッション - ゴール再確認";
-      } else if (elapsedMin > 30) {
-        liveState.advice = "30分超 - コミットしよう";
-      } else if (turns >= 3) {
-        liveState.advice = "順調";
+      const signals = detectLiveSignals({
+        turns: liveState.turns,
+        toolCalls: liveState.toolCalls,
+        sessionStartMs: liveState.sessionStartMs,
+        lastTool: liveState.lastTool,
+        lastFile: liveState.lastFile,
+        filePatchCounts: liveState.filePatchCounts,
+        symbolTouchCounts: liveState.symbolTouchCounts,
+        promptLength: liveState.lastPromptLength,
+        hasFileRefs: liveState.lastHasFileRefs,
+        hasSymbolRefs: liveState.lastHasSymbolRefs,
+        hasAcceptanceRef: liveState.lastHasAcceptanceRef,
+        hasTestRef: liveState.lastHasTestRef,
+        structureScore: liveState.lastStructureScore,
+        firstPassGreen: liveState.lastFirstPassGreen,
+        config: adviceConfig,
+      });
+
+      const topAdvice = generateTopAdvice(signals);
+      if (topAdvice) {
+        liveState.advice = topAdvice.headline;
+        liveState.adviceDetail = topAdvice.detail;
+        liveState.signalKind = topAdvice.signal.kind;
+        liveState.beforeExample = topAdvice.beforeExample ?? "";
+        liveState.afterExample = topAdvice.afterExample ?? "";
+      } else if (liveState.turns >= 3) {
+        liveState.advice = "順調 — いい流れ!";
+        liveState.adviceDetail = "";
+        liveState.signalKind = "";
+        liveState.beforeExample = "";
+        liveState.afterExample = "";
       }
+
+      // Update session grade
+      const gradeResult = computeLiveGrade({
+        promptScore: liveState.promptScore,
+        turns: liveState.turns,
+        toolCalls: liveState.toolCalls,
+        firstPassGreen: liveState.lastFirstPassGreen,
+        comboCount: liveState.comboCount,
+      });
+      liveState.sessionGrade = gradeResult.grade;
+      liveState.promptScore = gradeResult.promptScore;
+      liveState.efficiencyScore = gradeResult.efficiencyScore;
     };
 
     findNewestJsonl();

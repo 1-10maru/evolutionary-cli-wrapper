@@ -39,6 +39,30 @@ export function dim(text: string): string {
   return `${DIM}${text}${RESET}`;
 }
 
+export function formatCombo(count: number): string {
+  if (count < 3) return "";
+  const tone: "info" | "success" | "warning" | "danger" | "accent" | "magic" =
+    count >= 10 ? "magic" : count >= 5 ? "accent" : "success";
+  return colorize(`${count}x Combo`, tone, true);
+}
+
+export function formatGrade(grade: string): string {
+  const tone: "info" | "success" | "warning" | "danger" | "accent" | "magic" =
+    grade === "S" ? "magic"
+    : grade === "A" ? "success"
+    : grade === "B" ? "accent"
+    : grade === "C" ? "warning"
+    : "danger";
+  return colorize(`Grade:${grade}`, tone, true);
+}
+
+export function formatBeforeAfter(before: string, after: string): string {
+  if (!before || !after) return "";
+  const truncBefore = before.length > 30 ? before.slice(0, 27) + "..." : before;
+  const truncAfter = after.length > 60 ? after.slice(0, 57) + "..." : after;
+  return `${colorize(`❌ "${truncBefore}"`, "danger")} → ${colorize(`✅ "${truncAfter}"`, "success")}`;
+}
+
 export function formatPanel(input: {
   title: string;
   tone: "info" | "success" | "warning" | "danger" | "accent" | "magic";

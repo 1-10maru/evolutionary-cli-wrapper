@@ -28,6 +28,13 @@ const DEFAULT_CONFIG: EvoConfig = {
     cooldownTurns: 2,
     minConfidenceForPercent: 0.65,
   },
+  advice: {
+    vaguePromptThreshold: 30,
+    sameFileRevisitThreshold: 3,
+    scopeCreepFileThreshold: 5,
+    scopeCreepEntropyThreshold: 0.85,
+    showBeforeAfterExamples: true,
+  },
 };
 
 export function getEvoDir(cwd: string): string {
@@ -112,6 +119,10 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
       ...nextDefaults.nudge,
       ...(parsed.nudge ?? {}),
     },
+    advice: {
+      ...nextDefaults.advice,
+      ...(parsed.advice ?? {}),
+    },
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   return config;
@@ -134,6 +145,9 @@ export function getDefaultConfig(): EvoConfig {
     },
     nudge: {
       ...DEFAULT_CONFIG.nudge,
+    },
+    advice: {
+      ...DEFAULT_CONFIG.advice,
     },
   };
 }

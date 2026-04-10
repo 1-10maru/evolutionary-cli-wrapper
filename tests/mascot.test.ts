@@ -99,7 +99,10 @@ describe("mascot", () => {
     process.env.EVO_HOME = home;
 
     loadMascotProfile(project);
-    const update = updateMascotAfterEpisode(project, createSummary({ expAwarded: 150 }));
+    // Skill-based EXP: structured + first-pass-green + balanced = ~110 per episode
+    // sprout threshold is 120, so 2 good episodes should level up
+    updateMascotAfterEpisode(project, createSummary());
+    const update = updateMascotAfterEpisode(project, createSummary());
 
     expect(update.leveledUp).toBe(true);
     expect(update.nextStage).toBe("sprout");

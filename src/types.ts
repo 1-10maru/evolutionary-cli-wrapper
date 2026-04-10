@@ -102,6 +102,8 @@ export interface MascotProfile {
   lastSeenAt: string | null;
   favoriteHintStyle: NudgeCategory | "none";
   lastMessages: string[];
+  comboCount: number;
+  bestCombo: number;
 }
 
 export interface MascotRenderState {
@@ -157,6 +159,7 @@ export interface EvoConfig {
   shellIntegration: ShellIntegrationConfig;
   proxy: ProxyConfig;
   nudge: NudgeConfig;
+  advice: AdviceConfig;
 }
 
 export interface EpisodeEvent {
@@ -464,4 +467,82 @@ export interface IssueIntakeSummary {
   docsNeeded: string | null;
   reviewer: string | null;
   rawBody: string;
+}
+
+// ── v3.0 Gamification types ──
+
+export type AdviceSignalKind =
+  | "prompt_too_vague"
+  | "same_file_revisit"
+  | "same_function_revisit"
+  | "scope_creep"
+  | "no_success_criteria"
+  | "approval_fatigue"
+  | "error_spiral"
+  | "retry_loop"
+  | "good_structure"
+  | "first_pass_success"
+  | "improving_trend"
+  | "long_session_no_commit"
+  | "high_tool_ratio";
+
+export interface AdviceSignal {
+  kind: AdviceSignalKind;
+  confidence: number;
+  severity: NudgeSeverity;
+  context: Record<string, unknown>;
+}
+
+export interface ActionableAdvice {
+  signal: AdviceSignal;
+  headline: string;
+  detail: string;
+  beforeExample?: string;
+  afterExample?: string;
+  category: NudgeCategory;
+}
+
+export type SessionGradeLetter = "S" | "A" | "B" | "C" | "D";
+
+export interface SessionGradeResult {
+  grade: SessionGradeLetter;
+  promptScore: number;
+  efficiencyScore: number;
+  overallScore: number;
+}
+
+export interface Achievement {
+  key: string;
+  name: string;
+  description: string;
+  earnedAt: string;
+  episodeId: number;
+  bonusExp: number;
+}
+
+export interface AdviceConfig {
+  vaguePromptThreshold: number;
+  sameFileRevisitThreshold: number;
+  scopeCreepFileThreshold: number;
+  scopeCreepEntropyThreshold: number;
+  showBeforeAfterExamples: boolean;
+}
+
+export interface LiveStatePayload {
+  turns: number;
+  toolCalls: number;
+  advice: string;
+  mood: MascotMood;
+  avatar: string;
+  nickname: string;
+  bond: number;
+  updatedAt: number;
+  sessionGrade: SessionGradeLetter;
+  promptScore: number;
+  efficiencyScore: number;
+  comboCount: number;
+  adviceDetail: string;
+  signalKind: AdviceSignalKind | "";
+  beforeExample: string;
+  afterExample: string;
 }

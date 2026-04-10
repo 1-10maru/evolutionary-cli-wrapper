@@ -61,6 +61,8 @@ function defaultMascot(): MascotProfile {
     lastSeenAt: null,
     favoriteHintStyle: "none",
     lastMessages: [],
+    comboCount: 0,
+    bestCombo: 0,
   };
 }
 
@@ -120,6 +122,8 @@ export function loadMascotProfile(cwd: string): MascotProfile {
     ...defaultMascot(),
     ...parsed,
     lastMessages: parsed.lastMessages ?? [],
+    comboCount: parsed.comboCount ?? 0,
+    bestCombo: parsed.bestCombo ?? 0,
   };
   fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
   return profile;
@@ -160,10 +164,72 @@ export function chooseMascotSpecies(cwd: string, speciesId: string): MascotProfi
   return next;
 }
 
-export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary): MascotEpisodeUpdate {
+// Combo: good prompt = structureScore >= 3 AND firstPassGreen AND no loops
+export function updateCombo(profile: MascotProfile, summary: EpisodeSummary): number {
+  const isGood =
+    summary.structureScore >= 3 &&
+    summary.firstPassGreen &&
+    !summary.fixLoopOccurred &&
+    !summary.searchLoopOccurred;
+  if (isGood) {
+    profile.comboCount += 1;
+    if (profile.comboCount > profile.bestCombo) {
+      profile.bestCombo = profile.comboCount;
+    }
+  } else {
+    profile.comboCount = 0;
+  }
+  return profile.comboCount;
+}
+
+// Skill-based EXP formula (v3.0)
+export function computeSkillExp(summary: EpisodeSummary, comboCount: number, avgRecentStructureScore: number): number {
+  // No EXP for empty sessions
+  const hasActivity = (summary.turnCount ?? 0) > 0 ||
+    summary.changedFilesCount > 0 ||
+    summary.filesRead > 0;
+  if (!hasActivity) return 0;
+
+  let exp = 10; // base
+
+  // Skill bonuses
+  if (summary.structureScore >= 4) exp += 30;
+  else if (summary.structureScore >= 3) exp += 15;
+
+  if (summary.firstPassGreen && summary.retryCount === 0) exp += 25;
+
+  if (summary.explorationMode === "direct" || summary.explorationMode === "balanced") exp += 15;
+
+  if (!summary.fixLoopOccurred && !summary.searchLoopOccurred) exp += 10;
+
+  // Skill penalties (floor at base 10)
+  if (summary.structureScore < 2 && summary.changedFilesCount > 2) exp -= 10;
+  if (summary.fixLoopOccurred) exp -= 15;
+  else if (summary.searchLoopOccurred) exp -= 10;
+  if (summary.explorationMode === "scattered") exp -= 10;
+
+  exp = Math.max(10, exp);
+
+  // Combo multiplier (max 2.0x at 10-combo)
+  const comboMultiplier = 1.0 + Math.min(comboCount, 10) * 0.1;
+  exp = Math.round(exp * comboMultiplier);
+
+  // Improvement bonus
+  if (summary.structureScore > avgRecentStructureScore) exp += 20;
+
+  return exp;
+}
+
+export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary, avgRecentStructureScore?: number): MascotEpisodeUpdate {
   const previous = loadMascotProfile(cwd);
   const previousStage = previous.stage;
-  const totalBondExp = previous.totalBondExp + summary.expAwarded;
+
+  // Update combo first (before EXP calculation uses it)
+  updateCombo(previous, summary);
+
+  // Compute skill-based EXP
+  const expAwarded = computeSkillExp(summary, previous.comboCount, avgRecentStructureScore ?? 0);
+  const totalBondExp = previous.totalBondExp + expAwarded;
   const nextStage = stageForExp(totalBondExp);
   const nextProfile: MascotProfile = {
     ...previous,
@@ -180,7 +246,7 @@ export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary): 
     speciesId: nextProfile.speciesId,
     previousStage,
     nextStage,
-    gainedExp: summary.expAwarded,
+    gainedExp: expAwarded,
     totalBondExp,
     progressPercent: progressPercent(totalBondExp),
     leveledUp: stageIndex(nextStage) > stageIndex(previousStage),
@@ -245,18 +311,25 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
         : "こつこつ育成中";
   const expText = `Bond ${state.progressPercent}%`;
   const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
-  const moodText = colorize(moodLabel(mood), mood === "worried" ? "warning" : mood === "proud" ? "success" : mood === "hyped" ? "accent" : "info");
-  const action = colorize(categoryHint(lead), lead?.category === "recovery" ? "danger" : lead?.category === "praise" ? "success" : "accent");
-  const savingLabel = colorize(savingText, saving >= 25 ? "accent" : saving > 0 ? "info" : "warning", true);
-  const expLabel = dim(`+${Math.max(1, Math.round(summary.score.surrogateCost > 0 ? 4 : 1))} vibe | ${expText}`);
 
-  return `${prefix} ${moodText} | ${action} | ${savingLabel} | ${expLabel}`;
+  // Mood-toned prefix for the advice headline
+  const moodPrefix = mood === "worried" ? "あわわ、" : mood === "proud" ? "えへへ、" : mood === "hyped" ? "おっ、" : "";
+  const action = colorize(
+    `${moodPrefix}${categoryHint(lead)}`,
+    lead?.category === "recovery" ? "danger" : lead?.category === "praise" ? "success" : "accent",
+  );
+
+  const comboText = profile.comboCount >= 3 ? colorize(` ${profile.comboCount}x`, "accent", true) : "";
+  const savingLabel = colorize(savingText, saving >= 25 ? "accent" : saving > 0 ? "info" : "warning", true);
+  const expLabel = dim(`${expText}`);
+
+  return `${prefix} ${action} | ${savingLabel} |${comboText} ${expLabel}`;
 }
 
 export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "claude" | "generic", lightweightTracking: boolean): string {
   const state = renderMascotState(profile);
   const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
-  const moodText = colorize(moodLabel(profile.mood), "info");
+  const stageLabel = stageSkillLabel(profile.stage);
   const action = colorize(
     cli === "claude"
       ? "いっしょに見守るよ。返事がひと段落したら声かけるね"
@@ -266,8 +339,19 @@ export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "
     "accent",
   );
   const status = colorize(lightweightTracking ? "light tracking" : "tracking ready", lightweightTracking ? "warning" : "success", true);
-  const bond = dim(`Bond ${state.progressPercent}%`);
-  return `${prefix} ${moodText} | ${action} | ${status} | ${bond}`;
+  const combo = profile.comboCount > 0 ? colorize(` ${profile.comboCount}x Combo`, "accent", true) : "";
+  const bond = dim(`${stageLabel} | Bond ${state.progressPercent}%`);
+  return `${prefix} ${action} | ${status} |${combo} ${bond}`;
+}
+
+function stageSkillLabel(stage: MascotProfile["stage"]): string {
+  switch (stage) {
+    case "egg": return "初心者";
+    case "sprout": return "見習い";
+    case "buddy": return "実践者";
+    case "wizard": return "熟練者";
+    case "legend": return "達人";
+  }
 }
 
 export function renderMascotSpecialEvent(profile: MascotProfile, input: {
@@ -301,17 +385,38 @@ export function renderMascotSpecialEvent(profile: MascotProfile, input: {
   });
 }
 
+function stageUpMessage(prev: MascotProfile["stage"], next: MascotProfile["stage"]): string {
+  switch (next) {
+    case "sprout": return "ファイル名を使い始めたね! 見習い昇格!";
+    case "buddy": return "構造化と完了条件が身についた! 実践者昇格!";
+    case "wizard": return "一発成功率が高い! 熟練者昇格!";
+    case "legend": return "安定したコンボ — 達人の境地!";
+    default: return `${prev} → ${next}`;
+  }
+}
+
+export function comboMilestoneMessage(comboCount: number): string | null {
+  if (comboCount === 3) return "やるじゃん! 3連続! いい感じ!";
+  if (comboCount === 5) return "すごい! 5連コンボ! この調子!";
+  if (comboCount === 10) return "10連コンボ!! 達人の域だよ!";
+  if (comboCount === 20) return "20連コンボ!!! 伝説級!!!";
+  return null;
+}
+
 export function renderMascotLevelUp(profile: MascotProfile, update: MascotEpisodeUpdate): string {
   const state = renderMascotState(profile);
   const title = update.stageChanged ? "🎉 Level Up" : "🌟 Bond Up";
-  const growthLabel = update.stageChanged ? `${update.previousStage} → ${update.nextStage}` : `${update.progressPercent}%まで成長`;
+  const growthLabel = update.stageChanged
+    ? stageUpMessage(update.previousStage, update.nextStage)
+    : `${update.progressPercent}%まで成長`;
+  const comboInfo = profile.comboCount >= 3 ? ` | ${profile.comboCount}x Combo` : "";
   return formatPanel({
     title,
     tone: update.stageChanged ? "magic" : "success",
     lines: [
       `${state.avatar} ${profile.nickname} が育ったよ`,
-      `${growthLabel} | +${update.gainedExp} EXP | total ${update.totalBondExp}`,
-      `気分: ${moodLabel(update.mood)} | Bond ${update.progressPercent}%`,
+      `${growthLabel}`,
+      `+${update.gainedExp} EXP | total ${update.totalBondExp} | Bond ${update.progressPercent}%${comboInfo}`,
     ],
   });
 }

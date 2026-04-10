@@ -71,6 +71,8 @@ export function formatRunSummary(input: {
         lastSeenAt: null,
         favoriteHintStyle: "none",
         lastMessages: [],
+        comboCount: 0,
+        bestCombo: 0,
       };
       lines.push(renderMascotLevelUp(pseudoProfile, input.mascot));
     }

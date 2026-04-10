@@ -1,4 +1,5 @@
 import {
+  ActionableAdvice,
   CounterfactualProfileKind,
   EpisodeComplexity,
   EpisodeEvent,
@@ -16,6 +17,7 @@ import {
 } from "./types";
 import { buildStopAndReframeDecision, findBestStopTurn, summarizeFrictionEvents } from "./capture/frictionCore";
 import { createCounterfactualPromptProfile } from "./promptProfile";
+import { detectSignals, generateTopAdvice, type SignalDetectionInput } from "./signalDetector";
 
 export const SCORE_WEIGHTS = {
   filesRead: 1.2,
@@ -446,16 +448,12 @@ export function renderAdviceMessages(input: {
   recentMessageKeys: string[];
   minConfidenceForPercent: number;
   maxLines: number;
+  recentStructureScores?: number[];
+  adviceConfig?: import("./types").AdviceConfig;
 }): RenderedAdviceMessage[] {
   if (input.decision.mode !== "active") return [];
 
   const messages: RenderedAdviceMessage[] = [];
-  const bestNudge = [...input.nudges].sort((left, right) => {
-    if (right.predictedSavingRate !== left.predictedSavingRate) {
-      return right.predictedSavingRate - left.predictedSavingRate;
-    }
-    return right.confidence - left.confidence;
-  })[0];
 
   const pushIfFresh = (message: RenderedAdviceMessage): void => {
     if (messages.length >= input.maxLines) return;
@@ -464,108 +462,103 @@ export function renderAdviceMessages(input: {
     messages.push(message);
   };
 
-  if (input.stopAndReframe.stopAndReframeSignal) {
+  // v3.0: Signal-based advice with before/after examples
+  const adviceConfig = input.adviceConfig ?? {
+    vaguePromptThreshold: 30,
+    sameFileRevisitThreshold: 3,
+    scopeCreepFileThreshold: 5,
+    scopeCreepEntropyThreshold: 0.85,
+    showBeforeAfterExamples: true,
+  };
+
+  const signalInput: SignalDetectionInput = {
+    promptProfile: input.promptProfile,
+    complexity: input.complexity,
+    loopSignals: input.loopSignals,
+    friction: input.friction,
+    firstPassGreen: input.firstPassGreen,
+    retryCount: input.nudges.length > 0 ? Math.round(input.nudges[0].currentCost) : 0,
+    turnIndex: 0,
+    recentStructureScores: input.recentStructureScores ?? [],
+    config: adviceConfig,
+  };
+
+  const signals = detectSignals(signalInput);
+  const topAdvice = generateTopAdvice(signals);
+
+  // Use signal-based advice as primary message source
+  if (topAdvice) {
+    const beforeAfterSuffix =
+      adviceConfig.showBeforeAfterExamples && topAdvice.beforeExample && topAdvice.afterExample
+        ? ` / 例: "${topAdvice.beforeExample}" → "${topAdvice.afterExample}"`
+        : "";
+    pushIfFresh({
+      key: `signal-${topAdvice.signal.kind}`,
+      category: topAdvice.category,
+      severity: topAdvice.signal.severity,
+      tone: topAdvice.category === "praise" ? "encouraging" : topAdvice.signal.severity === "high" ? "corrective" : "concise",
+      surface: "end_of_turn",
+      text: `${topAdvice.headline} / ${topAdvice.detail}${beforeAfterSuffix}`,
+      lineBudget: topAdvice.signal.severity === "high" ? 2 : 1,
+    });
+  }
+
+  // Fall back to friction-based stop-and-reframe if no signal matched
+  if (messages.length === 0 && input.stopAndReframe.stopAndReframeSignal) {
     const stopLead =
       input.stopAndReframe.category === "approval_storm"
-        ? "いま、承認がどどっと続いてるよ。ここで整えるとかなり得かも。"
+        ? "承認が連続しています。allowlistか指示を1つにまとめると楽になります。"
         : input.stopAndReframe.category === "error_spiral"
-          ? "あわわ、失敗が続いてるよ。いまは直すより整理のターンかも。"
+          ? "エラーが連続しています。同じ方法を繰り返すより、問題を分解して切り直しましょう。"
           : input.stopAndReframe.category === "retry_loop"
-            ? "くるくる再試行モードかも。ここで切り直すとかなり楽になりそう。"
-            : "ここで一回きゅっと絞ると、次の往復が軽くなりそうだよ。";
+            ? "リトライが続いています。「現状 / 期待 / NG条件」で切り直すと抜けやすくなります。"
+            : "ここで整理すると、次の往復が軽くなります。";
     pushIfFresh({
       key: `friction-${input.stopAndReframe.category}`,
       category: "recovery",
       severity: input.friction.frictionScore >= 2 ? "high" : "medium",
       tone: "corrective",
       surface: "end_of_turn",
-      text: `${stopLead} / 次は ${input.stopAndReframe.suggestedReframe} / ${input.stopAndReframe.avoidableCostLabel}`,
+      text: `${stopLead} / ${input.stopAndReframe.suggestedReframe} / ${input.stopAndReframe.avoidableCostLabel}`,
       lineBudget: input.friction.frictionScore >= 2 ? 2 : 1,
     });
   }
 
-  const evidenceText = (nudge: PredictiveNudge): string => {
-    const evidenceLabel =
-      nudge.supportSampleSize >= 10
-        ? `あなたの類似履歴 ${nudge.supportSampleSize} 件`
-        : nudge.supportSampleSize >= 4
-          ? `最近の近い履歴 ${nudge.supportSampleSize} 件`
-          : nudge.bucketLevel === "global"
-            ? "履歴がまだ少ないので暫定予測"
-            : "履歴が薄いので軽めの予測";
-    return `${evidenceLabel} | 信頼度 ${Math.round(nudge.confidence * 100)}%`;
-  };
+  // Fall back to predictive nudges with savings estimates
+  const bestNudge = [...input.nudges].sort((left, right) => {
+    if (right.predictedSavingRate !== left.predictedSavingRate) {
+      return right.predictedSavingRate - left.predictedSavingRate;
+    }
+    return right.confidence - left.confidence;
+  })[0];
 
-  const savingHeadline = (nudge: PredictiveNudge): string => {
-    const percent = Math.max(0, Math.round(nudge.predictedSavingRate * 100));
-    if (percent >= 30) return `次の一手、${percent}% 近く浮くかも`;
-    if (percent >= 15) return `次の一手で ${percent}% 前後、軽くできそう`;
-    return "次の一手でムダ往復をけっこう減らせそう";
-  };
-
-  if (input.loopSignals.editLoop) {
-    pushIfFresh({
-      key: "recovery-edit-loop",
-      category: "recovery",
-      severity: "high",
-      tone: "corrective",
-      surface: "end_of_turn",
-      text: "ここ、同じ修正点をぐるぐるし始めてるよ。現状 / 期待 / NG 条件 に分けると抜けやすいかも。",
-      lineBudget: 1,
-    });
-  }
-
-  if (input.loopSignals.searchLoop) {
-    pushIfFresh({
-      key: "exploration-loop",
-      category: "exploration_focus",
-      severity: "high",
-      tone: "corrective",
-      surface: "end_of_turn",
-      text: "いま少し広がり気味かも。次は見るファイルを 1 つに絞ると、かなり収束しやすいよ。",
-      lineBudget: 1,
-    });
-  }
-
-  if (bestNudge && bestNudge.predictedSavingRate > 0) {
+  if (messages.length === 0 && bestNudge && bestNudge.predictedSavingRate > 0) {
     const includePercent = bestNudge.confidence >= input.minConfidenceForPercent;
-    const actionByCategory: Record<PredictiveNudge["category"], string> = {
-      specificity: pickVariant(input.promptProfile.promptHash, [
-        "次は 関数名 か 対象ファイル名 を 1 個だけ足す",
-        "次は どこを直すか を 1 行だけ具体化する",
-        "次は 対象シンボル を 1 つだけ名指しする",
-      ]),
-      structure: pickVariant(input.promptProfile.promptHash, [
-        "次は 箇条書き + 完了条件 を 2 行だけ足す",
-        "次は やること と 終了条件 を分けて渡す",
-        "次は 制約 と ゴール を別行で置く",
-      ]),
-      verification: pickVariant(input.promptProfile.promptHash, [
-        "次は 成功条件 を 1 行だけ足す",
-        "次は 何が通れば完了か を先に書く",
-        "次は テスト意図 を短く添える",
-      ]),
-      scope_control: "次は変更対象をもう一段小さく切る",
-      recovery: "次は 現状 / 期待 / NG 条件 に分け直す",
-      exploration_focus: "次は最初に見るファイルを 1 つだけ指定する",
-      praise: "いまの進め方をそのまま続ける",
-    };
-    const leadText =
-      includePercent
-        ? `${savingHeadline(bestNudge)}`
-        : "次の往復をかなり短くしやすい流れだよ";
+    const percent = Math.max(0, Math.round(bestNudge.predictedSavingRate * 100));
+    const savingText = includePercent && percent >= 15
+      ? `次の一手で ${percent}% 前後、軽くできそう`
+      : "次の往復を短くしやすい流れだよ";
+
+    const evidenceLabel =
+      bestNudge.supportSampleSize >= 10
+        ? `あなたの類似履歴 ${bestNudge.supportSampleSize} 件`
+        : bestNudge.supportSampleSize >= 4
+          ? `最近の近い履歴 ${bestNudge.supportSampleSize} 件`
+          : "暫定予測";
+
     pushIfFresh({
       key: `nudge-${bestNudge.category}`,
       category: bestNudge.category,
       severity: bestNudge.predictedSavingRate >= 0.25 ? "medium" : "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      text: `${leadText} / 次は ${actionByCategory[bestNudge.category]} / ${evidenceText(bestNudge)}`,
+      text: `${savingText} / ${bestNudge.explanation} / ${evidenceLabel}`,
       lineBudget: 1,
       predictedSavingRate: bestNudge.predictedSavingRate,
     });
   }
 
+  // Praise for first-pass-green when nothing else triggered
   if (messages.length === 0 && input.firstPassGreen) {
     const praiseKey =
       input.promptProfile.structureScore >= 4
@@ -576,20 +569,20 @@ export function renderAdviceMessages(input: {
     const praiseText =
       praiseKey === "praise-structured"
         ? pickVariant(input.promptProfile.promptHash, [
-            "えへへ、その頼み方かなりえらい。するっと通りやすい形だよ。",
+            "構造化された指示が一発で通った! 箇条書き+完了条件がうまく機能してる。",
             "その切り方、かなりEXPおいしいやつ。ムダ往復をちゃんと抑えられてる。",
-            "今回の頼み方、かなり当たりだよ。きれいに刺さってる。",
+            "今回の頼み方、きれいに刺さってる。この形をテンプレにしよう!",
           ])
         : praiseKey === "praise-converged"
           ? pickVariant(input.promptProfile.promptHash, [
-              "探索の寄せ方がじょうず。いい感じにきゅっと収束できてるよ。",
-              "見る場所の絞り方がきれい。かなりロス少なめで進められてる。",
-              "散らずに詰められてるね。この流れ、かなり気持ちいいやつ。",
+              "探索の寄せ方がじょうず。対象を絞って効率的に収束できてる。",
+              "見る場所の絞り方がきれい。ロス少なめで進められてる。",
+              "散らずに詰められてるね。この流れ、かなり効率的。",
             ])
           : pickVariant(input.promptProfile.promptHash, [
-              "ナイス。今回はかなり通りがいいよ。ムダ往復も少なめ。",
-              "今回の依頼、かなり気持ちよくハマってる。",
-              "いい流れいい流れ。そのまま前へ進めそう。",
+              "一発で通った! ムダ往復も少なめ。いいプロンプト。",
+              "今回の依頼、きれいにハマってる。この調子!",
+              "いい流れ! そのまま前へ進めそう。",
             ]);
     pushIfFresh({
       key: praiseKey,
@@ -597,7 +590,7 @@ export function renderAdviceMessages(input: {
       severity: "low",
       tone: "encouraging",
       surface: "end_of_turn",
-      text: `${praiseText} / うまく刺さると +50 EXP ルート / 探索モード ${input.complexity.explorationMode}`,
+      text: `${praiseText} / 探索モード: ${input.complexity.explorationMode}`,
       lineBudget: 1,
     });
   }
