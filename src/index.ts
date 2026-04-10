@@ -164,7 +164,6 @@ program
     console.log(`codex: ${result.originalCommandMap.codex ?? "not found"}`);
     console.log(`claude: ${result.originalCommandMap.claude ?? "not found"}`);
     console.log(`Open a new terminal session to start using codex/claude through Evo automatically.`);
-    console.log(`Zellij auto-start is enabled for cmd/Miniconda and PowerShell sessions. Windows Terminal does not need separate setup.`);
   });
 
 program
@@ -246,7 +245,6 @@ shell
     const cwd = path.resolve(String(options.cwd));
     const status = getShellStatus(cwd);
     console.log(`enabled=${status.enabled ? "yes" : "no"}`);
-    console.log(`zellij_autostart=${status.zellijAutoStart ? "yes" : "no"}`);
     console.log(`current_session_disabled=${status.currentSessionDisabled ? "yes" : "no"}`);
     console.log(`bin=${status.binDir}`);
     console.log(`profile=${status.profilePath}`);

@@ -16,7 +16,6 @@ const DEFAULT_CONFIG: EvoConfig = {
     binDir: "",
     originalCommandMap: {},
     profilePath: getDefaultPowerShellProfilePath(),
-    zellijAutoStart: true,
     cmdAutoRunScriptPath: "",
     originalCmdAutoRun: null,
   },

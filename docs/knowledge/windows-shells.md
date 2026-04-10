@@ -22,4 +22,3 @@ Windows では、同じ `claude` / `codex` でも、どの shell から起動す
 - `bin/claude.cmd`
 - `bin/claude.ps1`
 - `bin/claude`
-

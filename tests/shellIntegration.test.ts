@@ -42,6 +42,8 @@ describe("shell integration", () => {
     expect(fs.existsSync(path.join(cwd, "bin", "evo-cmd-autorun.cmd"))).toBe(true);
     expect(fs.readFileSync(path.join(cwd, "bin", "claude.cmd"), "utf8")).toContain("title claude [Evo ON]");
     expect(fs.readFileSync(profilePath, "utf8")).toContain("evo shell integration");
+    expect(fs.readFileSync(profilePath, "utf8")).not.toContain("zellij");
+    expect(fs.readFileSync(path.join(cwd, "bin", "evo-cmd-autorun.cmd"), "utf8")).not.toContain("zellij");
     expect(result.profilePath).toBe(profilePath);
     expect(status.enabled).toBe(true);
   });

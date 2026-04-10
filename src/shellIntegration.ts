@@ -36,10 +36,6 @@ function normalize(p: string): string {
   return path.resolve(p).toLowerCase();
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function runPowerShell(command: string): string {
   const result = spawnSync(
     "powershell.exe",
@@ -293,18 +289,6 @@ function buildCmdAutoRunScript(cwd: string): string {
     `set "EVO_CONFIG=${configPath}"`,
     `set "EVO_BIN=${binDir}"`,
     "echo ;%PATH%; | findstr /I /C:\";%EVO_BIN%;\" >nul || set \"PATH=%EVO_BIN%;%PATH%\"",
-    "if defined ZELLIJ goto :eof",
-    "if defined EVO_ZELLIJ_BOOTSTRAPPED goto :eof",
-    "echo %CMDCMDLINE% | findstr /I /C:\" /c \" >nul && goto :eof",
-    "set \"EVO_ZELLIJ_ENABLED=1\"",
-    "if exist \"%EVO_CONFIG%\" (",
-    "  for /f \"usebackq delims=\" %%A in (`powershell -NoProfile -Command \"$cfg=Get-Content -Raw '%EVO_CONFIG%' | ConvertFrom-Json; if(($cfg.shellIntegration.enabled) -and ($cfg.shellIntegration.zellijAutoStart)){'1'}else{'0'}\"`) do set \"EVO_ZELLIJ_ENABLED=%%A\"",
-    ")",
-    "if not \"%EVO_ZELLIJ_ENABLED%\"==\"1\" goto :eof",
-    "where zellij >nul 2>nul || goto :eof",
-    "set \"EVO_ZELLIJ_BOOTSTRAPPED=1\"",
-    "if defined EVO_ZELLIJ_AUTOSTART_LOG >> \"%EVO_ZELLIJ_AUTOSTART_LOG%\" echo cmd^|%DATE% %TIME%^|%CD%",
-    "zellij",
     "",
   ].join("\r\n");
 }
@@ -461,28 +445,6 @@ export function buildPowerShellProfileBlock(cwd: string): string {
     "    $env:Path = \"$evoBin;$env:Path\"",
     "  }",
     "}",
-    "$evoZellijEnabled = $evoEnabled",
-    "if (Test-Path $evoConfigPath) {",
-    "  try {",
-    "    $evoConfig = Get-Content -Raw $evoConfigPath | ConvertFrom-Json",
-    "    if ($null -ne $evoConfig.shellIntegration.zellijAutoStart) {",
-    "      $evoZellijEnabled = $evoEnabled -and [bool]$evoConfig.shellIntegration.zellijAutoStart",
-    "    }",
-    "  } catch {",
-    "    $evoZellijEnabled = $evoEnabled",
-    "  }",
-    "}",
-    "if ($evoZellijEnabled -and -not $env:ZELLIJ -and -not $env:EVO_ZELLIJ_BOOTSTRAPPED) {",
-    "  $commandLine = [Environment]::CommandLine",
-    "  if ($commandLine -notmatch '(?i)\\s-(command|c)\\b') {",
-    "    $zellij = Get-Command zellij -ErrorAction SilentlyContinue",
-    "    if ($zellij) {",
-    "      $env:EVO_ZELLIJ_BOOTSTRAPPED = '1'",
-    "      if ($env:EVO_ZELLIJ_AUTOSTART_LOG) { Add-Content -Path $env:EVO_ZELLIJ_AUTOSTART_LOG -Value (\"powershell|\" + (Get-Date -Format o) + \"|\" + (Get-Location)) }",
-    "      & $zellij.Source",
-    "    }",
-    "  }",
-    "}",
     PROFILE_END,
     "",
   ].join("\r\n");
@@ -587,7 +549,6 @@ export function setShellEnabled(cwd: string, enabled: boolean): void {
 
 export function getShellStatus(cwd: string): {
   enabled: boolean;
-  zellijAutoStart: boolean;
   binDir: string;
   profilePath: string;
   currentSessionDisabled: boolean;
@@ -596,7 +557,6 @@ export function getShellStatus(cwd: string): {
   const config = ensureEvoConfig(cwd);
   return {
     enabled: config.shellIntegration.enabled,
-    zellijAutoStart: config.shellIntegration.zellijAutoStart,
     binDir: config.shellIntegration.binDir,
     profilePath: config.shellIntegration.profilePath,
     currentSessionDisabled: process.env.EVO_PROXY_DISABLED === "1",
