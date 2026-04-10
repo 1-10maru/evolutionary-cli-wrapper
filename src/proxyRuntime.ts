@@ -554,6 +554,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     writeLiveState();
   }
 
+  // Graceful shutdown: ensure live-state cleanup on SIGINT/SIGTERM
+  const onProcessExit = (): void => {
+    teardownLiveTracking();
+    process.exit(0);
+  };
+  process.on("SIGINT", onProcessExit);
+  process.on("SIGTERM", onProcessExit);
+
   const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
   const stdinListener = (chunk: Buffer | string): void => {
@@ -720,6 +728,8 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     child.on("close", (code) => resolve(code ?? 1));
   });
 
+  process.off("SIGINT", onProcessExit);
+  process.off("SIGTERM", onProcessExit);
   teardownLiveTracking();
   if (idleTimer) clearTimeout(idleTimer);
   if (startupNoticeTimer) clearTimeout(startupNoticeTimer);

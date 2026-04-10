@@ -15,6 +15,7 @@ const PROFILE_START = "# >>> evo shell integration >>>";
 const PROFILE_END = "# <<< evo shell integration <<<";
 const CMD_AUTORUN_REG_PATH = "HKCU\\Software\\Microsoft\\Command Processor";
 const CMD_AUTORUN_VALUE = "AutoRun";
+const USER_ENV_REG_PATH = "HKCU\\Environment";
 let testCmdAutoRunValue: string | null = null;
 
 function escapePowerShellSingleQuotes(value: string): string {
@@ -48,6 +49,50 @@ function runPowerShell(command: string): string {
     throw new Error(String(result.stderr ?? result.stdout ?? "PowerShell command failed").trim());
   }
   return String(result.stdout ?? "").trim();
+}
+
+function addToUserPath(binDir: string): void {
+  if (process.env.EVO_TEST_MODE === "1" || process.platform !== "win32") return;
+  try {
+    const currentPath = runPowerShell(
+      "[System.Environment]::GetEnvironmentVariable('Path','User')",
+    );
+    const normalBin = normalize(binDir);
+    const already = currentPath
+      .split(";")
+      .some((seg) => seg.trim() && normalize(seg) === normalBin);
+    if (already) return;
+
+    const newPath = currentPath ? `${binDir};${currentPath}` : binDir;
+    const escaped = escapePowerShellSingleQuotes(newPath);
+    runPowerShell(
+      `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
+    );
+  } catch {
+    /* best-effort — user can add manually */
+  }
+}
+
+function removeFromUserPath(binDir: string): void {
+  if (process.env.EVO_TEST_MODE === "1" || process.platform !== "win32") return;
+  try {
+    const currentPath = runPowerShell(
+      "[System.Environment]::GetEnvironmentVariable('Path','User')",
+    );
+    const normalBin = normalize(binDir);
+    const filtered = currentPath
+      .split(";")
+      .filter((seg) => seg.trim() && normalize(seg) !== normalBin)
+      .join(";");
+    if (filtered === currentPath) return;
+
+    const escaped = escapePowerShellSingleQuotes(filtered);
+    runPowerShell(
+      `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
+    );
+  } catch {
+    /* best-effort */
+  }
 }
 
 function getShellHome(cwd: string): string {
@@ -295,53 +340,21 @@ function buildCmdAutoRunScript(cwd: string): string {
 
 function installCommandWrappers(cwd: string): Partial<Record<SupportedCli, string>> {
   const originalCommandMap: Partial<Record<SupportedCli, string>> = {};
+  if (process.env.EVO_TEST_MODE === "1") return originalCommandMap;
+  // Record original command locations without overwriting npm global files.
+  // Evo bin takes priority via user PATH (addToUserPath) instead.
   for (const cli of ["codex", "claude"] as const) {
     const resolved = resolveOriginalCommand(cwd, cli);
-    const candidateBases = new Set<string>();
-    if (resolved) candidateBases.add(normalizeResolvedWrapperBase(resolved));
-    const appDataBase = path.join(process.env.APPDATA ?? "", "npm", cli);
-    if (process.env.APPDATA) candidateBases.add(appDataBase);
-
-    for (const basePath of candidateBases) {
-      const targets = getWrapperTargets(basePath);
-      for (const target of targets) {
-        if (fs.existsSync(target.path) && !fs.existsSync(target.backupPath)) {
-          fs.copyFileSync(target.path, target.backupPath);
-        }
-        const content = buildWrapperContent(target.kind, cli, cwd);
-        fs.writeFileSync(target.path, content);
-      }
-    }
-
-    const preferredBackup = `${appDataBase}.evo-original.cmd`;
-    if (fs.existsSync(preferredBackup)) {
-      originalCommandMap[cli] = preferredBackup;
-    } else if (resolved) {
-      const resolvedBase = normalizeResolvedWrapperBase(resolved);
-      const backupCmd = `${resolvedBase}.evo-original.cmd`;
-      originalCommandMap[cli] = fs.existsSync(backupCmd) ? backupCmd : resolved;
+    if (resolved) {
+      originalCommandMap[cli] = resolved;
     }
   }
   return originalCommandMap;
 }
 
-function restoreCommandWrappers(cwd: string): void {
-  const config = ensureEvoConfig(cwd);
-  for (const cli of ["codex", "claude"] as const) {
-    const knownBackup = config.shellIntegration.originalCommandMap[cli];
-    const backupCmdBase = knownBackup
-      ? knownBackup.replace(/\.evo-original\.cmd$/i, "")
-      : path.join(process.env.APPDATA ?? "", "npm", cli);
-    const basePath =
-      backupCmdBase.endsWith(".cmd") || backupCmdBase.endsWith(".ps1")
-        ? backupCmdBase.replace(/\.(cmd|ps1)$/i, "")
-        : backupCmdBase;
-    for (const target of getWrapperTargets(basePath)) {
-      if (fs.existsSync(target.backupPath)) {
-        fs.copyFileSync(target.backupPath, target.path);
-      }
-    }
-  }
+function restoreCommandWrappers(_cwd: string): void {
+  // No-op: npm global files are no longer overwritten (PATH priority used instead).
+  // Kept for backward compat — undoShellIntegration still calls this.
 }
 
 export function createProxyShims(cwd: string): string[] {
@@ -494,6 +507,7 @@ export function setupShellIntegration(cwd: string): {
     fs.writeFileSync(targetProfilePath, replaceManagedBlock(existing, buildPowerShellProfileBlock(cwd)));
   }
   setCmdAutoRunValue(buildCmdAutoRunChain(cwd, originalCmdAutoRun));
+  addToUserPath(nextConfig.shellIntegration.binDir);
 
   return {
     profilePath,
@@ -532,6 +546,7 @@ export function undoShellIntegration(cwd: string): { profilePath: string; remove
     },
   });
   setCmdAutoRunValue(config.shellIntegration.originalCmdAutoRun);
+  removeFromUserPath(getBinDir(cwd));
 
   return { profilePath, removed };
 }
