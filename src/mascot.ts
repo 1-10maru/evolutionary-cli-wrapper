@@ -279,20 +279,20 @@ function currentTurnMood(profile: MascotProfile, summary: TurnSummary): MascotMo
 }
 
 function categoryHint(message: RenderedAdviceMessage | undefined): string {
-  if (!message) return "いまは静かに見守り中";
+  if (!message) return "指示を待ってるよ! ファイル名と「何をしたいか」を教えてね";
   switch (message.category) {
     case "specificity":
-      return "関数名か対象ファイルを1こ足すと、ぐっと刺さりやすいよ";
+      return "ファイル名や関数名を1つ書くだけで、AIの無駄な探索が半分に減るよ! 例: 「直して」→「src/api.ts の getUser を修正して」";
     case "structure":
-      return "やること / 完了条件 の2行だけで、かなり通りやすくなるよ";
+      return "箇条書きで「1.やること 2.完了条件」を書くと、AIが見落としにくくなるよ!";
     case "verification":
-      return "成功条件を1行足すだけで、やり直しを減らしやすいよ";
+      return "「○○が通ればOK」を1行足すだけで、AIが余計なことをしなくなるよ! 例: 「テストが全部通ること」";
     case "exploration_focus":
-      return "次は見るファイルを1つに絞ると、迷いにくいよ";
+      return "変更対象のファイルを1つに絞って指示すると、AIが迷わず集中できるよ! 「まずこのファイルだけ」って言ってみて";
     case "recovery":
-      return "現状 / 期待 / NG 条件 に分けると、ここ抜けやすいよ";
+      return "うまくいかない時は「現状: ○○が起きる / 期待: ○○になるべき / NG: ○○は変えない」で整理してみて!";
     case "praise":
-      return "えへへ、いまの頼み方かなりハマってる";
+      return "いまの指示の出し方、すごく上手! 具体的で構造化されてるから、AIがスムーズに動けてるよ!";
     default:
       return message.text;
   }
@@ -303,13 +303,6 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
   const lead = summary.adviceMessages[0];
   const mood = currentTurnMood(profile, summary);
   const saving = Math.max(0, Math.round(Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0) * 100));
-  const savingText =
-    saving > 0
-      ? `${saving}%浮きそう`
-      : summary.loopSignals.editLoop || summary.loopSignals.searchLoop
-        ? "迷子回避チャンス"
-        : "こつこつ育成中";
-  const expText = `Bond ${state.progressPercent}%`;
   const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
 
   // Mood-toned prefix for the advice headline
@@ -319,11 +312,24 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
     lead?.category === "recovery" ? "danger" : lead?.category === "praise" ? "success" : "accent",
   );
 
-  const comboText = profile.comboCount >= 3 ? colorize(` ${profile.comboCount}x`, "accent", true) : "";
-  const savingLabel = colorize(savingText, saving >= 25 ? "accent" : saving > 0 ? "info" : "warning", true);
-  const expLabel = dim(`${expText}`);
+  // Human-readable saving estimate
+  const savingText =
+    saving >= 25
+      ? `指示を改善すると ${saving}% くらいトークン節約できそう!`
+      : saving > 0
+        ? `あと少し具体的にすると効率アップできるよ`
+        : summary.loopSignals.editLoop || summary.loopSignals.searchLoop
+          ? "同じ修正を繰り返してるかも — 指示を整理してみよう"
+          : "順調に進んでるよ!";
+  const savingLabel = colorize(savingText, saving >= 25 ? "accent" : saving > 0 ? "info" : summary.loopSignals.editLoop ? "warning" : "success");
 
-  return `${prefix} ${action} | ${savingLabel} |${comboText} ${expLabel}`;
+  // Combo in human-readable form
+  const comboText = profile.comboCount >= 3 ? colorize(` | ${profile.comboCount}連続いい感じ!`, "accent", true) : "";
+
+  // Bond as 育成度
+  const expLabel = dim(`育成度 ${state.progressPercent}%`);
+
+  return `${prefix} ${action} | ${savingLabel}${comboText} | ${expLabel}`;
 }
 
 export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "claude" | "generic", lightweightTracking: boolean): string {
@@ -332,16 +338,16 @@ export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "
   const stageLabel = stageSkillLabel(profile.stage);
   const action = colorize(
     cli === "claude"
-      ? "いっしょに見守るよ。返事がひと段落したら声かけるね"
+      ? "いっしょに見守るよ! 指示の出し方のコツを教えてあげるね"
       : cli === "codex"
-        ? "準備できてるよ。いいタイミングでそっと声かけるね"
-        : "準備できてるよ。流れを見ながらついていくね",
+        ? "準備できてるよ! 良い指示が出たら褒めるからね"
+        : "準備OK! 指示のコツを一緒に学んでいこう",
     "accent",
   );
-  const status = colorize(lightweightTracking ? "light tracking" : "tracking ready", lightweightTracking ? "warning" : "success", true);
-  const combo = profile.comboCount > 0 ? colorize(` ${profile.comboCount}x Combo`, "accent", true) : "";
-  const bond = dim(`${stageLabel} | Bond ${state.progressPercent}%`);
-  return `${prefix} ${action} | ${status} |${combo} ${bond}`;
+  const status = colorize(lightweightTracking ? "軽量モード" : "記録中", lightweightTracking ? "warning" : "success", true);
+  const combo = profile.comboCount > 0 ? colorize(` | 前回 ${profile.comboCount}連続いい指示!`, "accent", true) : "";
+  const bond = dim(`${stageLabel} | 育成度 ${state.progressPercent}%`);
+  return `${prefix} ${action} | ${status}${combo} | ${bond}`;
 }
 
 function stageSkillLabel(stage: MascotProfile["stage"]): string {
@@ -359,13 +365,12 @@ export function renderMascotSpecialEvent(profile: MascotProfile, input: {
   summary: TurnSummary;
 }): string {
   const state = renderMascotState(profile);
-  const mood = currentTurnMood(profile, input.summary);
   const title =
     input.message.category === "recovery"
-      ? "🛟 Evo Rescue"
+      ? "🛟 指示の見直しポイント"
       : input.message.category === "exploration_focus"
-        ? "🧭 Evo Focus"
-        : "⚡ Evo Chance";
+        ? "🧭 対象を絞ろう"
+        : "⚡ 改善チャンス!";
   const tone =
     input.message.category === "recovery"
       ? "danger"
@@ -378,9 +383,11 @@ export function renderMascotSpecialEvent(profile: MascotProfile, input: {
     title,
     tone,
     lines: [
-      `${state.avatar} ${profile.nickname} | ${moodLabel(mood)} | Level ${state.level}`,
+      `${state.avatar} ${profile.nickname} | ${stageSkillLabel(profile.stage)} | 育成度 ${state.progressPercent}%`,
       categoryHint(input.message),
-      saving > 0 ? `いまの節約見込み ${saving}% | Bond ${state.progressPercent}%` : `Bond ${state.progressPercent}% | 次の一手で流れを戻そうね`,
+      saving > 0
+        ? `指示を改善すると ${saving}% くらいトークン節約できそう!`
+        : "指示の書き方を少し変えるだけで、AIの動きが変わるよ!",
     ],
   });
 }
@@ -405,18 +412,18 @@ export function comboMilestoneMessage(comboCount: number): string | null {
 
 export function renderMascotLevelUp(profile: MascotProfile, update: MascotEpisodeUpdate): string {
   const state = renderMascotState(profile);
-  const title = update.stageChanged ? "🎉 Level Up" : "🌟 Bond Up";
+  const title = update.stageChanged ? "🎉 ランクアップ!" : "🌟 成長!";
   const growthLabel = update.stageChanged
     ? stageUpMessage(update.previousStage, update.nextStage)
-    : `${update.progressPercent}%まで成長`;
-  const comboInfo = profile.comboCount >= 3 ? ` | ${profile.comboCount}x Combo` : "";
+    : `育成度 ${update.progressPercent}% まで成長!`;
+  const comboInfo = profile.comboCount >= 3 ? ` | ${profile.comboCount}連続いい指示!` : "";
   return formatPanel({
     title,
     tone: update.stageChanged ? "magic" : "success",
     lines: [
-      `${state.avatar} ${profile.nickname} が育ったよ`,
+      `${state.avatar} ${profile.nickname} が育ったよ!`,
       `${growthLabel}`,
-      `+${update.gainedExp} EXP | total ${update.totalBondExp} | Bond ${update.progressPercent}%${comboInfo}`,
+      `+${update.gainedExp} 経験値 | 累計 ${update.totalBondExp} | 育成度 ${update.progressPercent}%${comboInfo}`,
     ],
   });
 }
