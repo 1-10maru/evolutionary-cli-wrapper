@@ -536,7 +536,30 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
               if (stat.mtimeMs > newestMtime) {
                 newestMtime = stat.mtimeMs;
                 newestJsonl = fullPath;
-                jsonlReadOffset = stat.size;
+                jsonlReadOffset = 0; // FIX: read new file from start, not EOF
+                // Session reset: clear stale live state
+                liveState.turns = 0;
+                liveState.toolCalls = 0;
+                liveState.lastTool = "";
+                liveState.lastFile = "";
+                liveState.promptScore = 0;
+                liveState.efficiencyScore = 0;
+                liveState.sessionGrade = "C";
+                liveState.signalKind = "";
+                liveState.advice = "";
+                liveState.adviceDetail = "";
+                liveState.beforeExample = "";
+                liveState.afterExample = "";
+                liveState.sessionStartMs = Date.now();
+                liveState.filePatchCounts.clear();
+                liveState.symbolTouchCounts.clear();
+                liveState.lastPromptLength = 0;
+                liveState.lastHasFileRefs = false;
+                liveState.lastHasSymbolRefs = false;
+                liveState.lastHasAcceptanceRef = false;
+                liveState.lastHasTestRef = false;
+                liveState.lastStructureScore = 0;
+                liveState.lastFirstPassGreen = true;
               }
             } catch { /* ignore */ }
           }
