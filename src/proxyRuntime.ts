@@ -302,6 +302,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     process.stderr.isTTY &&
     process.env.EVO_LIVE_TRACKING !== "0";
   const liveStateFile = path.join(cwd, ".evo", "live-state.json");
+  const homeLiveStateFile = path.join(os.homedir(), ".claude", ".evo-live.json");
 
   // Live session state tracked via JSONL monitoring
   const liveState = {
@@ -351,13 +352,16 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       beforeExample: liveState.beforeExample,
       afterExample: liveState.afterExample,
     };
-    try { fs.writeFileSync(liveStateFile, JSON.stringify(payload)); } catch { /* ignore */ }
+    const json = JSON.stringify(payload);
+    try { fs.writeFileSync(liveStateFile, json); } catch { /* ignore */ }
+    try { fs.writeFileSync(homeLiveStateFile, json); } catch { /* ignore */ }
   };
 
   const teardownLiveTracking = (): void => {
     if (jsonlPollTimer) { clearInterval(jsonlPollTimer); jsonlPollTimer = null; }
     if (jsonlWatcher) { jsonlWatcher.close(); jsonlWatcher = null; }
     try { fs.unlinkSync(liveStateFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(homeLiveStateFile); } catch { /* ignore */ }
   };
 
   // ── JSONL transcript watcher ──
