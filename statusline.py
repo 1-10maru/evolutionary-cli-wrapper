@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Evo v3.0 statusline — Always-on, self-tracking. Works with or without proxy."""
-import json, sys, os, time, hashlib
+import json, sys, os, time
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 data = json.load(sys.stdin)
@@ -45,7 +45,9 @@ if usage_str:
     parts.append(usage_str)
 parts.append(f'{CYAN}{cwd_display}{R}')
 
-# ── EvoPet v3.0: Always-on — proxy data if available, self-tracked fallback otherwise ──
+# ══════════════════════════════════════════════════════════════
+# EvoPet v3.0: Always-on — proxy data OR self-tracked fallback
+# ══════════════════════════════════════════════════════════════
 
 _EVO_ACCENT = '\033[38;2;180;130;255m'
 _EVO_INFO   = '\033[38;2;100;200;255m'
@@ -58,12 +60,69 @@ def _grade_color(g):
     return {'S': _EVO_ACCENT, 'A': _EVO_GREEN, 'B': _EVO_INFO, 'C': _EVO_WARN, 'D': _EVO_RED}.get(g, _EVO_INFO)
 
 def _grade_label(g):
-    return {'S': '\u2728S \u795e', 'A': '\u2b50A \u4e0a\u624b', 'B': '\u25cf B \u826f\u597d', 'C': '\u25cb C \u3082\u3046\u4e00\u606f', 'D': '\u25b3 D \u304c\u3093\u3070\u308d\u3046'}.get(g, g)
+    return {
+        'S': '\u2728S \u795e', 'A': '\u2b50A \u4e0a\u624b',
+        'B': '\u25cf B \u826f\u597d', 'C': '\u25cb C \u3082\u3046\u4e00\u606f',
+        'D': '\u25b3 D \u304c\u3093\u3070\u308d\u3046',
+    }.get(g, g)
 
-# ── Tips library (same as signalDetector.ts TIPS_LIBRARY) ──
+# ──────────────────────────────────────────────
+# Line 1: EvoPet ひとこと（ムード/コメント）
+#   ctx% + 呼び出し回数でローテーション
+# ──────────────────────────────────────────────
+_COMMENTS = {
+    'start': [
+        "\u6307\u793a\u3092\u5f85\u3063\u3066\u308b\u3088! \u30d5\u30a1\u30a4\u30eb\u540d\u3068\u300c\u4f55\u3092\u3057\u305f\u3044\u304b\u300d\u3092\u6559\u3048\u3066\u306d",
+        "\u65b0\u3057\u3044\u30bb\u30c3\u30b7\u30e7\u30f3! \u4eca\u65e5\u3082\u5177\u4f53\u7684\u306a\u6307\u793a\u3067\u52b9\u7387\u3088\u304f\u3044\u3053\u3046",
+        "\u6e96\u5099OK! \u300c\u3069\u306e\u30d5\u30a1\u30a4\u30eb\u306e\u4f55\u3092\u3069\u3046\u3057\u305f\u3044\u300d\u304c\u4f1d\u308f\u308b\u3068AI\u304c\u901f\u3044\u3088",
+        "\u3088\u3046\u3053\u305d! \u6700\u521d\u306e\u6307\u793a\u304c\u4e00\u756a\u5927\u4e8b\u3060\u3088\u3002\u5177\u4f53\u7684\u306b\u3044\u3053\u3046",
+        "\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb! \u300c\u4f55\u3092\u30fb\u3069\u3053\u3092\u30fb\u3069\u3046\u306a\u308c\u3070OK\u300d\u3092\u610f\u8b58\u3057\u3066\u307f\u3066",
+        "\u304a\u306f\u3088\u3046! \u30d5\u30a1\u30a4\u30eb\u540d\u30921\u3064\u66f8\u304f\u3060\u3051\u3067AI\u306e\u63a2\u7d22\u304c\u534a\u5206\u306b\u306a\u308b\u3088",
+        "\u30b9\u30bf\u30fc\u30c8! \u30a8\u30e9\u30fc\u304c\u3042\u308b\u306a\u3089\u30e1\u30c3\u30bb\u30fc\u30b8\u3054\u3068\u8cbc\u308b\u306e\u304c\u6700\u901f\u3060\u3088",
+        "\u3055\u3042\u59cb\u3081\u3088\u3046! \u7b87\u6761\u66f8\u304d\u3067\u6307\u793a\u3059\u308b\u3068AI\u304c\u898b\u843d\u3068\u3057\u306b\u304f\u3044\u3088",
+    ],
+    'early': [
+        "\u9806\u8abf\u306b\u30b9\u30bf\u30fc\u30c8\u3057\u3066\u308b\u306d!",
+        "\u3044\u3044\u611f\u3058! \u3053\u306e\u8abf\u5b50\u3067\u3044\u3053\u3046",
+        "\u4f5c\u696d\u304c\u4e57\u3063\u3066\u304d\u305f\u306d!",
+        "\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u306b\u4f59\u88d5\u304c\u3042\u308b\u3046\u3061\u306b\u3001\u96e3\u3057\u3044\u30bf\u30b9\u30af\u3092\u7247\u4ed8\u3051\u3061\u3083\u304a\u3046",
+        "\u307e\u3060\u307e\u3060\u5e8f\u76e4! \u4e00\u3064\u305a\u3064\u7740\u5b9f\u306b\u9032\u3081\u3088\u3046",
+        "\u8abf\u5b50\u826f\u3055\u305d\u3046! \u5b8c\u4e86\u6761\u4ef6\u3092\u66f8\u3044\u3066\u304a\u304f\u3068\u3084\u308a\u76f4\u3057\u304c\u6e1b\u308b\u3088",
+    ],
+    'working': [
+        "\u96c6\u4e2d\u3057\u3066\u308b\u306d\u3001\u3044\u3044\u30da\u30fc\u30b9!",
+        "\u4e2d\u76e4\u6226! \u30bf\u30b9\u30af\u304c\u5909\u308f\u3063\u305f\u3089 /clear \u3082\u624b\u3060\u3088",
+        "\u3088\u304f\u4f7f\u3063\u3066\u308b\u306d! \u5927\u304d\u3044\u30bf\u30b9\u30af\u306f\u5206\u5272\u3059\u308b\u3068\u7cbe\u5ea6\u304c\u4e0a\u304c\u308b\u3088",
+        "\u9806\u8abf\u306b\u9032\u3093\u3067\u308b\u3088! \u6b21\u306e\u6307\u793a\u3082\u5177\u4f53\u7684\u306b\u3044\u3053\u3046",
+        "\u534a\u5206\u304f\u3089\u3044\u4f7f\u3063\u305f\u306d\u3002\u30bf\u30b9\u30af\u5207\u308a\u66ff\u3048\u306a\u3089\u65b0\u30bb\u30c3\u30b7\u30e7\u30f3\u3082\u691c\u8a0e\u3057\u3066\u306d",
+        "\u3044\u3044\u6d41\u308c! git commit \u3057\u3066\u304b\u3089\u5927\u304d\u306a\u5909\u66f4\u3092\u983c\u3080\u3068\u5b89\u5fc3\u3060\u3088",
+        "\u4f5c\u696d\u4e2d... \u540c\u3058\u30a8\u30e9\u30fc\u304c\u7d9a\u304f\u306a\u3089\u30a2\u30d7\u30ed\u30fc\u30c1\u3092\u5909\u3048\u3066\u307f\u3066",
+        "\u4e2d\u76e4\u3060\u306d\u3002\u300c\u3055\u3063\u304d\u306e\u65b9\u6cd5\u3060\u3068\u30c0\u30e1\u3060\u3063\u305f\u300d\u3063\u3066\u4f1d\u3048\u308b\u3068AI\u304c\u5225\u30eb\u30fc\u30c8\u63a2\u3059\u3088",
+    ],
+    'busy': [
+        "ctx 60%\u8d85\u3048\u3002\u30bf\u30b9\u30af\u5207\u308a\u66ff\u3048\u306a\u3089 /clear \u3082\u624b\u3060\u3088",
+        "\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u305d\u308d\u305d\u308d\u6ce8\u610f\u3002\u5927\u304d\u306a\u30bf\u30b9\u30af\u306a\u3089 /compact \u3092\u691c\u8a0e",
+        "\u30e1\u30e2\u30ea\u98df\u3063\u3066\u304d\u305f! \u5225\u30bf\u30b9\u30af\u306a\u3089\u65b0\u30bb\u30c3\u30b7\u30e7\u30f3\u304c\u5409",
+        "\u5f8c\u534a\u6226\u3060\u306d\u3002\u91cd\u8981\u306a\u5909\u66f4\u306f\u65e9\u3081\u306b\u7247\u4ed8\u3051\u3088\u3046",
+        "\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u6d88\u8cbb\u304c\u5897\u3048\u3066\u304d\u305f\u3002\u5fdc\u7b54\u304c\u9045\u304f\u611f\u3058\u305f\u3089 /compact \u3060\u3088",
+        "\u3082\u3046\u5c11\u3057\u3067\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u4e0a\u9650\u3002\u7d42\u308f\u308b\u524d\u306b commit \u3057\u3066\u304a\u3053\u3046",
+    ],
+    'critical': [
+        "\u26a0\ufe0f ctx 80%\u8d85\u3048! /compact \u3067\u8efd\u304f\u3057\u3088\u3046",
+        "\u26a0\ufe0f \u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u5727\u8feb! \u5fdc\u7b54\u304c\u9045\u304f\u306a\u308b\u304b\u3082\u3002/compact \u63a8\u5968",
+        "\u26a0\ufe0f \u3082\u3046\u3059\u3050\u4e0a\u9650! \u5927\u4e8b\u306a\u4f5c\u696d\u306f\u65b0\u30bb\u30c3\u30b7\u30e7\u30f3\u3067\u3084\u308d\u3046",
+        "\u26a0\ufe0f \u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u6b8b\u308a\u308f\u305a\u304b\u3002\u4eca\u306e\u3046\u3061\u306b /compact \u304b /clear \u3092!",
+    ],
+}
+
+# ──────────────────────────────────────────────
+# Line 2+3: Tips（💡ヘッドライン + ❌→✅例）
+#   32 tips
+# ──────────────────────────────────────────────
 _TIPS = [
+    # ── プロンプトの書き方（基本） ──
     {
-        'headline': '\u300c\u4f55\u3092\u30fb\u3069\u3053\u3092\u30fb\u3069\u3046\u306a\u308c\u3070OK\u300d\u306e3\u70b9\u30bb\u30c3\u30c8\u3067\u6307\u793a\u306e\u7cbe\u5ea6\u304c\u30b0\u30f3\u3068\u4e0a\u304c\u308b\u3088!',
+        'headline': '\u300c\u4f55\u3092\u30fb\u3069\u3053\u3092\u30fb\u3069\u3046\u306a\u308c\u3070OK\u300d\u306e3\u70b9\u30bb\u30c3\u30c8\u3067\u4e00\u767a\u3067\u901a\u308b\u78ba\u7387\u304c\u8dc3\u306d\u4e0a\u304c\u308b!',
         'before': '\u30ed\u30b0\u30a4\u30f3\u753b\u9762\u3092\u76f4\u3057\u3066',
         'after': 'src/Login.tsx \u306e\u30d5\u30a9\u30fc\u30e0\u9001\u4fe1\u3067\u3001\u7a7a\u30d1\u30b9\u30ef\u30fc\u30c9\u3067\u3082submit\u3067\u304d\u308b\u30d0\u30b0\u3092\u4fee\u6b63',
     },
@@ -74,77 +133,168 @@ _TIPS = [
     },
     {
         'headline': '\u7b87\u6761\u66f8\u304d\u3067\u6307\u793a\u3059\u308b\u3068\u3001AI\u304c\u898b\u843d\u3068\u3057\u306b\u304f\u304f\u306a\u308b\u3088!',
-        'before': '\u30e6\u30fc\u30b6\u30fc\u767b\u9332\u306e\u6a5f\u80fd\u3092\u3064\u304f\u3063\u3066\u3001\u30e1\u30fc\u30eb\u78ba\u8a8d\u3082\u3057\u3066\u3001\u30d1\u30b9\u30ef\u30fc\u30c9\u306f8\u6587\u5b57\u4ee5\u4e0a\u306b\u3057\u3066',
-        'after': '\u30e6\u30fc\u30b6\u30fc\u767b\u9332\u6a5f\u80fd\u3092\u4f5c\u6210:\n- POST /register \u30a8\u30f3\u30c9\u30dd\u30a4\u30f3\u30c8\u8ffd\u52a0\n- \u30d1\u30b9\u30ef\u30fc\u30c9\u306f8\u6587\u5b57\u4ee5\u4e0a\n- \u30c6\u30b9\u30c8\u3082\u66f8\u304f',
+        'before': '\u30e6\u30fc\u30b6\u30fc\u767b\u9332\u3068\u30e1\u30fc\u30eb\u78ba\u8a8d\u3068\u30d1\u30b9\u30ef\u30fc\u30c9\u5236\u9650\u3092\u3064\u304f\u3063\u3066',
+        'after': '\u30e6\u30fc\u30b6\u30fc\u767b\u9332\u6a5f\u80fd:\n- POST /register\n- \u30d1\u30b9\u30ef\u30fc\u30c98\u6587\u5b57\u4ee5\u4e0a\n- \u30c6\u30b9\u30c8\u3082\u66f8\u304f',
     },
     {
-        'headline': '\u300c\u76f4\u3057\u3066\u300d\u3060\u3051\u3060\u3068\u3001AI\u306f\u4f55\u3092\u3069\u3046\u76f4\u3059\u304b\u63a8\u6e2c\u304b\u3089\u30b9\u30bf\u30fc\u30c8\u3057\u3061\u3083\u3046\u3088',
+        'headline': '\u300c\u76f4\u3057\u3066\u300d\u3060\u3051\u3060\u3068\u3001AI\u306f\u63a8\u6e2c\u304b\u3089\u30b9\u30bf\u30fc\u30c8\u3057\u3061\u3083\u3046\u3088',
         'before': '\u306a\u3093\u304b\u30a8\u30e9\u30fc\u51fa\u308b\u3001\u76f4\u3057\u3066',
         'after': 'npm run build \u3067 TypeError: Cannot read property \'name\' of undefined \u3063\u3066\u51fa\u308b',
     },
     {
-        'headline': '\u300c\u301c\u3057\u306a\u3044\u3067\u300d\u3063\u3066\u5236\u7d04\u3092\u4f1d\u3048\u308b\u306e\u3082\u5927\u4e8b!',
+        'headline': '\u300c\u301c\u3057\u306a\u3044\u3067\u300d\u3063\u3066\u5236\u7d04\u3092\u4f1d\u3048\u308b\u306e\u3082\u5927\u4e8b! AI\u306e\u4f59\u8a08\u306a\u304a\u305b\u3063\u304b\u3044\u3092\u9632\u3052\u308b',
         'before': '\u30ea\u30d5\u30a1\u30af\u30bf\u3057\u3066',
         'after': 'src/api.ts \u306e fetchUser \u3092\u30ea\u30d5\u30a1\u30af\u30bf\u3002\u4ed6\u306e\u30d5\u30a1\u30a4\u30eb\u306f\u5909\u66f4\u3057\u306a\u3044\u3053\u3068',
     },
     {
-        'headline': '\u77e5\u3063\u3066\u305f? /clear \u3067\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u3092\u30ea\u30bb\u30c3\u30c8\u3059\u308b\u3068AI\u306e\u5fdc\u7b54\u304c\u901f\u304f\u306a\u308b\u3088!',
-        'before': None, 'after': None,
-    },
-    {
-        'headline': 'CLAUDE.md \u306b\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u306e\u30eb\u30fc\u30eb\u3092\u66f8\u3044\u3066\u304a\u304f\u3068\u3001\u6bce\u56de\u8aac\u660e\u3057\u306a\u304f\u3066\u6e08\u3080\u3088!',
-        'before': None, 'after': None,
-    },
-    {
-        'headline': '\u5927\u304d\u306a\u30bf\u30b9\u30af\u306f\u5c0f\u3055\u304f\u5206\u5272! \u4e00\u5ea6\u306b\u5168\u90e8\u983c\u3080\u3068\u7cbe\u5ea6\u304c\u4e0b\u304c\u308b\u3088',
-        'before': 'EC\u30b5\u30a4\u30c8\u306e\u30d0\u30c3\u30af\u30a8\u30f3\u30c9\u3092\u5168\u90e8\u4f5c\u3063\u3066',
-        'after': '\u307e\u305a\u5546\u54c1\u4e00\u89a7\u306eGET /products API\u3060\u3051\u4f5c\u3063\u3066\u3002DB\u306fSQLite\u3067\u3044\u3044',
-    },
-    {
-        'headline': '\u30a8\u30e9\u30fc\u304c\u51fa\u305f\u3089\u3001\u30a8\u30e9\u30fc\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u305d\u306e\u307e\u307e\u8cbc\u308b\u306e\u304c\u6700\u901f\u306e\u89e3\u6c7a\u6cd5!',
-        'before': '\u52d5\u304b\u306a\u3044\u3093\u3060\u3051\u3069',
-        'after': '\u3053\u306e\u30a8\u30e9\u30fc\u304c\u51fa\u308b:\nTypeError: Cannot read properties of undefined',
-    },
-    {
-        'headline': '\u5b8c\u4e86\u6761\u4ef6\u30921\u3064\u3060\u3051\u66f8\u304f\u3060\u3051\u3067\u3001\u3084\u308a\u76f4\u3057\u7387\u304c\u5927\u5e45\u306b\u4e0b\u304c\u308b\u3088!',
+        'headline': '\u5b8c\u4e86\u6761\u4ef6\u30921\u884c\u8db3\u3059\u3060\u3051\u3067\u3001\u3084\u308a\u76f4\u3057\u7387\u304c\u6fc0\u6e1b\u3059\u308b\u3088!',
         'before': '\u691c\u7d22\u6a5f\u80fd\u3092\u8ffd\u52a0\u3057\u3066',
-        'after': '\u691c\u7d22\u6a5f\u80fd\u3092\u8ffd\u52a0\u3002\u5b8c\u4e86\u6761\u4ef6: \u4e00\u81f4\u3059\u308b\u7d50\u679c\u3060\u3051\u304c\u8868\u793a\u3055\u308c\u308b',
+        'after': '\u691c\u7d22\u6a5f\u80fd\u3092\u8ffd\u52a0\u3002\u5b8c\u4e86\u6761\u4ef6: \u4e00\u81f4\u3059\u308b\u7d50\u679c\u3060\u3051\u304c\u8868\u793a\u3055\u308c\u308b\u3053\u3068',
+    },
+    # ── デバッグのコツ ──
+    {
+        'headline': '\u30a8\u30e9\u30fc\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u305d\u306e\u307e\u307e\u8cbc\u308b\u306e\u304c\u6700\u901f\u306e\u89e3\u6c7a\u6cd5! AI\u304c\u539f\u56e0\u306b\u76f4\u884c\u3067\u304d\u308b',
+        'before': '\u52d5\u304b\u306a\u3044\u3093\u3060\u3051\u3069',
+        'after': '\u3053\u306e\u30a8\u30e9\u30fc\u304c\u51fa\u308b:\nTypeError: Cannot read properties of undefined (reading \'map\')\n  at UserList.tsx:15',
     },
     {
-        'headline': '\u540c\u3058\u6307\u793a\u3092\u7e70\u308a\u8fd4\u3057\u3066\u3082\u3001\u540c\u3058\u7d50\u679c\u306b\u306a\u308b\u3060\u3051\u3060\u3088!',
-        'before': '\uff083\u56de\u76ee\uff09\u76f4\u3057\u3066',
-        'after': '\u3055\u3063\u304dnull\u30c1\u30a7\u30c3\u30af\u3092\u8a66\u3057\u305f\u3051\u3069\u30c0\u30e1\u3060\u3063\u305f\u3002\u578b\u81ea\u4f53\u3092Optional\u306b\u3059\u308b\u65b9\u5411\u3067\u4fee\u6b63\u3057\u3066',
+        'headline': '\u300c\u3069\u3053\u307e\u3067\u52d5\u3044\u3066\u3069\u3053\u3067\u6b62\u307e\u308b\u300d\u3092\u4f1d\u3048\u308b\u3068\u3001\u30c7\u30d0\u30c3\u30b0\u304c\u7206\u901f\u306b\u306a\u308b\u3088',
+        'before': '\u30dc\u30bf\u30f3\u304c\u52d5\u304b\u306a\u3044',
+        'after': '\u30dc\u30bf\u30f3\u30af\u30ea\u30c3\u30af\u3067 handleSubmit \u306f\u547c\u3070\u308c\u308b\u304c\u3001fetch \u306e\u30ec\u30b9\u30dd\u30f3\u30b9\u304c 403 \u306b\u306a\u308b',
     },
     {
-        'headline': '\u30c6\u30b9\u30c8\u3092\u5148\u306b\u66f8\u3044\u3066\u3082\u3089\u3046\u3068\u3001\u5b9f\u88c5\u306e\u54c1\u8cea\u304c\u30b0\u30f3\u3068\u4e0a\u304c\u308b\u3088!',
+        'headline': '\u540c\u3058\u6307\u793a\u3092\u7e70\u308a\u8fd4\u3057\u3066\u3082\u540c\u3058\u7d50\u679c\u306b\u306a\u308b\u3060\u3051\u3002\u524d\u56de\u306e\u5931\u6557\u3092\u4f1d\u3048\u3088\u3046',
+        'before': '(\u307e\u305f) \u76f4\u3057\u3066',
+        'after': '\u3055\u3063\u304dnull\u30c1\u30a7\u30c3\u30af\u3092\u8a66\u3057\u305f\u3051\u3069\u30c0\u30e1\u3060\u3063\u305f\u3002\u578b\u81ea\u4f53\u3092Optional\u306b\u3059\u308b\u65b9\u5411\u3067',
+    },
+    {
+        'headline': '\u300c\u30ed\u30b0\u51fa\u529b\u3092\u8db3\u3057\u3066\u300d\u3068\u983c\u3080\u3068\u3001\u6b21\u306e\u30c7\u30d0\u30c3\u30b0\u304c\u3081\u3061\u3083\u697d\u306b\u306a\u308b\u3088',
+        'before': '\u539f\u56e0\u304c\u308f\u304b\u3089\u306a\u3044\u3001\u76f4\u3057\u3066',
+        'after': 'processOrder \u306e\u5404\u30b9\u30c6\u30c3\u30d7\u306b console.log \u3092\u8db3\u3057\u3066\u3001\u3069\u3053\u3067\u6b62\u307e\u308b\u304b\u898b\u305b\u3066',
+    },
+    {
+        'headline': '\u30b9\u30bf\u30c3\u30af\u30c8\u30ec\u30fc\u30b9\u306f\u300c\u5207\u308a\u53d6\u308b\u300d\u3088\u308a\u300c\u305d\u306e\u307e\u307e\u8cbc\u308b\u300d\u304c\u6b63\u89e3! \u884c\u756a\u53f7\u304cAI\u306e\u30d2\u30f3\u30c8\u306b\u306a\u308b',
+        'before': '\u30a8\u30e9\u30fc\u304c\u51fa\u305f\u3002UserList\u304c\u60aa\u3044\u3063\u307d\u3044',
+        'after': '\u3053\u306e\u30b9\u30bf\u30c3\u30af\u30c8\u30ec\u30fc\u30b9:\nError: ...\n  at UserList (src/UserList.tsx:15:23)',
+    },
+    # ── コード品質 ──
+    {
+        'headline': '\u300c\u30c6\u30b9\u30c8\u3082\u4e00\u7dd2\u306b\u66f8\u3044\u3066\u300d\u306e\u4e00\u8a00\u3067\u3001AI\u304c\u81ea\u5206\u3067\u54c1\u8cea\u30c1\u30a7\u30c3\u30af\u3057\u3066\u304f\u308c\u308b',
+        'before': '\u30bd\u30fc\u30c8\u6a5f\u80fd\u3092\u8ffd\u52a0\u3057\u3066',
+        'after': 'sortByDate \u95a2\u6570\u3092\u4f5c\u3063\u3066\u3002\u30c6\u30b9\u30c8\u3082\u66f8\u3044\u3066\u3001\u6607\u9806/\u964d\u9806\u4e21\u65b9\u30ab\u30d0\u30fc\u3059\u308b\u3053\u3068',
+    },
+    {
+        'headline': '\u578b\u3092\u3057\u3063\u304b\u308a\u6307\u5b9a\u3059\u308b\u3068\u3001AI\u306e\u30b3\u30fc\u30c9\u88dc\u5b8c\u7cbe\u5ea6\u304c\u683c\u6bb5\u306b\u4e0a\u304c\u308b\u3088',
+        'before': '\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u3059\u308b\u95a2\u6570\u3092\u4f5c\u3063\u3066',
+        'after': 'User\u578b\u306e\u914d\u5217\u3092\u8fd4\u3059 fetchUsers(): Promise<User[]> \u3092\u4f5c\u3063\u3066\u3002User\u578b\u306f types.ts \u306b\u5b9a\u7fa9\u6e08\u307f',
+    },
+    {
+        'headline': '\u300c\u4fee\u6b63\u5f8c\u306b npm test \u3092\u5b9f\u884c\u3057\u3066\u300d\u3068\u8db3\u3059\u3060\u3051\u3067\u3001\u58ca\u308c\u305f\u306e\u306b\u6c17\u3065\u304b\u306a\u3044\u4e8b\u6545\u3092\u9632\u3052\u308b',
+        'before': '\u30d0\u30b0\u4fee\u6b63\u3057\u3066',
+        'after': '\u30d0\u30b0\u4fee\u6b63\u3057\u3066\u3001\u4fee\u6b63\u5f8c\u306b npm test \u3092\u5b9f\u884c\u3057\u3066\u7d50\u679c\u3092\u898b\u305b\u3066',
+    },
+    {
+        'headline': '\u8907\u6570\u30d5\u30a1\u30a4\u30eb\u306e\u5909\u66f4\u306f\u3001\u5148\u306b\u5f71\u97ff\u7bc4\u56f2\u3092\u805e\u3044\u3066\u304b\u3089\u983c\u3080\u3068\u5b89\u5168\u3060\u3088',
+        'before': '\u3053\u306e\u30a4\u30f3\u30bf\u30fc\u30d5\u30a7\u30fc\u30b9\u3092\u5909\u66f4\u3057\u3066',
+        'after': 'UserService \u306e\u30a4\u30f3\u30bf\u30fc\u30d5\u30a7\u30fc\u30b9\u3092\u5909\u3048\u305f\u3044\u3002\u307e\u305a\u3069\u306e\u30d5\u30a1\u30a4\u30eb\u304c\u5f71\u97ff\u53d7\u3051\u308b\u304b\u30ea\u30b9\u30c8\u3057\u3066',
+    },
+    # ── ワークフロー最適化 ──
+    {
+        'headline': '/clear \u3067\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u3092\u30ea\u30bb\u30c3\u30c8\u3059\u308b\u3068\u3001AI\u306e\u5fdc\u7b54\u304c\u901f\u304f\u306a\u308b\u3088!',
+        'before': None,
+        'after': None,
+    },
+    {
+        'headline': 'CLAUDE.md \u306b\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u306e\u30eb\u30fc\u30eb\u3092\u66f8\u3044\u3066\u304a\u304f\u3068\u3001\u6bce\u56de\u8aac\u660e\u3057\u306a\u304f\u3066\u6e08\u3080!',
+        'before': '\u6bce\u56de\u300cTypeScript\u3067\u66f8\u3044\u3066\u300d\u3068\u8a00\u3063\u3066\u308b',
+        'after': 'CLAUDE.md \u306b\u300c\u8a00\u8a9e: TypeScript, \u30c6\u30b9\u30c8: vitest, \u30b9\u30bf\u30a4\u30eb: \u30bb\u30df\u30b3\u30ed\u30f3\u306a\u3057\u300d\u3068\u66f8\u3044\u3066\u304a\u304f',
+    },
+    {
+        'headline': '\u5927\u304d\u306a\u30bf\u30b9\u30af\u306f\u5c0f\u3055\u304f\u5206\u5272! 1\u3064\u305a\u3064\u78ba\u8a8d\u3057\u306a\u304c\u3089\u9032\u3081\u308b\u3068\u624b\u623b\u308a\u304c\u6fc0\u6e1b\u3059\u308b\u3088',
+        'before': 'EC\u30b5\u30a4\u30c8\u306e\u30d0\u30c3\u30af\u30a8\u30f3\u30c9\u3092\u5168\u90e8\u4f5c\u3063\u3066',
+        'after': '\u307e\u305a\u5546\u54c1\u4e00\u89a7\u306e GET /products API \u3060\u3051\u4f5c\u3063\u3066\u3002DB\u306fSQLite\u3067\u3044\u3044',
+    },
+    {
+        'headline': 'git commit \u3057\u3066\u304b\u3089\u5927\u304d\u306a\u5909\u66f4\u3092\u983c\u3080\u3068\u3001\u3044\u3064\u3067\u3082\u5dfb\u304d\u623b\u305b\u3066\u5b89\u5fc3\u3060\u3088',
+        'before': '(\u5927\u304d\u306a\u30ea\u30d5\u30a1\u30af\u30bf\u3092\u3044\u304d\u306a\u308a\u983c\u3080)',
+        'after': '\u307e\u305a git commit \u3057\u3066\u3002\u305d\u306e\u5f8c\u3001src/api.ts \u3092\u30ea\u30d5\u30a1\u30af\u30bf\u3057\u3066',
+    },
+    {
+        'headline': '/compact \u3067\u4f1a\u8a71\u3092\u5727\u7e2e\u3059\u308b\u3068\u3001\u5fdc\u7b54\u901f\u5ea6\u304c\u6539\u5584\u3059\u308b\u3088\u3002ctx 50%\u8d85\u3048\u305f\u3089\u691c\u8a0e\u3057\u3066',
+        'before': None,
+        'after': None,
+    },
+    {
+        'headline': '\u30bf\u30b9\u30af\u304c\u5909\u308f\u3063\u305f\u3089\u65b0\u30bb\u30c3\u30b7\u30e7\u30f3! \u904e\u53bb\u306e\u4f1a\u8a71\u304c\u90aa\u9b54\u3057\u3066\u7cbe\u5ea6\u304c\u4e0b\u304c\u308b\u3053\u3068\u304c\u3042\u308b\u3088',
+        'before': '(\u524d\u306e\u30bf\u30b9\u30af\u306e\u4f1a\u8a71\u304c\u6b8b\u3063\u305f\u307e\u307e\u5225\u4f5c\u696d)',
+        'after': '/clear \u3057\u3066\u304b\u3089\u65b0\u3057\u3044\u30bf\u30b9\u30af\u3092\u59cb\u3081\u308b\u3002\u307e\u305f\u306f\u65b0\u30bf\u30fc\u30df\u30ca\u30eb\u3067 claude \u8d77\u52d5',
+    },
+    # ── 上級者向け ──
+    {
+        'headline': 'AI\u306b\u300c\u306a\u305c\u305d\u3046\u3057\u305f\u304b\u300d\u3092\u805e\u304f\u3068\u3001\u30b3\u30fc\u30c9\u306e\u7406\u89e3\u304c\u6df1\u307e\u308b\u3057\u9593\u9055\u3044\u306b\u3082\u6c17\u3065\u304d\u3084\u3059\u3044\u3088',
+        'before': None,
+        'after': None,
+    },
+    {
+        'headline': '\u884c\u756a\u53f7\u3084\u95a2\u6570\u540d\u3067\u7bc4\u56f2\u3092\u7d5e\u308b\u65b9\u304c\u3001\u300c\u30d5\u30a1\u30a4\u30eb\u5168\u90e8\u898b\u3066\u300d\u3088\u308a\u52b9\u7387\u7684!',
+        'before': '\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u5168\u90e8\u898b\u3066',
+        'after': 'src/utils.ts \u306e 42\u884c\u76ee\u3042\u305f\u308a\u306e getUser \u95a2\u6570\u3092\u898b\u3066',
+    },
+    {
+        'headline': '\u30c6\u30b9\u30c8\u3092\u5148\u306b\u66f8\u3044\u3066\u3082\u3089\u3046\u3068\u3001\u5b9f\u88c5\u306e\u54c1\u8cea\u304c\u30b0\u30f3\u3068\u4e0a\u304c\u308b (TDD)',
         'before': '\u30bd\u30fc\u30c8\u6a5f\u80fd\u3092\u8ffd\u52a0\u3057\u3066',
         'after': 'sortByDate \u95a2\u6570\u3092\u4f5c\u3063\u3066\u3002\u5148\u306b\u30c6\u30b9\u30c8\u3092\u66f8\u3044\u3066\u304b\u3089\u5b9f\u88c5\u3057\u3066',
     },
     {
-        'headline': '\u3053\u3053\u307e\u3067\u9806\u8abf\u3060\u3088! \u3044\u3044\u6307\u793a\u306e\u51fa\u3057\u65b9\u3092\u7d9a\u3051\u3066\u3044\u3053\u3046!',
-        'before': None, 'after': None,
+        'headline': '\u300c\u539f\u56e0\u3092\u63a8\u6e2c\u3057\u3066\u3001\u307e\u3060\u76f4\u3055\u306a\u3044\u3067\u300d\u304c\u5b89\u5168\u306a\u30c7\u30d0\u30c3\u30b0\u6d41\u3060\u3088',
+        'before': '\u3053\u308c\u76f4\u3057\u3066 (\u2192AI\u304c\u63a8\u6e2c\u3067\u76f4\u3057\u3066\u5225\u30d0\u30b0\u767a\u751f)',
+        'after': '\u3053\u306e\u30a8\u30e9\u30fc\u306e\u539f\u56e0\u3092\u63a8\u6e2c\u3057\u3066\u3002\u307e\u3060\u30b3\u30fc\u30c9\u306f\u5909\u3048\u306a\u3044\u3067',
     },
     {
-        'headline': '\u6307\u793a\u306b\u8ff7\u3063\u305f\u3089\u3001\u307e\u305a\u300c\u4eca\u306e\u72b6\u6cc1\u300d\u3092\u66f8\u304f\u3068\u3053\u308d\u304b\u3089\u59cb\u3081\u3088\u3046!',
-        'before': None, 'after': None,
+        'headline': '\u300c\u554f\u984c\u70b9\u3092\u6307\u6458\u3057\u3066\u300d\u3067AI\u306b\u30ec\u30d3\u30e5\u30fc\u3055\u305b\u308b\u3068\u3001\u30d0\u30b0\u4e88\u9632\u306b\u306a\u308b\u3088',
+        'before': '(\u66f8\u3044\u305f\u30b3\u30fc\u30c9\u3092\u305d\u306e\u307e\u307e\u4f7f\u3046)',
+        'after': '\u3053\u306e\u95a2\u6570\u306e\u30a8\u30c3\u30b8\u30b1\u30fc\u30b9\u3084\u30d0\u30b0\u306e\u53ef\u80fd\u6027\u3092\u6307\u6458\u3057\u3066',
     },
     {
-        'headline': '\u30b3\u30fc\u30c9\u306e\u5909\u66f4\u5f8c\u306f\u3001\u52d5\u4f5c\u78ba\u8a8d\u3092\u5fd8\u308c\u305a\u306b!',
-        'before': '\u30d0\u30b0\u4fee\u6b63\u3057\u3066',
-        'after': '\u30d0\u30b0\u4fee\u6b63\u3057\u3066\u3001\u4fee\u6b63\u5f8c\u306bnpm test\u3092\u5b9f\u884c\u3057\u3066\u7d50\u679c\u3092\u898b\u305b\u3066',
+        'headline': '\u300c\u3053\u306e\u30b3\u30fc\u30c9\u3092\u8aac\u660e\u3057\u3066\u300d\u306f\u5b66\u7fd2\u306b\u6700\u5f37\u3002\u7406\u89e3\u3092\u6df1\u3081\u308b\u306e\u306bAI\u3092\u4f7f\u304a\u3046',
+        'before': None,
+        'after': None,
+    },
+    # ── 初心者向け・励まし ──
+    {
+        'headline': '\u308f\u304b\u3089\u306a\u3044\u3053\u3068\u306f\u300c\u308f\u304b\u3089\u306a\u3044\u300d\u3067OK! \u5e73\u6613\u306a\u8a00\u3044\u65b9\u3067\u3082AI\u306f\u7406\u89e3\u3067\u304d\u308b\u3088',
+        'before': None,
+        'after': None,
     },
     {
-        'headline': 'Git\u3067\u30b3\u30df\u30c3\u30c8\u306f\u3053\u307e\u3081\u306b\u306d! \u5dfb\u304d\u623b\u305b\u308b\u5b89\u5fc3\u611f\u304c\u5927\u4e8b\u3060\u3088',
-        'before': None, 'after': None,
+        'headline': '\u300c\u4eca\u3053\u3046\u306a\u3063\u3066\u308b\u3001\u3053\u3046\u3057\u305f\u3044\u3001\u3067\u3082\u3053\u308c\u304c\u90aa\u9b54\u300d\u306e3\u70b9\u3092\u66f8\u3053\u3046',
+        'before': '(\u4f55\u3092\u983c\u3081\u3070\u3044\u3044\u304b\u308f\u304b\u3089\u306a\u3044)',
+        'after': '\u4eca\u30ed\u30b0\u30a4\u30f3\u753b\u9762\u3092\u4f5c\u3063\u3066\u308b\u3002OAuth\u3082\u5bfe\u5fdc\u3057\u305f\u3044\u304c\u3001\u307e\u305a\u30e1\u30fc\u30eb/\u30d1\u30b9\u30ef\u30fc\u30c9\u3060\u3051\u3067\u3044\u3044',
+    },
+    {
+        'headline': '1\u3064\u306e\u6307\u793a\u30671\u3064\u306e\u3053\u3068\u3002\u6b32\u5f35\u308b\u3068\u5168\u90e8\u4e2d\u9014\u534a\u7aef\u306b\u306a\u308a\u304c\u3061\u3060\u3088',
+        'before': '\u3042\u308c\u3082\u3053\u308c\u3082\u305d\u308c\u3082\u5168\u90e8\u3084\u3063\u3066',
+        'after': '\u307e\u305a\u30ed\u30b0\u30a4\u30f3API\u3060\u3051\u4f5c\u3063\u3066\u3002\u78ba\u8a8d\u3067\u304d\u305f\u3089\u6b21\u306e\u6a5f\u80fd\u3092\u983c\u3080',
+    },
+    {
+        'headline': '\u3053\u3053\u307e\u3067\u9806\u8abf! \u3044\u3044\u6307\u793a\u306e\u51fa\u3057\u65b9\u3092\u7d9a\u3051\u3066\u3044\u3053\u3046!',
+        'before': None,
+        'after': None,
+    },
+    {
+        'headline': 'AI\u306f\u30da\u30a2\u30d7\u30ed\u306e\u30d1\u30fc\u30c8\u30ca\u30fc\u3002\u300c\u3069\u3046\u601d\u3046?\u300d\u3063\u3066\u76f8\u8ac7\u3059\u308b\u3068\u826f\u3044\u63d0\u6848\u304c\u51fa\u3084\u3059\u3044\u3088',
+        'before': '\u3053\u308c\u3092\u3084\u308c (\u4e00\u65b9\u7684\u306a\u547d\u4ee4)',
+        'after': '\u3053\u3046\u3044\u3046\u554f\u984c\u304c\u3042\u308b\u3093\u3060\u3051\u3069\u3001\u3069\u3046\u30a2\u30d7\u30ed\u30fc\u30c1\u3059\u308b\u306e\u304c\u3044\u3044\u3068\u601d\u3046?',
     },
 ]
 
-# ── Data source resolution: proxy > home fallback > self-tracking ──
+# ══════════════════════════════════════════════════════════════
+# Data source resolution: proxy > home fallback > self-tracking
+# ══════════════════════════════════════════════════════════════
 _evo = None
 _evo_source = None
 _now_ms = time.time() * 1000
 
-# 1. Try cwd/.evo/live-state.json (proxy running, matching cwd)
 for _try_path in [
     os.path.join(cwd, '.evo', 'live-state.json'),
     os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'),
@@ -159,7 +309,7 @@ for _try_path in [
     except Exception:
         pass
 
-# ── Self-tracking state (always updated, used as fallback) ──
+# ── Self-tracking state ──
 _SELF_STATE_FILE = os.path.join(os.path.expanduser('~'), '.claude', '.evo-self-state.json')
 
 def _load_self():
@@ -178,9 +328,8 @@ def _save_self(s):
 
 _self = _load_self()
 _now_s = time.time()
-# Session detection: if context usage jumped down or cwd changed, new session
-_prev_ctx = _self.get('ctx_pct', 0)
 _curr_ctx = ctx if ctx is not None else 0
+_prev_ctx = _self.get('ctx_pct', 0)
 _session_reset = (_prev_ctx > 30 and _curr_ctx < 5) or _self.get('cwd') != cwd
 if not _self or _session_reset:
     _self = {'start': _now_s, 'calls': 0, 'tip_idx': _self.get('tip_idx', 0), 'cwd': cwd}
@@ -194,7 +343,7 @@ _line1_bits = []
 _line2 = ""
 
 if _evo and _evo_source == 'proxy':
-    # Full proxy data available
+    # ═══ Full proxy data ═══
     _avatar = _evo.get('avatar', '\U0001f423')
     _nick = _evo.get('nickname', 'EvoPet')
     _turns = _evo.get('turns', 0)
@@ -212,31 +361,24 @@ if _evo and _evo_source == 'proxy':
     _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
     if _grade:
-        _gl = _grade_label(_grade)
-        _line1_bits.append(f"{_gc}{BOLD}{_gl}{R}")
-
+        _line1_bits.append(f"{_gc}{BOLD}{_grade_label(_grade)}{R}")
     if _turns > 0:
         _line1_bits.append(f"{_EVO_INFO}{_turns}\u56de\u76ee\u306e\u4f1a\u8a71{R}")
-
     if _ps > 0:
         if _ps >= 80:
-            _psl = f"\U0001f4dd \u6307\u793a\u306e\u8cea: {_EVO_GREEN}{BOLD}\u3068\u3066\u3082\u826f\u3044!{R}"
+            _line1_bits.append(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}")
         elif _ps >= 60:
-            _psl = f"\U0001f4dd \u6307\u793a\u306e\u8cea: {_EVO_INFO}{BOLD}\u826f\u597d{R}"
+            _line1_bits.append(f"\U0001f4dd {_EVO_INFO}{BOLD}\u6307\u793a\u306e\u8cea: \u826f\u597d{R}")
         elif _ps >= 40:
-            _psl = f"\U0001f4dd \u6307\u793a\u306e\u8cea: {_EVO_WARN}{BOLD}\u3082\u3046\u5c11\u3057\u5177\u4f53\u7684\u306b{R}"
+            _line1_bits.append(f"\U0001f4dd {_EVO_WARN}{BOLD}\u6307\u793a\u306e\u8cea: \u3082\u3046\u5c11\u3057\u5177\u4f53\u7684\u306b{R}")
         else:
-            _psl = f"\U0001f4dd \u6307\u793a\u306e\u8cea: {_EVO_RED}{BOLD}\u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}"
-        _line1_bits.append(_psl)
-
+            _line1_bits.append(f"\U0001f4dd {_EVO_RED}{BOLD}\u6307\u793a\u306e\u8cea: \u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}")
     if _combo >= 3:
         _cc = _EVO_GOLD if _combo >= 10 else _EVO_ACCENT if _combo >= 5 else _EVO_GREEN
         _line1_bits.append(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}")
-
     if _bond < 100:
         _line1_bits.append(f"{_EVO_GREEN}\u80b2\u6210\u5ea6 {BOLD}{_bond}%{R}")
 
-    # LINE 2: Signal-based advice or tip
     if _signal and _signal in ('prompt_too_vague', 'same_file_revisit', 'same_function_revisit',
                                 'scope_creep', 'no_success_criteria', 'approval_fatigue',
                                 'error_spiral', 'retry_loop', 'high_tool_ratio'):
@@ -247,13 +389,11 @@ if _evo and _evo_source == 'proxy':
         elif _advice:
             _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}"
             if _detail:
-                _d = _detail[:70] + '...' if len(_detail) > 70 else _detail
-                _line2 += f"\n   {DIM}{_d}{R}"
+                _line2 += f"\n   {DIM}{_detail[:70]}{R}"
     elif _signal in ('good_structure', 'first_pass_success', 'improving_trend'):
         _line2 = f"\u2728 {_EVO_GREEN}{BOLD}{_advice}{R}"
         if _detail:
-            _d = _detail[:70] + '...' if len(_detail) > 70 else _detail
-            _line2 += f"\n   {DIM}{_d}{R}"
+            _line2 += f"\n   {DIM}{_detail[:70]}{R}"
     elif _signal == 'tip' and _advice:
         if _before and _after:
             _b = _before[:30] + '...' if len(_before) > 30 else _before
@@ -262,35 +402,41 @@ if _evo and _evo_source == 'proxy':
         else:
             _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}"
             if _detail:
-                _d = _detail[:80] + '...' if len(_detail) > 80 else _detail
-                _line2 += f"\n   {DIM}{_d}{R}"
+                _line2 += f"\n   {DIM}{_detail[:80]}{R}"
     elif _advice:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{_advice}{R}"
 
 else:
-    # No proxy — self-tracked fallback. ALWAYS show evo feedback.
+    # ═══ No proxy — self-tracked fallback ═══
     _avatar = '\U0001f98a'
     _nick = 'EvoPet'
     _calls = _self.get('calls', 1)
     _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
-    # Context-based mood
-    if _curr_ctx is not None and _curr_ctx > 0:
-        if _curr_ctx >= 80:
-            _mood = f"{_EVO_RED}{BOLD}\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u5727\u8feb! /compact \u3092\u691c\u8a0e\u3057\u3066{R}"
-        elif _curr_ctx >= 60:
-            _mood = f"{_EVO_WARN}\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u305d\u308d\u305d\u308d\u6ce8\u610f{R}"
-        elif _curr_ctx >= 30:
-            _mood = f"{_EVO_GREEN}\u9806\u8abf\u306b\u9032\u3093\u3067\u308b\u3088!{R}"
-        else:
-            _mood = f"{_EVO_GREEN}\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb!{R}"
-        _line1_bits.append(_mood)
+    # Pick comment based on ctx bracket + call count rotation
+    if _curr_ctx >= 80:
+        _pool = _COMMENTS['critical']
+    elif _curr_ctx >= 60:
+        _pool = _COMMENTS['busy']
+    elif _curr_ctx >= 30:
+        _pool = _COMMENTS['working']
+    elif _curr_ctx >= 10:
+        _pool = _COMMENTS['early']
     else:
-        _line1_bits.append(f"{_EVO_GREEN}\u6307\u793a\u3092\u5f85\u3063\u3066\u308b\u3088!{R}")
+        _pool = _COMMENTS['start']
 
-    _line1_bits.append(f"{DIM}{_calls}\u56de\u76ee\u306e\u547c\u3073\u51fa\u3057{R}")
+    _comment = _pool[_calls % len(_pool)]
 
-    # Rotate through tips
+    if _curr_ctx >= 80:
+        _line1_bits.append(f"{_EVO_RED}{BOLD}{_comment}{R}")
+    elif _curr_ctx >= 60:
+        _line1_bits.append(f"{_EVO_WARN}{_comment}{R}")
+    else:
+        _line1_bits.append(f"{_EVO_GREEN}{_comment}{R}")
+
+    _line1_bits.append(f"{DIM}{_calls}\u56de\u76ee{R}")
+
+    # Tip rotation
     _tip = _TIPS[_calls % len(_TIPS)]
     _th = _tip['headline']
     _tb = _tip.get('before')
@@ -302,7 +448,6 @@ else:
     else:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}"
 
-# Append evo lines to output
 if _line1_bits:
     parts.append('\n' + SEP.join(_line1_bits))
 if _line2:
