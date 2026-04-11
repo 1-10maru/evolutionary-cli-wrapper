@@ -198,11 +198,25 @@ Evo tracking ON | cli=claude | dir=C:\work\my-app | mode=auto
   ▘▘ ▝▝    C:\work\my-app
 ```
 
-### 2.5 普段のフィードバックは 1 行だけ
+### 2.5 statusline（常時表示）
 
+Claude Code の statusline に EvoPet が常駐します。`statusline.py` はリポジトリに同梱 (`./statusline.py`) されており、`npm run setup` で `~/.claude/base_statusline.py` にデプロイされます。
+
+**proxy 経由時（フルデータ）:**
 ```text
-🐣 EvoPet ごきげん | 関数名か対象ファイルを 1 こ足すと、ぐっと刺さりやすいよ | 18%浮きそう | +4 vibe | Bond 42%
+🦊 EvoPet · ✨S 神 · 3回目の会話 · 📝 指示の質: とても良い!
+💡 ファイル名を1つ書くだけで、AIの探索が半分になるよ!
+   ❌ "バリデーションにメールアドレスのチェックを追加して" → ✅ "src/validators.ts にメールアドレスのバリデーションを追加"
 ```
+
+**proxy なし時（自己追跡フォールバック）:**
+```text
+🦊 EvoPet · 順調に進んでるよ! · 5回目の呼び出し
+💡 箇条書きで指示すると、AIが見落としにくくなるよ!
+   ❌ "ユーザー登録の機能をつくって、メール確認もして..." → ✅ "ユーザー登録機能を作成:\n- POST /register エンドポイント追加..."
+```
+
+proxy が動いていなくても（Desktop App 起動等）、16 種類の tip をローテーション表示します。proxy 経由時は sessionGrade、signalDetector（9 種類の問題シグナル + 3 種類の賞賛シグナル）、25 種類の tip が利用可能になります。
 
 ### 3. 親フォルダで起動した時の軽量モード
 

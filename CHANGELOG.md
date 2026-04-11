@@ -6,6 +6,16 @@
 
 ### Added
 
+- Self-tracking statusline (`statusline.py`) — proxy なしでも常に EvoPet 表示。16 種類の tip ローテーション
+- `statusline.py` をリポジトリに同梱。`npm run setup` で `~/.claude/base_statusline.py` にデプロイ
+- Proxy が `~/.claude/.evo-live.json` にも書き込み（cwd ミスマッチ時のフォールバック）
+- Bash shim (`bin/claude`, `bin/codex`) に `export` 追加 — Git Bash から正常動作
+- `getShellHome()` に `__dirname` ベースのフォールバック追加 — `EVO_HOME` 未設定でも動作
+- User PATH (`HKCU\Environment`) に evo bin を追加。全ターミナル (cmd.exe/PowerShell/Git Bash) 対応
+- `undoShellIntegration` に `removeFromUserPath` 追加。uninstall 時に自動で元の claude に復帰
+
+### Previously added
+
 - GitHub Issue Forms for feature, bug, and agent-task intake
 - GitHub Actions CI and PR docs warning workflow
 - Dependabot configuration for npm and GitHub Actions

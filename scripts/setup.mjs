@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,6 +42,16 @@ const shellSetup = spawnSync("node", ["dist/index.js", "setup-shell", "--cwd", p
 
 if (shellSetup.status !== 0) {
   process.exit(shellSetup.status ?? 1);
+}
+
+// Deploy statusline.py to ~/.claude/base_statusline.py
+const statuslineSrc = path.join(projectRoot, "statusline.py");
+const claudeDir = path.join(os.homedir(), ".claude");
+const statuslineDst = path.join(claudeDir, "base_statusline.py");
+if (existsSync(statuslineSrc)) {
+  mkdirSync(claudeDir, { recursive: true });
+  copyFileSync(statuslineSrc, statuslineDst);
+  console.log(`Deployed statusline.py → ${statuslineDst}`);
 }
 
 if (existsSync(path.join(projectRoot, ".evo", "config.json"))) {
