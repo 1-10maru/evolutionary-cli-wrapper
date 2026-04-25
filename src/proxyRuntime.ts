@@ -8,6 +8,7 @@ import { createFrictionCaptureAdapter } from "./capture";
 import { diffSymbolSnapshots } from "./ast";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
+import { getLogger } from "./logger";
 import {
   comboMilestoneMessage,
   loadMascotProfile,
@@ -67,6 +68,11 @@ const NON_INTERACTIVE_FLAGS = new Set([
   "--json",
 ]);
 
+const proxyModeLog = getLogger().child("proxy.mode");
+const proxyResolveLog = getLogger().child("proxy.resolve");
+const proxyStartupLog = getLogger().child("proxy.startup");
+const proxySpawnLog = getLogger().child("proxy.spawn");
+
 function createEvent(
   type: EpisodeEvent["type"],
   source: EpisodeEvent["source"],
@@ -92,9 +98,29 @@ function createEmptyTurn(): ProxyTurnState {
 }
 
 function shouldUseInteractivePassthrough(args: string[]): boolean {
-  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) return false;
-  if (args.length === 0) return true;
-  return !args.some((arg) => NON_INTERACTIVE_FLAGS.has(arg.toLowerCase()));
+  let result: boolean;
+  let reason: string;
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) {
+    result = false;
+    reason = "non-tty std streams";
+  } else if (args.length === 0) {
+    result = true;
+    reason = "tty stdin/stdout/stderr with no args";
+  } else {
+    const flagged = args.find((arg) => NON_INTERACTIVE_FLAGS.has(arg.toLowerCase()));
+    if (flagged) {
+      result = false;
+      reason = `non-interactive flag detected: ${flagged.toLowerCase()}`;
+    } else {
+      result = true;
+      reason = "tty std streams; no non-interactive flag in args";
+    }
+  }
+  proxyModeLog.info("interactive passthrough decision", {
+    interactivePassthrough: result,
+    reason,
+  });
+  return result;
 }
 
 function normalizeTurnOutput(outputText: string): string {
@@ -136,23 +162,43 @@ function hasProjectMarkers(cwd: string): boolean {
 
 export function shouldUseLightweightTracking(cwd: string): boolean {
   const resolved = path.resolve(cwd);
-  if (resolved === path.resolve(os.homedir())) return true;
-  if (hasProjectMarkers(resolved)) return false;
+  let result: boolean;
+  let reason: string;
+  if (resolved === path.resolve(os.homedir())) {
+    result = true;
+    reason = "cwd is user home directory";
+  } else if (hasProjectMarkers(resolved)) {
+    result = false;
+    reason = "project marker file present";
+  } else {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(resolved, { withFileTypes: true });
+    } catch {
+      proxyModeLog.info("lightweight tracking decision", {
+        lightweight: true,
+        reason: "readdir failed; assuming non-project",
+      });
+      return true;
+    }
 
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(resolved, { withFileTypes: true });
-  } catch {
-    return true;
+    const visibleEntries = entries.filter((entry) => !entry.name.startsWith("."));
+    const directoryCount = visibleEntries.filter((entry) => entry.isDirectory()).length;
+    const fileCount = visibleEntries.filter((entry) => entry.isFile()).length;
+
+    if (directoryCount >= 8) {
+      result = true;
+      reason = `directoryCount=${directoryCount} >= 8 (looks like aggregate parent dir)`;
+    } else if (directoryCount >= 5 && visibleEntries.length >= 15 && fileCount <= 6) {
+      result = true;
+      reason = `dirs=${directoryCount}, total=${visibleEntries.length}, files=${fileCount} (sparse aggregate)`;
+    } else {
+      result = false;
+      reason = `dirs=${directoryCount}, total=${visibleEntries.length}, files=${fileCount} (looks like project)`;
+    }
   }
-
-  const visibleEntries = entries.filter((entry) => !entry.name.startsWith("."));
-  const directoryCount = visibleEntries.filter((entry) => entry.isDirectory()).length;
-  const fileCount = visibleEntries.filter((entry) => entry.isFile()).length;
-
-  if (directoryCount >= 8) return true;
-  if (directoryCount >= 5 && visibleEntries.length >= 15 && fileCount <= 6) return true;
-  return false;
+  proxyModeLog.info("lightweight tracking decision", { lightweight: result, reason });
+  return result;
 }
 
 function formatMissingOriginalCommandMessage(cli: SupportedCli): string {
@@ -234,14 +280,25 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   const originalCommand = resolveOriginalCommand(cwd, cli);
   if (!originalCommand) {
+    proxyResolveLog.error("original command not found", {
+      cli,
+      cwd,
+      pathHead: process.env.PATH?.slice(0, 200),
+    });
     db.close();
     throw new Error(formatMissingOriginalCommandMessage(cli));
   }
 
   const interactivePassthrough = shouldUseInteractivePassthrough(options.args);
+  const mode = `${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}`;
   process.stderr.write(
     `Evo tracking ON | cli=${cli} | dir=${cwd} | mode=${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}\n`,
   );
+  proxyStartupLog.info("session header emitted", {
+    cli,
+    mode,
+    mascotSpecies: mascotProfile.speciesId,
+  });
 
   const beforeSnapshotPromise = lightweightTracking
     ? Promise.resolve(createEmptySnapshot())
@@ -594,6 +651,13 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   process.on("SIGINT", onProcessExit);
   process.on("SIGTERM", onProcessExit);
 
+  proxySpawnLog.info("spawning subprocess", {
+    command: originalCommand,
+    argvLength: options.args.length,
+    cwd,
+    envKeyCount: Object.keys(process.env).length,
+    interactivePassthrough,
+  });
   const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
   const stdinListener = (chunk: Buffer | string): void => {

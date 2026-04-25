@@ -1,6 +1,9 @@
 import path from "node:path";
 import stripAnsi from "strip-ansi";
+import { getLogger } from "./logger";
 import { EpisodeEvent, SupportedCli, UsageObservation } from "./types";
+
+const log = getLogger().child("adapters.detect");
 
 const USAGE_PATTERNS = [
   /prompt tokens:\s*(?<prompt>\d+).*completion tokens:\s*(?<completion>\d+).*total tokens:\s*(?<total>\d+)/i,
@@ -24,11 +27,17 @@ function buildEvent(
 }
 
 export function detectCli(command: string, cliOverride?: SupportedCli): SupportedCli {
-  if (cliOverride) return cliOverride;
+  if (cliOverride) {
+    log.debug("cli detected", { argv0: command, detectedCli: cliOverride, source: "override" });
+    return cliOverride;
+  }
   const base = path.basename(command).toLowerCase();
-  if (base.includes("codex")) return "codex";
-  if (base.includes("claude")) return "claude";
-  return "generic";
+  let detectedCli: SupportedCli;
+  if (base.includes("codex")) detectedCli = "codex";
+  else if (base.includes("claude")) detectedCli = "claude";
+  else detectedCli = "generic";
+  log.debug("cli detected", { argv0: command, detectedCli });
+  return detectedCli;
 }
 
 export function parseUsageObservation(

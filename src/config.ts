@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getLogger } from "./logger";
 import { EvoConfig } from "./types";
+
+const log = getLogger().child("config");
 
 const DEFAULT_CONFIG: EvoConfig = {
   formatVersion: 2,
@@ -92,6 +95,13 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
 
   if (!fs.existsSync(configPath)) {
     fs.writeFileSync(configPath, JSON.stringify(nextDefaults, null, 2));
+    log.debug("merged config", {
+      configSnapshot: {
+        defaultMode: nextDefaults.proxy.defaultMode,
+        keepRecentRawEpisodes: nextDefaults.retention.keepRecentRawEpisodes,
+      },
+      source: "defaults",
+    });
     return nextDefaults;
   }
 
@@ -125,6 +135,12 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
     },
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  log.debug("merged config", {
+    configSnapshot: {
+      defaultMode: config.proxy.defaultMode,
+      keepRecentRawEpisodes: config.retention.keepRecentRawEpisodes,
+    },
+  });
   return config;
 }
 

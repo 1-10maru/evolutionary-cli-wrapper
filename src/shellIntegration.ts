@@ -9,7 +9,11 @@ import {
   getDefaultPwshProfilePath,
   updateEvoConfig,
 } from "./config";
+import { getLogger } from "./logger";
 import { SupportedCli } from "./types";
+
+const shellPathLog = getLogger().child("shell.path");
+const shellResolveLog = getLogger().child("shell.resolve");
 
 const PROFILE_START = "# >>> evo shell integration >>>";
 const PROFILE_END = "# <<< evo shell integration <<<";
@@ -319,7 +323,7 @@ function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli
     return String(result.stdout ?? "");
   })();
 
-  return dedupeCommandCandidates(
+  const candidates = dedupeCommandCandidates(
     String(stdout ?? "")
     .split(/\r?\n/)
     .map((item) => item.trim())
@@ -328,6 +332,10 @@ function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli
     .filter((item) => !isLegacyEvoBackupCommand(item))
     .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b)),
   );
+  for (const candidate of candidates) {
+    shellPathLog.debug("path candidate", { candidate, exists: fs.existsSync(candidate), cli });
+  }
+  return candidates;
 }
 
 export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
@@ -353,6 +361,10 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
 
   if (resolved && !isLegacyEvoBackupCommand(resolved)) {
     persistResolvedCommand(cwd, shellHome, cli, resolved);
+  }
+
+  if (resolved) {
+    shellResolveLog.info("resolved original command", { cli, resolvedPath: resolved });
   }
 
   return resolved;
