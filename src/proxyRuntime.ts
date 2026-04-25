@@ -378,8 +378,12 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   // No terminal painting or title bar writes — those break Claude Code's TUI
   // and conflict with Zellij pane names. Instead, write state to a file that
   // ~/.claude/statusline.py reads.
-  let jsonlWatcher: fs.FSWatcher | null = null;
+  // jsonlWatcher is a chokidar FSWatcher (not node:fs.FSWatcher). Typed loosely
+  // because we only need close() and on(event, handler).
+  let jsonlWatcher: { close: () => unknown; on: (event: string, fn: (...args: unknown[]) => void) => unknown } | null = null;
   let jsonlPollTimer: NodeJS.Timeout | null = null;
+  let jsonlDebounceTimer: NodeJS.Timeout | null = null;
+  let liveStateTornDown = false;
   const liveTrackingEnabled =
     interactivePassthrough &&
     process.stderr.isTTY &&
@@ -415,7 +419,35 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     lastFirstPassGreen: true,
   };
 
+  const atomicWrite = (target: string, json: string): void => {
+    const tmp = `${target}.tmp`;
+    try {
+      fs.writeFileSync(tmp, json);
+      fs.renameSync(tmp, target);
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyLiveStateLog.warn("atomic rename failed, falling back to direct write", {
+        path: target,
+        errno: n.code,
+        message: n.message,
+      });
+      // Best-effort cleanup of stale tmp file
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      try {
+        fs.writeFileSync(target, json);
+      } catch (writeErr) {
+        const wn = normalizeErr(writeErr);
+        proxyLiveStateLog.warn("live-state write failed", {
+          path: target,
+          errno: wn.code,
+          message: wn.message,
+        });
+      }
+    }
+  };
+
   const writeLiveState = (): void => {
+    if (liveStateTornDown) return;
     const state = renderMascotState(mascotProfile);
     const payload = {
       turns: liveState.turns,
@@ -436,56 +468,60 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       afterExample: liveState.afterExample,
     };
     const json = JSON.stringify(payload);
+
+    let mtimeBefore = 0;
     try {
-      fs.writeFileSync(liveStateFile, json);
-    } catch (err) {
-      const n = normalizeErr(err);
-      proxyLiveStateLog.warn("live-state write failed", {
-        path: liveStateFile,
-        errno: n.code,
-        message: n.message,
-      });
+      mtimeBefore = fs.statSync(homeLiveStateFile).mtimeMs;
+    } catch {
+      // file may not exist yet — that's fine
     }
-    try {
-      fs.writeFileSync(homeLiveStateFile, json);
-    } catch (err) {
-      const n = normalizeErr(err);
-      proxyLiveStateLog.warn("live-state write failed", {
-        path: homeLiveStateFile,
-        errno: n.code,
-        message: n.message,
-      });
-    }
+    proxyLiveStateLog.debug("writing live state", {
+      mtimeBefore,
+      turns: liveState.turns,
+      mood: mascotProfile.mood,
+    });
+
+    atomicWrite(liveStateFile, json);
+    atomicWrite(homeLiveStateFile, json);
   };
 
   const teardownLiveTracking = (): void => {
     if (jsonlPollTimer) { clearInterval(jsonlPollTimer); jsonlPollTimer = null; }
-    if (jsonlWatcher) { jsonlWatcher.close(); jsonlWatcher = null; }
-    try {
-      fs.unlinkSync(liveStateFile);
-    } catch (err) {
-      const n = normalizeErr(err);
-      // ENOENT is expected when no live-state was ever written; skip noise.
-      if (n.code !== "ENOENT") {
-        proxyLiveStateLog.warn("live-state cleanup failed", {
-          path: liveStateFile,
-          errno: n.code,
-          message: n.message,
-        });
+    if (jsonlDebounceTimer) { clearTimeout(jsonlDebounceTimer); jsonlDebounceTimer = null; }
+    if (jsonlWatcher) {
+      try {
+        const closeResult = (jsonlWatcher as unknown as { close: () => unknown }).close();
+        // chokidar's close() returns a Promise; swallow rejections so teardown stays sync-safe
+        if (closeResult && typeof (closeResult as Promise<unknown>).then === "function") {
+          (closeResult as Promise<unknown>).catch(() => { /* best-effort */ });
+        }
+      } catch {
+        // best-effort close
+      }
+      jsonlWatcher = null;
+    }
+    for (const p of [liveStateFile, homeLiveStateFile]) {
+      try {
+        fs.unlinkSync(p);
+      } catch (err) {
+        const n = normalizeErr(err);
+        // ENOENT is expected when no live-state was ever written; skip noise.
+        if (n.code !== "ENOENT") {
+          proxyLiveStateLog.warn("live-state cleanup failed", {
+            path: p,
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }
+      // Also clean up any leftover atomic-write tmp file
+      try {
+        fs.unlinkSync(`${p}.tmp`);
+      } catch {
+        // ENOENT or perm — ignore
       }
     }
-    try {
-      fs.unlinkSync(homeLiveStateFile);
-    } catch (err) {
-      const n = normalizeErr(err);
-      if (n.code !== "ENOENT") {
-        proxyLiveStateLog.warn("live-state cleanup failed", {
-          path: homeLiveStateFile,
-          errno: n.code,
-          message: n.message,
-        });
-      }
-    }
+    liveStateTornDown = true;
   };
 
   // ── JSONL transcript watcher ──
@@ -608,9 +644,16 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
                 clearInterval(jsonlPollTimer);
                 jsonlPollTimer = null;
               }
+              if (jsonlDebounceTimer) {
+                clearTimeout(jsonlDebounceTimer);
+                jsonlDebounceTimer = null;
+              }
               if (jsonlWatcher) {
                 try {
-                  jsonlWatcher.close();
+                  const closeResult = jsonlWatcher.close();
+                  if (closeResult && typeof (closeResult as Promise<unknown>).then === "function") {
+                    (closeResult as Promise<unknown>).catch(() => { /* best-effort */ });
+                  }
                 } catch {
                   // best-effort close
                 }
@@ -636,6 +679,9 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     };
 
     const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
+      const wasTurns = liveState.turns;
+      const wasToolCalls = liveState.toolCalls;
+      const wasSignal = liveState.signalKind;
       if (entry.type === "user") {
         liveState.turns += 1;
         // Extract prompt features for signal detection
@@ -680,6 +726,13 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
             }
           }
         }
+      }
+      // Event-driven live-state write: trigger only when meaningful change occurs.
+      const turnsChanged = liveState.turns !== wasTurns;
+      const toolCallsChanged = liveState.toolCalls !== wasToolCalls;
+      const signalChanged = liveState.signalKind !== wasSignal;
+      if (turnsChanged || toolCallsChanged || signalChanged) {
+        writeLiveState();
       }
     };
 
@@ -761,84 +814,158 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       }
     }
 
-    try {
-      jsonlWatcher = fs.watch(projectDir, { persistent: false }, (_ev, filename) => {
-        if (filename && filename.endsWith(".jsonl")) {
-          const fullPath = path.join(projectDir, filename);
-          if (fullPath !== newestJsonl) {
-            let stat: fs.Stats;
-            try {
-              stat = fs.statSync(fullPath);
-            } catch (err) {
-              const n = normalizeErr(err);
-              if (n.code === "ENOENT") {
-                proxyJsonlStatLog.debug("rotation stat ENOENT", {
-                  path: fullPath,
-                  errno: n.code,
-                });
-              } else {
-                proxyJsonlStatLog.warn("rotation stat failed", {
-                  path: fullPath,
-                  errno: n.code,
-                  message: n.message,
-                });
-              }
-              return;
-            }
-            try {
-              if (stat.mtimeMs > newestMtime) {
-                newestMtime = stat.mtimeMs;
-                newestJsonl = fullPath;
-                jsonlReadOffset = 0; // FIX: read new file from start, not EOF
-                // Session reset: clear stale live state
-                liveState.turns = 0;
-                liveState.toolCalls = 0;
-                liveState.lastTool = "";
-                liveState.lastFile = "";
-                liveState.promptScore = 0;
-                liveState.efficiencyScore = 0;
-                liveState.sessionGrade = "C";
-                liveState.signalKind = "";
-                liveState.advice = "";
-                liveState.adviceDetail = "";
-                liveState.beforeExample = "";
-                liveState.afterExample = "";
-                liveState.sessionStartMs = Date.now();
-                liveState.filePatchCounts.clear();
-                liveState.symbolTouchCounts.clear();
-                liveState.lastPromptLength = 0;
-                liveState.lastHasFileRefs = false;
-                liveState.lastHasSymbolRefs = false;
-                liveState.lastHasAcceptanceRef = false;
-                liveState.lastHasTestRef = false;
-                liveState.lastStructureScore = 0;
-                liveState.lastFirstPassGreen = true;
-              }
-            } catch (err) {
-              const n = normalizeErr(err);
-              proxyJsonlWatchLog.warn("rotation reset failed", {
-                path: fullPath,
-                errno: n.code,
-                message: n.message,
-              });
-            }
-          }
-          processNewLines();
+    // Rotation handler: when a new JSONL appears (or an existing one bumps mtime
+    // ahead of our tracked newest), reset offset + live state so the new session
+    // starts clean. Returns true if rotation happened.
+    const handleRotationCandidate = (fullPath: string): boolean => {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch (err) {
+        const n = normalizeErr(err);
+        if (n.code === "ENOENT") {
+          proxyJsonlStatLog.debug("rotation stat ENOENT", {
+            path: fullPath,
+            errno: n.code,
+          });
+        } else {
+          proxyJsonlStatLog.warn("rotation stat failed", {
+            path: fullPath,
+            errno: n.code,
+            message: n.message,
+          });
         }
-      });
-      if (typeof (jsonlWatcher as unknown as { unref?: () => void }).unref === "function") {
-        (jsonlWatcher as unknown as { unref: () => void }).unref();
+        return false;
       }
+      if (stat.mtimeMs <= newestMtime) return false;
+      const oldPath = newestJsonl;
+      newestMtime = stat.mtimeMs;
+      newestJsonl = fullPath;
+      jsonlReadOffset = 0; // read new file from start
+      // Session reset: clear stale live state
+      liveState.turns = 0;
+      liveState.toolCalls = 0;
+      liveState.lastTool = "";
+      liveState.lastFile = "";
+      liveState.promptScore = 0;
+      liveState.efficiencyScore = 0;
+      liveState.sessionGrade = "C";
+      liveState.signalKind = "";
+      liveState.advice = "";
+      liveState.adviceDetail = "";
+      liveState.beforeExample = "";
+      liveState.afterExample = "";
+      liveState.sessionStartMs = Date.now();
+      liveState.filePatchCounts.clear();
+      liveState.symbolTouchCounts.clear();
+      liveState.lastPromptLength = 0;
+      liveState.lastHasFileRefs = false;
+      liveState.lastHasSymbolRefs = false;
+      liveState.lastHasAcceptanceRef = false;
+      liveState.lastHasTestRef = false;
+      liveState.lastStructureScore = 0;
+      liveState.lastFirstPassGreen = true;
+      proxyJsonlWatchLog.info("jsonl rotated", { oldPath, newPath: fullPath });
+      // Write a "session changed" snapshot so statusline reflects rotation immediately.
+      writeLiveState();
+      return true;
+    };
+
+    // Debounced flush: collapses rapid bursts of writes from the wrapped CLI.
+    const scheduleFlush = (): void => {
+      if (jsonlDebounceTimer) return; // already pending; let the existing timer fire
+      jsonlDebounceTimer = setTimeout(() => {
+        jsonlDebounceTimer = null;
+        try {
+          processNewLines();
+        } catch (err) {
+          const n = normalizeErr(err);
+          proxyJsonlWatchLog.warn("debounced flush failed", {
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }, 250);
+      if (typeof jsonlDebounceTimer.unref === "function") jsonlDebounceTimer.unref();
+    };
+
+    let watcherMode: "fs.watch" | "chokidar" = "chokidar";
+    try {
+      const cw = chokidar.watch(path.join(projectDir, "*.jsonl"), {
+        ignoreInitial: false,
+        persistent: false,
+        awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
+      });
+      cw.on("add", (p: string) => {
+        handleRotationCandidate(p);
+        scheduleFlush();
+      });
+      cw.on("change", (p: string) => {
+        // A "change" on a file other than newestJsonl with a fresher mtime is
+        // also a rotation (e.g. CLI resumed an older session file).
+        if (p !== newestJsonl) {
+          handleRotationCandidate(p);
+        }
+        scheduleFlush();
+      });
+      cw.on("error", (err: unknown) => {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("chokidar watcher error", {
+          path: projectDir,
+          errno: n.code,
+          message: n.message,
+        });
+      });
+      jsonlWatcher = cw as unknown as typeof jsonlWatcher;
+      proxyJsonlWatchLog.info("watcher started", {
+        path: projectDir,
+        mode: watcherMode,
+      });
     } catch (err) {
       const n = normalizeErr(err);
-      proxyJsonlWatchLog.warn("fs.watch init failed", {
+      proxyJsonlWatchLog.warn("chokidar init failed, falling back to fs.watch", {
         path: projectDir,
         errno: n.code,
         message: n.message,
       });
+      watcherMode = "fs.watch";
+      try {
+        const fw = fs.watch(projectDir, { persistent: false }, (_ev, filename) => {
+          if (!filename) return;
+          const name = String(filename);
+          if (!name.endsWith(".jsonl")) return;
+          const fullPath = path.join(projectDir, name);
+          if (fullPath !== newestJsonl) {
+            handleRotationCandidate(fullPath);
+          }
+          scheduleFlush();
+        });
+        if (typeof (fw as unknown as { unref?: () => void }).unref === "function") {
+          (fw as unknown as { unref: () => void }).unref();
+        }
+        jsonlWatcher = fw as unknown as typeof jsonlWatcher;
+        proxyJsonlWatchLog.info("watcher started", {
+          path: projectDir,
+          mode: watcherMode,
+        });
+      } catch (innerErr) {
+        const inner = normalizeErr(innerErr);
+        proxyJsonlWatchLog.warn("fs.watch init failed", {
+          path: projectDir,
+          errno: inner.code,
+          message: inner.message,
+        });
+      }
     }
 
-    jsonlPollTimer = setInterval(() => { findNewestJsonl(); processNewLines(); writeLiveState(); }, 2000);
+    // Safety-net: re-run processNewLines every 5 s regardless. If the watcher
+    // missed an event (rare, but happens on some Windows network mounts) this
+    // keeps tracking alive. Note: this does NOT call writeLiveState — that is
+    // event-driven (see processJsonlEntry, finalizeTurn, episode end).
+    jsonlPollTimer = setInterval(() => {
+      findNewestJsonl();
+      processNewLines();
+    }, 5000);
     if (typeof jsonlPollTimer.unref === "function") jsonlPollTimer.unref();
   };
 
@@ -992,6 +1119,12 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       });
     }
     turnState = createEmptyTurn();
+    // Event-driven live-state refresh: a finalized turn changes nothing in
+    // liveState directly, but combo/grade may have shifted via mascot updates
+    // elsewhere. Cheap to write — keeps statusline aligned with turn boundaries.
+    if (liveTrackingEnabled) {
+      writeLiveState();
+    }
   };
 
   const restartIdleTimer = (): void => {
