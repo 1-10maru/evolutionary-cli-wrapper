@@ -36,6 +36,7 @@ import {
   EpisodeArtifacts,
   EpisodeEvent,
   ProxyRunOptions,
+  SupportedCli,
   TurnRecord,
   TurnSummary,
   UsageObservation,
@@ -154,6 +155,10 @@ export function shouldUseLightweightTracking(cwd: string): boolean {
   return false;
 }
 
+function formatMissingOriginalCommandMessage(cli: SupportedCli): string {
+  return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.`;
+}
+
 function createEmptySnapshot(): WorkspaceSnapshot {
   return {
     files: [],
@@ -230,7 +235,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const originalCommand = resolveOriginalCommand(cwd, cli);
   if (!originalCommand) {
     db.close();
-    throw new Error(`Could not resolve the original ${cli} command. Run npm run setup again.`);
+    throw new Error(formatMissingOriginalCommandMessage(cli));
   }
 
   const interactivePassthrough = shouldUseInteractivePassthrough(options.args);

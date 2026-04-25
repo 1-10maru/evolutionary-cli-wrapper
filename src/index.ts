@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import { Command } from "commander";
 import path from "node:path";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
@@ -10,10 +11,22 @@ import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import {
   getShellStatus,
+  resolveOriginalCommand,
   setupShellIntegration,
   undoShellIntegration,
 } from "./shellIntegration";
 import { formatExplain, formatIssueIntake, formatMascotStats, formatRunSummary, formatStats, formatStorage } from "./ui";
+
+/**
+ * Native CLI subcommands that should bypass Evo proxy entirely.
+ * These produce their own stdout and must not be decorated with
+ * mascot output, tracking, or run summaries.
+ */
+const PASSTHROUGH_SUBCOMMANDS = new Set(["review"]);
+
+function formatMissingOriginalCommandMessage(cli: "codex" | "claude"): string {
+  return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.\n`;
+}
 
 const program = new Command();
 program.enablePositionalOptions();
@@ -86,10 +99,42 @@ program
   .argument("[args...]", "Arguments after --")
   .action(async (args: string[], options: Record<string, unknown>) => {
     const cwd = path.resolve(String(options.cwd));
+    const cli = String(options.cli).toLowerCase() as "codex" | "claude";
+
+    // Passthrough: native subcommands like `codex review` bypass Evo entirely
+    if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
+      const originalCommand = resolveOriginalCommand(cwd, cli);
+      if (!originalCommand) {
+        process.stderr.write(formatMissingOriginalCommandMessage(cli));
+        process.exitCode = 1;
+        return;
+      }
+      const ext = path.extname(originalCommand).toLowerCase();
+      const needsShell = ext === ".cmd" || ext === ".bat";
+      const child = needsShell
+        ? spawn(`"${originalCommand}" ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`, {
+            cwd,
+            shell: true,
+            stdio: "inherit",
+            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
+          })
+        : spawn(originalCommand, args, {
+            cwd,
+            stdio: "inherit",
+            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
+          });
+      const code = await new Promise<number>((resolve) => {
+        child.on("error", () => resolve(1));
+        child.on("close", (c) => resolve(c ?? 1));
+      });
+      process.exitCode = code;
+      return;
+    }
+
     const config = ensureEvoConfig(cwd);
     const result = await runProxySession({
       cwd,
-      cli: String(options.cli).toLowerCase() as "codex" | "claude",
+      cli,
       args,
       mode: config.proxy.defaultMode,
     });
