@@ -6,6 +6,7 @@ import path from "node:path";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { readIssueIntake } from "./issueIntake";
+import { getLogger } from "./logger";
 import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
@@ -23,6 +24,9 @@ import { formatExplain, formatIssueIntake, formatMascotStats, formatRunSummary, 
  * mascot output, tracking, or run summaries.
  */
 const PASSTHROUGH_SUBCOMMANDS = new Set(["review"]);
+
+const cliPassthroughLog = getLogger().child("cli.passthrough");
+const cliResolveLog = getLogger().child("cli.resolve");
 
 function formatMissingOriginalCommandMessage(cli: "codex" | "claude"): string {
   return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.\n`;
@@ -105,6 +109,10 @@ program
     if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
       const originalCommand = resolveOriginalCommand(cwd, cli);
       if (!originalCommand) {
+        cliResolveLog.error("could not resolve original CLI", {
+          cli,
+          message: `no live ${cli} install on PATH after excluding evo shim`,
+        });
         process.stderr.write(formatMissingOriginalCommandMessage(cli));
         process.exitCode = 1;
         return;
@@ -127,6 +135,14 @@ program
         child.on("error", () => resolve(1));
         child.on("close", (c) => resolve(c ?? 1));
       });
+      if (code !== 0) {
+        cliPassthroughLog.warn("passthrough exited non-zero", {
+          cli,
+          exitCode: code,
+          // Log only first arg (subcommand name) — never full content/prompt body.
+          args: args[0],
+        });
+      }
       process.exitCode = code;
       return;
     }
@@ -443,7 +459,17 @@ program
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  // Resolution failure messages from runProxySession are loud-by-design;
+  // surface them at ERROR level too so the log file captures them.
+  if (/Could not resolve the original (codex|claude) command/.test(message)) {
+    const cliMatch = /the original (codex|claude) command/.exec(message);
+    cliResolveLog.error("could not resolve original CLI", {
+      cli: cliMatch ? cliMatch[1] : "unknown",
+      message,
+    });
+  }
+  console.error(message);
   process.exitCode = 1;
 });
 

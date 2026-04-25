@@ -72,6 +72,27 @@ const proxyModeLog = getLogger().child("proxy.mode");
 const proxyResolveLog = getLogger().child("proxy.resolve");
 const proxyStartupLog = getLogger().child("proxy.startup");
 const proxySpawnLog = getLogger().child("proxy.spawn");
+const proxyLiveStateLog = getLogger().child("proxy.livestate");
+const proxyJsonlWatchLog = getLogger().child("proxy.jsonl.watch");
+const proxyJsonlStatLog = getLogger().child("proxy.jsonl.stat");
+const proxyEpisodeLog = getLogger().child("proxy.episode");
+const proxySubprocessLog = getLogger().child("proxy.subprocess");
+
+// Module-level ring buffer for JSONL parse failure rate limiting.
+// More than 5 parse failures within 10 seconds escalates to ERROR and
+// disables the watcher for the remainder of the session.
+const PARSE_FAIL_WINDOW_MS = 10_000;
+const PARSE_FAIL_THRESHOLD = 5;
+let parseFailTimestamps: number[] = [];
+let parseFailCircuitTripped = false;
+
+function normalizeErr(err: unknown): { message: string; code?: string; stack?: string } {
+  if (err instanceof Error) {
+    const e = err as Error & { code?: string };
+    return { message: e.message, code: e.code, stack: e.stack };
+  }
+  return { message: String(err) };
+}
 
 function createEvent(
   type: EpisodeEvent["type"],
@@ -415,15 +436,56 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       afterExample: liveState.afterExample,
     };
     const json = JSON.stringify(payload);
-    try { fs.writeFileSync(liveStateFile, json); } catch { /* ignore */ }
-    try { fs.writeFileSync(homeLiveStateFile, json); } catch { /* ignore */ }
+    try {
+      fs.writeFileSync(liveStateFile, json);
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyLiveStateLog.warn("live-state write failed", {
+        path: liveStateFile,
+        errno: n.code,
+        message: n.message,
+      });
+    }
+    try {
+      fs.writeFileSync(homeLiveStateFile, json);
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyLiveStateLog.warn("live-state write failed", {
+        path: homeLiveStateFile,
+        errno: n.code,
+        message: n.message,
+      });
+    }
   };
 
   const teardownLiveTracking = (): void => {
     if (jsonlPollTimer) { clearInterval(jsonlPollTimer); jsonlPollTimer = null; }
     if (jsonlWatcher) { jsonlWatcher.close(); jsonlWatcher = null; }
-    try { fs.unlinkSync(liveStateFile); } catch { /* ignore */ }
-    try { fs.unlinkSync(homeLiveStateFile); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(liveStateFile);
+    } catch (err) {
+      const n = normalizeErr(err);
+      // ENOENT is expected when no live-state was ever written; skip noise.
+      if (n.code !== "ENOENT") {
+        proxyLiveStateLog.warn("live-state cleanup failed", {
+          path: liveStateFile,
+          errno: n.code,
+          message: n.message,
+        });
+      }
+    }
+    try {
+      fs.unlinkSync(homeLiveStateFile);
+    } catch (err) {
+      const n = normalizeErr(err);
+      if (n.code !== "ENOENT") {
+        proxyLiveStateLog.warn("live-state cleanup failed", {
+          path: homeLiveStateFile,
+          errno: n.code,
+          message: n.message,
+        });
+      }
+    }
   };
 
   // ── JSONL transcript watcher ──
@@ -440,7 +502,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
           break;
         }
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyJsonlWatchLog.warn("readdir failed for claude projects dir", {
+        path: claudeProjectsDir,
+        errno: n.code,
+        message: n.message,
+      });
+    }
     if (!projectDir || !fs.existsSync(projectDir)) return;
 
     let newestJsonl = "";
@@ -452,19 +521,62 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         for (const entry of fs.readdirSync(projectDir)) {
           if (!entry.endsWith(".jsonl")) continue;
           const fullPath = path.join(projectDir, entry);
-          const stat = fs.statSync(fullPath);
+          let stat: fs.Stats;
+          try {
+            stat = fs.statSync(fullPath);
+          } catch (err) {
+            const n = normalizeErr(err);
+            if (n.code === "ENOENT") {
+              proxyJsonlStatLog.debug("jsonl stat ENOENT (transient)", {
+                path: fullPath,
+                errno: n.code,
+              });
+            } else {
+              proxyJsonlStatLog.warn("jsonl stat failed", {
+                path: fullPath,
+                errno: n.code,
+                message: n.message,
+              });
+            }
+            continue;
+          }
           if (stat.mtimeMs > newestMtime) {
             newestMtime = stat.mtimeMs;
             newestJsonl = fullPath;
           }
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("readdir failed for project dir", {
+          path: projectDir,
+          errno: n.code,
+          message: n.message,
+        });
+      }
     };
 
     const processNewLines = (): void => {
-      if (!newestJsonl) return;
+      if (!newestJsonl || parseFailCircuitTripped) return;
       try {
-        const stat = fs.statSync(newestJsonl);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(newestJsonl);
+        } catch (err) {
+          const n = normalizeErr(err);
+          if (n.code === "ENOENT") {
+            proxyJsonlStatLog.debug("jsonl stat ENOENT (file rotated/removed)", {
+              path: newestJsonl,
+              errno: n.code,
+            });
+          } else {
+            proxyJsonlStatLog.warn("jsonl stat failed", {
+              path: newestJsonl,
+              errno: n.code,
+              message: n.message,
+            });
+          }
+          return;
+        }
         if (stat.size <= jsonlReadOffset) return;
         const fd = fs.openSync(newestJsonl, "r");
         const buf = Buffer.alloc(Math.min(stat.size - jsonlReadOffset, 64 * 1024));
@@ -473,9 +585,54 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         jsonlReadOffset += buf.length;
         for (const line of buf.toString("utf8").split("\n")) {
           if (!line.trim()) continue;
-          try { processJsonlEntry(JSON.parse(line)); } catch { /* skip */ }
+          try {
+            processJsonlEntry(JSON.parse(line));
+          } catch (err) {
+            const n = normalizeErr(err);
+            const now = Date.now();
+            parseFailTimestamps.push(now);
+            // prune timestamps older than the window
+            parseFailTimestamps = parseFailTimestamps.filter(
+              (t) => now - t <= PARSE_FAIL_WINDOW_MS,
+            );
+            if (parseFailTimestamps.length > PARSE_FAIL_THRESHOLD) {
+              parseFailCircuitTripped = true;
+              proxyJsonlWatchLog.error("excessive parse failures, disabling watcher", {
+                path: newestJsonl,
+                failuresInWindow: parseFailTimestamps.length,
+                windowMs: PARSE_FAIL_WINDOW_MS,
+                lastErrno: n.code,
+                lastMessage: n.message,
+              });
+              if (jsonlPollTimer) {
+                clearInterval(jsonlPollTimer);
+                jsonlPollTimer = null;
+              }
+              if (jsonlWatcher) {
+                try {
+                  jsonlWatcher.close();
+                } catch {
+                  // best-effort close
+                }
+                jsonlWatcher = null;
+              }
+              return;
+            }
+            proxyJsonlWatchLog.warn("jsonl parse failed", {
+              path: newestJsonl,
+              errno: n.code,
+              message: n.message,
+            });
+          }
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("jsonl read failed", {
+          path: newestJsonl,
+          errno: n.code,
+          message: n.message,
+        });
+      }
     };
 
     const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
@@ -585,7 +742,23 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
     findNewestJsonl();
     if (newestJsonl) {
-      try { jsonlReadOffset = fs.statSync(newestJsonl).size; } catch { /* ignore */ }
+      try {
+        jsonlReadOffset = fs.statSync(newestJsonl).size;
+      } catch (err) {
+        const n = normalizeErr(err);
+        if (n.code === "ENOENT") {
+          proxyJsonlStatLog.debug("initial jsonl stat ENOENT", {
+            path: newestJsonl,
+            errno: n.code,
+          });
+        } else {
+          proxyJsonlStatLog.warn("initial jsonl stat failed", {
+            path: newestJsonl,
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }
     }
 
     try {
@@ -593,8 +766,26 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         if (filename && filename.endsWith(".jsonl")) {
           const fullPath = path.join(projectDir, filename);
           if (fullPath !== newestJsonl) {
+            let stat: fs.Stats;
             try {
-              const stat = fs.statSync(fullPath);
+              stat = fs.statSync(fullPath);
+            } catch (err) {
+              const n = normalizeErr(err);
+              if (n.code === "ENOENT") {
+                proxyJsonlStatLog.debug("rotation stat ENOENT", {
+                  path: fullPath,
+                  errno: n.code,
+                });
+              } else {
+                proxyJsonlStatLog.warn("rotation stat failed", {
+                  path: fullPath,
+                  errno: n.code,
+                  message: n.message,
+                });
+              }
+              return;
+            }
+            try {
               if (stat.mtimeMs > newestMtime) {
                 newestMtime = stat.mtimeMs;
                 newestJsonl = fullPath;
@@ -623,7 +814,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
                 liveState.lastStructureScore = 0;
                 liveState.lastFirstPassGreen = true;
               }
-            } catch { /* ignore */ }
+            } catch (err) {
+              const n = normalizeErr(err);
+              proxyJsonlWatchLog.warn("rotation reset failed", {
+                path: fullPath,
+                errno: n.code,
+                message: n.message,
+              });
+            }
           }
           processNewLines();
         }
@@ -631,7 +829,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       if (typeof (jsonlWatcher as unknown as { unref?: () => void }).unref === "function") {
         (jsonlWatcher as unknown as { unref: () => void }).unref();
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyJsonlWatchLog.warn("fs.watch init failed", {
+        path: projectDir,
+        errno: n.code,
+        message: n.message,
+      });
+    }
 
     jsonlPollTimer = setInterval(() => { findNewestJsonl(); processNewLines(); writeLiveState(); }, 2000);
     if (typeof jsonlPollTimer.unref === "function") jsonlPollTimer.unref();
@@ -739,42 +944,53 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       maxLines: config.nudge.maxInlineLines,
     });
 
-    turnRecords.push({
-      turnIndex,
-      startedAt: turnState.startedAt,
-      finishedAt: new Date().toISOString(),
-      promptProfile: turnPromptProfile,
-      inputText: turnState.inputText.trim(),
-      outputPreview: turnState.outputText.trim().slice(-300),
-      events: [...turnState.events],
-    });
-    turnSummaries.push(summary);
-    const leadMessage = summary.adviceMessages[0];
-    if (leadMessage) {
-      recentMessageKeys.push(leadMessage.key);
-      if (recentMessageKeys.length > 12) recentMessageKeys.shift();
-      const strongestSaving = Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0);
-      const special =
-        leadMessage.category === "recovery" ||
-        leadMessage.category === "exploration_focus" ||
-        strongestSaving >= 0.35;
-      const rendered = special
-        ? renderMascotSpecialEvent(mascotProfile, {
-            message: leadMessage,
-            summary,
-          })
-        : renderMascotTurnLine(mascotProfile, summary);
-      process.stdout.write(`\r\n${rendered}\r\n`);
-    } else {
-      process.stdout.write(`\r\n${renderMascotTurnLine(mascotProfile, summary)}\r\n`);
-    }
-    pushTurnEvent(
-      createEvent("turn_closed", "proxy", {
+    try {
+      turnRecords.push({
         turnIndex,
-        interventionMode: summary.intervention.mode,
-        adviceCount: summary.adviceMessages.length,
-      }),
-    );
+        startedAt: turnState.startedAt,
+        finishedAt: new Date().toISOString(),
+        promptProfile: turnPromptProfile,
+        inputText: turnState.inputText.trim(),
+        outputPreview: turnState.outputText.trim().slice(-300),
+        events: [...turnState.events],
+      });
+      turnSummaries.push(summary);
+      const leadMessage = summary.adviceMessages[0];
+      if (leadMessage) {
+        recentMessageKeys.push(leadMessage.key);
+        if (recentMessageKeys.length > 12) recentMessageKeys.shift();
+        const strongestSaving = Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0);
+        const special =
+          leadMessage.category === "recovery" ||
+          leadMessage.category === "exploration_focus" ||
+          strongestSaving >= 0.35;
+        const rendered = special
+          ? renderMascotSpecialEvent(mascotProfile, {
+              message: leadMessage,
+              summary,
+            })
+          : renderMascotTurnLine(mascotProfile, summary);
+        process.stdout.write(`\r\n${rendered}\r\n`);
+      } else {
+        process.stdout.write(`\r\n${renderMascotTurnLine(mascotProfile, summary)}\r\n`);
+      }
+      pushTurnEvent(
+        createEvent("turn_closed", "proxy", {
+          turnIndex,
+          interventionMode: summary.intervention.mode,
+          adviceCount: summary.adviceMessages.length,
+        }),
+      );
+      proxyEpisodeLog.info("turn summary written", { episodeId, turnIndex });
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyEpisodeLog.warn("turn summary write failed", {
+        episodeId,
+        turnIndex,
+        errno: n.code,
+        message: n.message,
+      });
+    }
     turnState = createEmptyTurn();
   };
 
@@ -821,7 +1037,15 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", (code, signal) => {
+      const ctx = { exitCode: code, signal };
+      if ((code !== null && code !== 0) || signal !== null) {
+        proxySubprocessLog.warn("subprocess exited", ctx);
+      } else {
+        proxySubprocessLog.info("subprocess exited", ctx);
+      }
+      resolve(code ?? 1);
+    });
   });
 
   process.off("SIGINT", onProcessExit);

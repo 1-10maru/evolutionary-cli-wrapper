@@ -14,6 +14,15 @@ import { SupportedCli } from "./types";
 
 const shellPathLog = getLogger().child("shell.path");
 const shellResolveLog = getLogger().child("shell.resolve");
+const shellRegistryLog = getLogger().child("shell.registry");
+
+function normalizeErr(err: unknown): { message: string; code?: string } {
+  if (err instanceof Error) {
+    const e = err as Error & { code?: string };
+    return { message: e.message, code: e.code };
+  }
+  return { message: String(err) };
+}
 
 const PROFILE_START = "# >>> evo shell integration >>>";
 const PROFILE_END = "# <<< evo shell integration <<<";
@@ -86,7 +95,12 @@ function addToUserPath(binDir: string): void {
     runPowerShell(
       `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
     );
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry write failed (addToUserPath)", {
+      errno: n.code,
+      message: n.message,
+    });
     /* best-effort — user can add manually */
   }
 }
@@ -108,7 +122,12 @@ function removeFromUserPath(binDir: string): void {
     runPowerShell(
       `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
     );
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry write failed (removeFromUserPath)", {
+      errno: n.code,
+      message: n.message,
+    });
     /* best-effort */
   }
 }
@@ -145,7 +164,12 @@ function getCmdAutoRunValue(): string | null {
       ].join("; "),
     );
     return value || null;
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry read failed (getCmdAutoRunValue)", {
+      errno: n.code,
+      message: n.message,
+    });
     return null;
   }
 }
