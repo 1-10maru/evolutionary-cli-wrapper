@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Evo v3.0 statusline — Always-on, self-tracking. Works with or without proxy."""
-import json, sys, os, time
+import json, sys, os, time, hashlib
 if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8', newline='\n')
 data = json.load(sys.stdin)
 R = '\033[0m'
 DIM = '\033[2m'
 BOLD = '\033[1m'
 CYAN = '\033[38;2;255;185;80m'
+_SUBTLE = '\033[38;2;160;160;180m'
 
 def gradient(pct):
     if pct < 50:
@@ -28,7 +29,7 @@ cwd_norm = cwd.replace('\\', '/').replace(home, '~')
 cwd_parts = cwd_norm.split('/')
 cwd_display = '\u2026/' + '/'.join(cwd_parts[-2:]) if len(cwd_parts) > 3 else cwd_norm
 
-SEP = f' {DIM}\u00b7{R} '
+SEP = f' {_SUBTLE}\u00b7{R} '
 usage = []
 ctx = data.get('context_window', {}).get('used_percentage')
 if ctx is not None:
@@ -506,17 +507,45 @@ _self = _load_self()
 _now_s = time.time()
 _curr_ctx = ctx if ctx is not None else 0
 _prev_ctx = _self.get('ctx_pct', 0)
-_session_reset = (_prev_ctx > 30 and _curr_ctx < 5) or _self.get('cwd') != cwd
+_session_id = data.get('session_id', '') or data.get('sessionId', '')
+_prev_session_id = _self.get('session_id', '')
+# Reset on: cwd change, session_id change, or large context drop (signal of /clear)
+_session_reset = (
+    _self.get('cwd') != cwd
+    or (_session_id and _prev_session_id and _session_id != _prev_session_id)
+    or (_prev_ctx > 30 and _curr_ctx < 5)
+)
 if not _self or _session_reset:
-    _self = {'start': _now_s, 'calls': 0, 'tip_idx': _self.get('tip_idx', 0), 'cwd': cwd}
-_self['calls'] = _self.get('calls', 0) + 1
+    _self = {'start': _now_s, 'calls': 0, 'tip_idx': _self.get('tip_idx', 0),
+             'cwd': cwd, 'session_id': _session_id, 'last_prompt_hash': ''}
+# Increment `calls` only when a NEW user prompt arrives. Claude Code re-renders
+# the statusline many times per turn (token streams, tool calls, etc.); a naive
+# per-render bump inflates the counter to dozens within a single user message.
+# Detection: hash the `prompt` field (last user message) Claude Code passes in stdin.
+_prompt = data.get('prompt') or data.get('user_prompt') or ''
+_prompt_hash = hashlib.md5(_prompt.encode('utf-8', 'replace')).hexdigest() if _prompt else ''
+_prev_hash = _self.get('last_prompt_hash', '')
+if _prompt_hash and _prompt_hash != _prev_hash:
+    _self['calls'] = _self.get('calls', 0) + 1
+    _self['last_prompt_hash'] = _prompt_hash
+elif not _prompt_hash and _self.get('calls', 0) == 0:
+    # First render of a brand-new session with no prompt field yet → start at 1.
+    _self['calls'] = 1
 _self['last'] = _now_s
 _self['ctx_pct'] = _curr_ctx
+_self['session_id'] = _session_id
 _save_self(_self)
 
 # ── Build evo display ──
 _line1_bits = []
 _line2 = ""
+
+# Suppress proxy data when session just started (calls<=1). The proxy's `.evo-live.json`
+# carries cumulative state from prior sessions (sessionGrade/promptScore/advice/before/after)
+# which is meaningless on a fresh session before any user message has been graded.
+if _evo and _evo_source == 'proxy' and _self.get('calls', 0) <= 1:
+    _evo = None
+    _evo_source = None
 
 if _evo and _evo_source in ('proxy', 'proxy_stale'):
     # ═══ Full proxy data ═══
@@ -538,17 +567,23 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
 
     _gc = _grade_color(_grade)
     if _is_stale:
-        # Stale fallback: render last-known state in dim/gray with a marker so
-        # the user knows it's lagging, instead of EvoPet vanishing entirely.
-        _line1_bits = [f"{DIM}{_avatar} {_nick} (待機中){R}"]
+        # Stale fallback: render last-known state with a "(待機中)" marker.
+        # Use a subtle (but readable) color rather than DIM, which is hard to see.
+        _line1_bits = [f"{_SUBTLE}{_avatar} {_nick} (待機中){R}"]
     else:
         _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
     if _grade:
         _line1_bits.append(f"{_gc}{BOLD}{_grade_label(_grade)}{R}")
-    # Counter source: userMessages (real human-sent count) when proxy provides the field,
-    # else fall back to turns (legacy total-events count) for old proxy builds.
-    _conv_count = _user_msgs if 'userMessages' in _evo else _turns
+    # Counter source: per-session self-tracked calls (resets on session_id / cwd change).
+    # Proxy `userMessages` is preferred only if it equals or undershoots self.calls
+    # (newer proxy builds are per-session-aware). `turns` is cumulative across sessions
+    # and shows wrong values on fresh start.
+    _self_calls = _self.get('calls', 1)
+    if 'userMessages' in _evo and _user_msgs <= _self_calls + 2:
+        _conv_count = _user_msgs
+    else:
+        _conv_count = _self_calls
     if _conv_count > 0:
         _line1_bits.append(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}")
     if _ps > 0:
@@ -569,7 +604,8 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
         _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_isg}%{R}")
     elif _isg == -1:
         # No ISG data yet \u2014 render "-" per design (instead of fake 100).
-        _line1_bits.append(f"{DIM}\u80b2\u6210\u5ea6 -{R}")
+        # Use subtle color rather than DIM so the placeholder is still readable.
+        _line1_bits.append(f"{_SUBTLE}\u80b2\u6210\u5ea6 -{R}")
     elif _bond < 100:
         _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_bond}%{R}")
 
@@ -628,7 +664,7 @@ else:
     else:
         _line1_bits.append(f"{BOLD}{_EVO_GREEN}{_comment}{R}")
 
-    _line1_bits.append(f"{DIM}{_calls}\u56de\u76ee{R}")
+    _line1_bits.append(f"{BOLD}{_EVO_INFO}{_calls}\u56de\u76ee{R}")
 
     # Tip rotation
     _tip = _TIPS[_calls % len(_TIPS)]

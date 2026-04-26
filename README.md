@@ -222,7 +222,7 @@ bash install/evopet-uninstall.sh
 
 **データ更新の仕組み（イベントドリブン）:**
 
-`~/.claude/base_statusline.py` は `~/.evo-live.json` を読みます。このファイルは proxy がターン終了 / シグナル発火 / エピソード終了の各イベント時にだけ書き換えるため、ポーリングはなく、表示と内部状態がずれません。proxy が動いていない時（Desktop App 起動等）も自己追跡フォールバックが動き、16 種類の tip をローテーション表示します。proxy 経由時は sessionGrade、signalDetector（9 種類の問題シグナル + 3 種類の賞賛シグナル）、25 種類の tip が利用可能です。
+`~/.claude/base_statusline.py` は `~/.claude/.evo-live.json` を読みます（実体ファイルの実際の配置先）。このファイルは proxy がターン終了 / シグナル発火 / エピソード終了の各イベント時にだけ書き換えるため、ポーリングはなく、表示と内部状態がずれません。proxy が動いていない時（Desktop App 起動等）も自己追跡フォールバックが動き、16 種類の tip をローテーション表示します。proxy 経由時は sessionGrade、signalDetector（9 種類の問題シグナル + 3 種類の賞賛シグナル）、25 種類の tip が利用可能です。
 
 **proxy 経由時（フルデータ）:**
 ```text
