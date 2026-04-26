@@ -55,13 +55,20 @@ function isLegacyEvoBackupCommand(commandPath: string): boolean {
 }
 
 function rankResolvedCommandCandidate(commandPath: string): number {
+  // Ranking is deterministic across platforms: Evo wraps Windows-native CLI shims
+  // (claude.cmd / claude.exe), and tests must verify the same preference order on
+  // Linux CI as on Windows hosts.
   const ext = path.extname(commandPath).toLowerCase();
-  if (process.platform !== "win32") return ext ? 1 : 0;
   if (ext === ".exe") return 0;
   if (ext === ".cmd") return 1;
   if (ext === ".bat") return 2;
   if (ext === ".ps1") return 3;
-  return 4;
+  if (ext === ".sh") return 5;
+  if (ext === ".bash") return 6;
+  // Extensionless shim (npm posix wrapper) — ranked after Windows-native shims so
+  // that `.cmd` siblings win the resolution race on both platforms.
+  if (!ext) return 4;
+  return 7;
 }
 
 function runPowerShell(command: string): string {
@@ -297,9 +304,19 @@ function isUsableCommandCandidate(commandPath: string): boolean {
 function getSiblingCommandCandidates(commandPath: string, cli: Exclude<SupportedCli, "generic">): string[] {
   const dir = path.dirname(commandPath);
   const base = path.join(dir, cli);
-  const candidates = process.platform === "win32"
-    ? [base, `${base}.cmd`, `${base}.exe`, `${base}.bat`, `${base}.ps1`]
-    : [base, `${base}.sh`, `${base}.bash`];
+  // Always probe both Windows-native (.cmd/.exe/.bat/.ps1) and Unix-style (.sh/.bash)
+  // siblings. Evo proxies CLIs that ship Windows shims via npm even when the host
+  // OS is Linux (e.g. CI), so the legacy self-heal path must locate the .cmd
+  // sibling regardless of process.platform.
+  const candidates = [
+    base,
+    `${base}.cmd`,
+    `${base}.exe`,
+    `${base}.bat`,
+    `${base}.ps1`,
+    `${base}.sh`,
+    `${base}.bash`,
+  ];
   return dedupeCommandCandidates(candidates)
     .filter((candidate) => normalize(candidate) !== normalize(commandPath))
     .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b));
