@@ -545,4 +545,12 @@ export interface LiveStatePayload {
   signalKind: AdviceSignalKind | "";
   beforeExample: string;
   afterExample: string;
+  /** Last observed exit code of the wrapped CLI. null if it has not exited yet. */
+  lastExitCode?: number | null;
+  /** Last observed termination signal (e.g. "SIGTERM"). null if exit was clean. */
+  lastExitSignal?: string | null;
+  /** Epoch ms timestamp of the last exit observation. */
+  lastExitAt?: number | null;
+  /** Last subcommand observed (e.g. "review" for passthrough). */
+  lastSubcommand?: string | null;
 }

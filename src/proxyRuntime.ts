@@ -417,6 +417,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     lastHasTestRef: false,
     lastStructureScore: 0,
     lastFirstPassGreen: true,
+    // Exit tracking — populated when the wrapped CLI subprocess closes.
+    lastExitCode: null as number | null,
+    lastExitSignal: null as string | null,
+    lastExitAt: null as number | null,
+    lastSubcommand: null as string | null,
   };
 
   const atomicWrite = (target: string, json: string): void => {
@@ -466,6 +471,10 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       signalKind: liveState.signalKind,
       beforeExample: liveState.beforeExample,
       afterExample: liveState.afterExample,
+      lastExitCode: liveState.lastExitCode,
+      lastExitSignal: liveState.lastExitSignal,
+      lastExitAt: liveState.lastExitAt,
+      lastSubcommand: liveState.lastSubcommand,
     };
     const json = JSON.stringify(payload);
 
@@ -1168,15 +1177,31 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     child.stderr?.on("data", (chunk: Buffer) => consumeStream("stderr", chunk));
   }
 
+  const subprocessStartMs = Date.now();
+  let exitSignal: string | null = null;
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
     child.on("close", (code, signal) => {
-      const ctx = { exitCode: code, signal };
+      const durationMs = Date.now() - subprocessStartMs;
+      const ctx = { exitCode: code, signal, durationMs };
       if ((code !== null && code !== 0) || signal !== null) {
         proxySubprocessLog.warn("subprocess exited", ctx);
       } else {
         proxySubprocessLog.info("subprocess exited", ctx);
       }
+      // Record exit details into live state and flush so observers
+      // (statusline / future analytics) can see how the wrapped CLI ended.
+      liveState.lastExitCode = code;
+      liveState.lastExitSignal = signal === null ? null : String(signal);
+      liveState.lastExitAt = Date.now();
+      liveState.lastSubcommand = options.args[0] ?? null;
+      exitSignal = liveState.lastExitSignal;
+      writeLiveState();
+      proxySubprocessLog.info("live state updated with exit code", {
+        exitCode: code,
+        signal,
+        durationMs,
+      });
       resolve(code ?? 1);
     });
   });
@@ -1293,6 +1318,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   db.finishEpisode(episodeId, {
     finishedAt: new Date().toISOString(),
     exitCode,
+    exitSignal,
     terminationReason: exitCode === 0 ? "completed" : "child_exit_non_zero",
     summary,
     observedTotalTokens: usageObservations[usageObservations.length - 1]?.totalTokens ?? null,

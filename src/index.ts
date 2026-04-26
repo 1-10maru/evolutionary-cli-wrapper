@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { Command } from "commander";
 import path from "node:path";
@@ -31,6 +32,48 @@ const cliResolveLog = getLogger().child("cli.resolve");
 
 function formatMissingOriginalCommandMessage(cli: "codex" | "claude"): string {
   return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.\n`;
+}
+
+/**
+ * Patch the wrapped-CLI live-state files with passthrough exit info, but ONLY
+ * if the files already exist. Passthrough subcommands (e.g. `codex review`)
+ * should never CREATE these files — that is the proxy runtime's job.
+ *
+ * Failures are swallowed silently; this is best-effort observability.
+ */
+function patchLiveStateOnPassthroughExit(
+  cwd: string,
+  exitCode: number,
+  subcommand: string,
+): void {
+  const targets = [
+    path.join(cwd, ".evo", "live-state.json"),
+    path.join(os.homedir(), ".claude", ".evo-live.json"),
+  ];
+  const now = Date.now();
+  for (const target of targets) {
+    try {
+      if (!fs.existsSync(target)) continue;
+      const raw = fs.readFileSync(target, "utf8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      parsed.lastExitCode = exitCode;
+      parsed.lastExitSignal = null;
+      parsed.lastExitAt = now;
+      parsed.lastSubcommand = subcommand;
+      parsed.updatedAt = now;
+      const json = JSON.stringify(parsed);
+      const tmp = `${target}.tmp`;
+      try {
+        fs.writeFileSync(tmp, json);
+        fs.renameSync(tmp, target);
+      } catch {
+        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+        try { fs.writeFileSync(target, json); } catch { /* ignore */ }
+      }
+    } catch {
+      // best-effort — never fail the passthrough on observability writes
+    }
+  }
 }
 
 const program = new Command();
@@ -144,6 +187,9 @@ program
           args: args[0],
         });
       }
+      // Best-effort: patch existing live-state files so observers see the
+      // passthrough exit code. Never CREATE files here.
+      patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
       process.exitCode = code;
       return;
     }
