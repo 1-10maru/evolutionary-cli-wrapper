@@ -92,6 +92,16 @@ export interface TokenCalibrationEstimate {
   sampleSize: number;
 }
 
+export interface RecentEpisodeRecord {
+  promptScore: number;
+  structureScore: number;
+  grade: string;
+  hadFixLoop: boolean;
+  hadSearchLoop: boolean;
+  signalKind: string;
+  ts: number;
+}
+
 export interface MascotProfile {
   speciesId: string;
   nickname: string;
@@ -104,6 +114,7 @@ export interface MascotProfile {
   lastMessages: string[];
   comboCount: number;
   bestCombo: number;
+  recentEpisodes?: RecentEpisodeRecord[];
 }
 
 export interface MascotRenderState {

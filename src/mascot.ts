@@ -8,6 +8,7 @@ import {
   MascotProfile,
   MascotRenderState,
   NudgeCategory,
+  RecentEpisodeRecord,
   RenderedAdviceMessage,
   TurnSummary,
 } from "./types";
@@ -50,6 +51,8 @@ function mascotSpeciesStrict(speciesId: string) {
   return MASCOT_SPECIES.find((item) => item.id === speciesId) ?? null;
 }
 
+const ISG_WINDOW = 20;
+
 function defaultMascot(): MascotProfile {
   return {
     speciesId: "chick",
@@ -63,7 +66,72 @@ function defaultMascot(): MascotProfile {
     lastMessages: [],
     comboCount: 0,
     bestCombo: 0,
+    recentEpisodes: [],
   };
+}
+
+/**
+ * Ideal State Gauge — quality-based 育成度.
+ *
+ * Replaces stage-EXP progressPercent with a rolling-window quality metric.
+ * 100% only when prompt quality is sustained at ideal level. Returns -1 when
+ * the window is empty (caller should treat as "no data" / 測定中).
+ */
+export function computeIdealStateGauge(profile: MascotProfile): number {
+  const window = profile.recentEpisodes ?? [];
+  if (window.length === 0) return -1;
+
+  const avgPrompt = window.reduce((s, e) => s + e.promptScore, 0) / window.length;
+  const avgStruct = window.reduce((s, e) => s + e.structureScore, 0) / window.length;
+  const loopCount = window.filter((e) => e.hadFixLoop || e.hadSearchLoop).length;
+  const loopRate = loopCount / window.length;
+  const nscCount = window.filter((e) => e.signalKind === "no_success_criteria").length;
+  const nscRate = nscCount / window.length;
+
+  let streakA = 0;
+  for (const ep of window) {
+    if (ep.grade === "A") streakA++;
+    else break;
+  }
+
+  const penaltyLoop = Math.min(30, loopRate * 100);
+  const penaltyNsc = Math.min(20, nscRate * 60);
+  const bonusStreak = Math.min(15, streakA * 3);
+
+  let isg = avgPrompt + bonusStreak - penaltyLoop - penaltyNsc;
+  isg = Math.max(0, Math.min(100, Math.round(isg)));
+
+  // Gate: 100% only when ALL conditions met
+  const last5 = window.slice(0, 5);
+  const last5LoopFree = last5.every((e) => !e.hadFixLoop && !e.hadSearchLoop);
+  const gateMet = avgPrompt >= 90 && avgStruct >= 4 && last5LoopFree;
+  if (!gateMet) isg = Math.min(isg, 90);
+
+  return isg;
+}
+
+export interface QualityMetrics {
+  promptScore: number;
+  sessionGrade: string;
+  signalKind: string;
+}
+
+function appendRecentEpisode(
+  profile: MascotProfile,
+  summary: EpisodeSummary,
+  metrics: QualityMetrics,
+): void {
+  const record: RecentEpisodeRecord = {
+    promptScore: metrics.promptScore,
+    structureScore: summary.structureScore ?? 0,
+    grade: metrics.sessionGrade,
+    hadFixLoop: !!summary.fixLoopOccurred,
+    hadSearchLoop: !!summary.searchLoopOccurred,
+    signalKind: metrics.signalKind,
+    ts: Date.now(),
+  };
+  const existing = profile.recentEpisodes ?? [];
+  profile.recentEpisodes = [record, ...existing].slice(0, ISG_WINDOW);
 }
 
 function ensureMascotDir(cwd: string): void {
@@ -82,14 +150,12 @@ function stageIndex(stage: MascotProfile["stage"]): number {
   return STAGE_THRESHOLDS.findIndex((item) => item.stage === stage);
 }
 
-function progressPercent(totalBondExp: number): number {
-  const stage = stageForExp(totalBondExp);
-  const index = stageIndex(stage);
-  const current = STAGE_THRESHOLDS[index];
-  const next = STAGE_THRESHOLDS[Math.min(index + 1, STAGE_THRESHOLDS.length - 1)];
-  if (!next || next.stage === stage) return 100;
-  const progress = (totalBondExp - current.minExp) / Math.max(1, next.minExp - current.minExp);
-  return Math.max(0, Math.min(100, Math.round(progress * 100)));
+function progressPercent(profile: MascotProfile): number {
+  return computeIdealStateGauge(profile);
+}
+
+function formatGauge(value: number): string {
+  return value < 0 ? "測定中" : `${value}%`;
 }
 
 function pickMood(summary: EpisodeSummary): MascotMood {
@@ -117,13 +183,20 @@ export function loadMascotProfile(cwd: string): MascotProfile {
     return profile;
   }
 
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<MascotProfile>;
+  let parsed: Partial<MascotProfile> = {};
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<MascotProfile>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[evopet] mascot.json read/parse failed (${msg}); falling back to defaults\n`);
+  }
   const profile: MascotProfile = {
     ...defaultMascot(),
     ...parsed,
     lastMessages: parsed.lastMessages ?? [],
     comboCount: parsed.comboCount ?? 0,
     bestCombo: parsed.bestCombo ?? 0,
+    recentEpisodes: parsed.recentEpisodes ?? [],
   };
   fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
   return profile;
@@ -139,7 +212,7 @@ export function renderMascotState(profile: MascotProfile): MascotRenderState {
   const species = mascotSpecies(profile.speciesId);
   return {
     profile,
-    progressPercent: progressPercent(profile.totalBondExp),
+    progressPercent: progressPercent(profile),
     level: stageIndex(profile.stage) + 1,
     avatar: species.emoji,
     accentTone: threshold.tone,
@@ -220,7 +293,12 @@ export function computeSkillExp(summary: EpisodeSummary, comboCount: number, avg
   return exp;
 }
 
-export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary, avgRecentStructureScore?: number): MascotEpisodeUpdate {
+export function updateMascotAfterEpisode(
+  cwd: string,
+  summary: EpisodeSummary,
+  avgRecentStructureScore?: number,
+  qualityMetrics?: QualityMetrics,
+): MascotEpisodeUpdate {
   const previous = loadMascotProfile(cwd);
   const previousStage = previous.stage;
 
@@ -240,6 +318,10 @@ export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary, a
     streakDays: summary.firstPassGreen ? previous.streakDays + 1 : 0,
     lastSeenAt: new Date().toISOString(),
   };
+  // Append rolling-window record for Ideal State Gauge
+  if (qualityMetrics) {
+    appendRecentEpisode(nextProfile, summary, qualityMetrics);
+  }
   saveMascotProfile(cwd, nextProfile);
 
   return {
@@ -248,7 +330,7 @@ export function updateMascotAfterEpisode(cwd: string, summary: EpisodeSummary, a
     nextStage,
     gainedExp: expAwarded,
     totalBondExp,
-    progressPercent: progressPercent(totalBondExp),
+    progressPercent: progressPercent(nextProfile),
     leveledUp: stageIndex(nextStage) > stageIndex(previousStage),
     stageChanged: previousStage !== nextStage,
     mood: nextProfile.mood,
@@ -327,7 +409,7 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
   const comboText = profile.comboCount >= 3 ? colorize(` | ${profile.comboCount}連続いい感じ!`, "accent", true) : "";
 
   // Bond as 育成度
-  const expLabel = dim(`育成度 ${state.progressPercent}%`);
+  const expLabel = dim(`育成度 ${formatGauge(state.progressPercent)}`);
 
   return `${prefix} ${action} | ${savingLabel}${comboText} | ${expLabel}`;
 }
@@ -346,7 +428,7 @@ export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "
   );
   const status = colorize(lightweightTracking ? "軽量モード" : "記録中", lightweightTracking ? "warning" : "success", true);
   const combo = profile.comboCount > 0 ? colorize(` | 前回 ${profile.comboCount}連続いい指示!`, "accent", true) : "";
-  const bond = dim(`${stageLabel} | 育成度 ${state.progressPercent}%`);
+  const bond = dim(`${stageLabel} | 育成度 ${formatGauge(state.progressPercent)}`);
   return `${prefix} ${action} | ${status}${combo} | ${bond}`;
 }
 
@@ -383,7 +465,7 @@ export function renderMascotSpecialEvent(profile: MascotProfile, input: {
     title,
     tone,
     lines: [
-      `${state.avatar} ${profile.nickname} | ${stageSkillLabel(profile.stage)} | 育成度 ${state.progressPercent}%`,
+      `${state.avatar} ${profile.nickname} | ${stageSkillLabel(profile.stage)} | 育成度 ${formatGauge(state.progressPercent)}`,
       categoryHint(input.message),
       saving > 0
         ? `指示を改善すると ${saving}% くらいトークン節約できそう!`
@@ -415,7 +497,7 @@ export function renderMascotLevelUp(profile: MascotProfile, update: MascotEpisod
   const title = update.stageChanged ? "🎉 ランクアップ!" : "🌟 成長!";
   const growthLabel = update.stageChanged
     ? stageUpMessage(update.previousStage, update.nextStage)
-    : `育成度 ${update.progressPercent}% まで成長!`;
+    : `育成度 ${formatGauge(update.progressPercent)} まで成長!`;
   const comboInfo = profile.comboCount >= 3 ? ` | ${profile.comboCount}連続いい指示!` : "";
   return formatPanel({
     title,
@@ -423,7 +505,7 @@ export function renderMascotLevelUp(profile: MascotProfile, update: MascotEpisod
     lines: [
       `${state.avatar} ${profile.nickname} が育ったよ!`,
       `${growthLabel}`,
-      `+${update.gainedExp} 経験値 | 累計 ${update.totalBondExp} | 育成度 ${update.progressPercent}%${comboInfo}`,
+      `+${update.gainedExp} 経験値 | 累計 ${update.totalBondExp} | 育成度 ${formatGauge(update.progressPercent)}${comboInfo}`,
     ],
   });
 }

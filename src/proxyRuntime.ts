@@ -11,6 +11,7 @@ import { EvoDatabase } from "./db";
 import { getLogger } from "./logger";
 import {
   comboMilestoneMessage,
+  computeIdealStateGauge,
   loadMascotProfile,
   renderMascotLevelUp,
   renderMascotSpecialEvent,
@@ -372,6 +373,15 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   if (interactivePassthrough) {
     process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+  } else {
+    // Non-interactive path: emit a single startup line to stderr unless this is
+    // an immediate-exit invocation (--help / --version / -h / -v). This makes
+    // EvoPet visible in piped/scripted runs while keeping `--help` clean.
+    const immediateExitFlags = new Set(["--help", "-h", "--version", "-v"]);
+    const isImmediateExit = options.args.some((arg) => immediateExitFlags.has(arg.toLowerCase()));
+    if (!isImmediateExit) {
+      process.stderr.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+    }
   }
 
   // ── JSONL watcher + live-state file for statusline integration ──
@@ -386,7 +396,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   let liveStateTornDown = false;
   const liveTrackingEnabled =
     interactivePassthrough &&
-    process.stderr.isTTY &&
+    (process.stderr.isTTY || process.env.EVO_LIVE_TRACKING_FORCE === "1") &&
     process.env.EVO_LIVE_TRACKING !== "0";
   const liveStateFile = path.join(cwd, ".evo", "live-state.json");
   const homeLiveStateFile = path.join(os.homedir(), ".claude", ".evo-live.json");
@@ -464,6 +474,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       avatar: state.avatar,
       nickname: mascotProfile.nickname,
       bond: state.progressPercent,
+      idealStateGauge: computeIdealStateGauge(mascotProfile),
       updatedAt: Date.now(),
       sessionGrade: liveState.sessionGrade,
       promptScore: liveState.promptScore,
@@ -1340,7 +1351,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     changedLinesCount,
     turns: turnSummaries,
   });
-  const mascotUpdate = updateMascotAfterEpisode(cwd, summary);
+  const mascotUpdate = updateMascotAfterEpisode(cwd, summary, undefined, {
+    promptScore: liveState.promptScore,
+    sessionGrade: liveState.sessionGrade,
+    signalKind: liveState.signalKind,
+  });
   mascotProfile = loadMascotProfile(cwd);
 
   db.saveTurns(episodeId, turnRecords, turnSummaries);

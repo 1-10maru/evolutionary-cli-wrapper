@@ -6,10 +6,11 @@ import {
   chooseMascotSpecies,
   listMascotSpecies,
   loadMascotProfile,
+  renderMascotState,
   renderMascotTurnLine,
   updateMascotAfterEpisode,
 } from "../src/mascot";
-import { EpisodeSummary, TurnSummary } from "../src/types";
+import { EpisodeSummary, MascotProfile, RecentEpisodeRecord, TurnSummary } from "../src/types";
 
 const tempDirs: string[] = [];
 
@@ -234,5 +235,84 @@ describe("mascot", () => {
 
     expect(line).toContain("EvoPet");
     expect(line.includes("\n")).toBe(false);
+  });
+
+  it("progressPercent reflects ISG (not stage progress) — empty episodes returns -1", () => {
+    const profile: MascotProfile = {
+      speciesId: "chick",
+      nickname: "EvoPet",
+      stage: "legend",
+      totalBondExp: 99999,
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+      recentEpisodes: [],
+    };
+    const state = renderMascotState(profile);
+    // Used to lock at 100 on legend stage; now it should signal "no data" (-1).
+    expect(state.progressPercent).toBe(-1);
+  });
+
+  it("progressPercent on legend stage varies with ISG (not pinned to 100)", () => {
+    const baseRecord: RecentEpisodeRecord = {
+      promptScore: 60,
+      structureScore: 2,
+      grade: "C",
+      hadFixLoop: true,
+      hadSearchLoop: false,
+      signalKind: "no_success_criteria",
+      ts: Date.now(),
+    };
+    const profile: MascotProfile = {
+      speciesId: "chick",
+      nickname: "EvoPet",
+      stage: "legend",
+      totalBondExp: 99999,
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+      recentEpisodes: Array.from({ length: 10 }, () => ({ ...baseRecord })),
+    };
+    const state = renderMascotState(profile);
+    // Bad-quality history must NOT yield 100 even on legend stage.
+    expect(state.progressPercent).toBeLessThan(100);
+    expect(state.progressPercent).toBeGreaterThanOrEqual(0);
+  });
+
+  it("progressPercent rises with high-quality episodes on egg stage", () => {
+    const goodRecord: RecentEpisodeRecord = {
+      promptScore: 95,
+      structureScore: 5,
+      grade: "A",
+      hadFixLoop: false,
+      hadSearchLoop: false,
+      signalKind: "",
+      ts: Date.now(),
+    };
+    const profile: MascotProfile = {
+      speciesId: "chick",
+      nickname: "EvoPet",
+      stage: "egg",
+      totalBondExp: 0,
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+      recentEpisodes: Array.from({ length: 20 }, () => ({ ...goodRecord })),
+    };
+    const state = renderMascotState(profile);
+    // ISG should reach 100 when gate met, regardless of being on egg stage.
+    expect(state.progressPercent).toBe(100);
   });
 });
