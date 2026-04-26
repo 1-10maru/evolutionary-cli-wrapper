@@ -509,10 +509,13 @@ _curr_ctx = ctx if ctx is not None else 0
 _prev_ctx = _self.get('ctx_pct', 0)
 _session_id = data.get('session_id', '') or data.get('sessionId', '')
 _prev_session_id = _self.get('session_id', '')
-# Reset on: cwd change, session_id change, or large context drop (signal of /clear)
+# Reset on: cwd change, session_id change, or large context drop (signal of /clear).
+# Note: a NEW session whose id differs from the persisted one must also reset,
+# even when the persisted `_prev_session_id` was empty (first-ever run inherited
+# state from a same-cwd prior session that pre-dates session_id tracking).
 _session_reset = (
     _self.get('cwd') != cwd
-    or (_session_id and _prev_session_id and _session_id != _prev_session_id)
+    or (_session_id and _session_id != _prev_session_id)
     or (_prev_ctx > 30 and _curr_ctx < 5)
 )
 if not _self or _session_reset:
@@ -542,7 +545,7 @@ elif not _prompt_hash and _self.get('calls', 0) == 0:
 # `tip_idx` rotates on every render so cosmetic tip cycling is independent of
 # the (semantic) per-prompt `calls` counter. This keeps the visual variety the
 # user expects without inflating the conversation count.
-_self['tip_idx'] = _self.get('tip_idx', 0) + 1
+_self['tip_idx'] = (_self.get('tip_idx', 0) + 1) % 10000  # wrap to keep state file small
 _self['last'] = _now_s
 _self['ctx_pct'] = _curr_ctx
 _self['session_id'] = _session_id
@@ -596,6 +599,10 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
     # (newer proxy builds are per-session-aware). `turns` is cumulative across sessions
     # and shows wrong values on fresh start.
     _self_calls = _self.get('calls', 1)
+    # `+2` slack: tolerate a small lead from the proxy (it can record a
+    # `userMessages` increment a render or two before the statusline sees the
+    # matching prompt). Beyond that, fall back to the local per-session count
+    # — proxy is likely emitting cumulative cross-session state.
     if 'userMessages' in _evo and _user_msgs <= _self_calls + 2:
         _conv_count = _user_msgs
     else:
