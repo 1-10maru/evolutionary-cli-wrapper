@@ -10,6 +10,7 @@ import { getLogger } from "./logger";
 import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
+import { runLogsCommand } from "./cli/logs";
 import {
   getShellStatus,
   resolveOriginalCommand,
@@ -401,6 +402,16 @@ program
     const db = new EvoDatabase(path.resolve(String(options.cwd)));
     console.log(formatStorage(db.getStorageReport()));
     db.close();
+  });
+
+program
+  .command("logs")
+  .description("Show recent Evo log lines")
+  .option("--tail <n>", "Show last N lines (default 50)", (v) => parseInt(v, 10))
+  .option("--since <dur>", "Show lines since duration ago (e.g. 30m, 2h, 1d)")
+  .option("--cwd <dir>", "Working dir to resolve .evo/logs from", process.cwd())
+  .action(async (options: { tail?: number; since?: string; cwd: string }) => {
+    await runLogsCommand(options);
   });
 
 program
