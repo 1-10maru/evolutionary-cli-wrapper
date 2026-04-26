@@ -515,6 +515,56 @@ evo uninstall --cwd <evolutionary-cli-wrapper のフォルダ>
 evo uninstall --cwd <evolutionary-cli-wrapper のフォルダ> --purge-data
 ```
 
+## 🔧 Install / Uninstall
+
+statusLine は手動設定不要です。以下のスクリプトで自動登録・削除できます。両方とも何度実行しても安全（冪等）です。
+
+```bash
+# インストール（または再インストール）
+bash install/evopet-install.sh
+
+# アンインストール
+bash install/evopet-uninstall.sh
+```
+
+`evopet-install.sh` がやること:
+
+- `~/.claude/local/optional-projects.sh` に EvoPet shim を作成（`bin/` を `PATH` 前置）
+- `~/.bash_profile` に shim の `source` 行を追記（既にあれば skip）
+- `~/.claude/settings.json` の `statusLine.command` を merge（他のキーは保持）
+
+`evopet-uninstall.sh` は上記を逆に巻き戻します。statusLine 行も自動的に外れます。
+
+## 🌱 Environment variables
+
+| 変数名 | 既定値 | 役割 |
+|--------|--------|------|
+| `EVOPET_ENABLED` | `1` (install 後) | `0` で EvoPet shim を無効化（PATH 前置を skip） |
+| `DISABLE_OPTIONAL_PROJECTS` | `0` | `1` で `optional-projects.sh` 全体を skip。EvoPet を含む全 optional add-on のマスター kill-switch |
+| `EVO_LOG_LEVEL` | `INFO` | ログ出力レベル。`ERROR` / `WARN` / `INFO` / `DEBUG` |
+| `EVO_LOG_DIR` | `<cwd>/.evo/logs` | ログ保存先ディレクトリ |
+| `EVO_LOG_DISABLE` | `0` | `1` で全ログ出力を no-op 化 |
+| `EVO_HOME` | リポジトリの `~/.evo` | mascot 等のグローバル状態の保存先 |
+
+## 📜 Logging & Diagnostics
+
+Evo は `<対象フォルダ>/.evo/logs/session-YYYYMMDD.log` に構造化ログを書き出します。プロジェクト単位で分かれるので、どのプロジェクトで何が起きたかを後追いできます。
+
+- **レベル**: `ERROR` / `WARN` / `INFO` / `DEBUG`（既定は `INFO`）
+- **ローテーション**: 1 日 1 ファイル、30 日後に自動削除
+- **分岐の可視化**: `EVO_LOG_LEVEL=DEBUG` を設定すると、CLI 検出・shim 解決・エピソードライフサイクル・spawn 等の判断分岐や、抑制された silent error の中身まで見えます
+
+ログを覗く:
+
+```powershell
+evo logs --tail 50            # 直近 50 行
+evo logs --since 30m          # 直近 30 分
+evo logs --since 2h           # 直近 2 時間
+evo logs --since 1d           # 直近 1 日
+```
+
+statusline がおかしい・proxy が無言で死んだ気がする等のときは、まずこのログを見れば原因の大部分を絞り込めます。
+
 ## 補足
 
 `npm install` と `npm run setup` 自体は、LLM の消費 token を増やしません。  

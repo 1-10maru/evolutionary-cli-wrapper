@@ -2,10 +2,27 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
-## [Unreleased]
+## [Unreleased] - 2026-04-26
 
 ### Added
 
+- 構造化ログ機能: `<対象フォルダ>/.evo/logs/session-YYYYMMDD.log` にレベル別 (ERROR/WARN/INFO/DEBUG) で出力。日次ローテーションで 30 日保持
+- `EVO_LOG_LEVEL=DEBUG` で起動・コマンド解決・shim 解決・エピソードライフサイクル等の判断分岐を可視化
+- `evo logs --tail [N]`: 直近 N 行のログを表示（デフォルト 50 行）
+- `evo logs --since DURATION`: 直近の活動を取り出す（例: `--since 30m`, `--since 2h`, `--since 1d`）
+- 環境変数 `EVO_LOG_DIR` でログ保存先を上書き可能、`EVO_LOG_DISABLE=1` で全ログを無効化
+- 公式 statusLine 統合: `install/evopet-install.sh` が `~/.claude/settings.json` の `statusLine.command` を冪等に登録
+- `install/evopet-uninstall.sh`: shim・PATH エントリ・statusLine 設定を冪等に巻き戻す
+- 環境変数 `EVOPET_ENABLED=0` で個別無効化、`DISABLE_OPTIONAL_PROJECTS=1` で全 optional add-on の一括停止
+- subprocess の終了情報を永続化: `.evo-live.json` に `lastExitCode` / `lastExitSignal` / `lastExitAt` / `lastSubcommand` を保存。`episodes` テーブルに `exit_signal` カラムを追加
+- proxy 経由の passthrough サブコマンド (`review` 等) でも live state を更新
+- 統合テスト: mock CLI で proxy パイプライン全体を検証する 3 ケースを追加
+
+### Changed
+
+- statusline 更新方式をポーリングからイベントドリブンに変更 (chokidar + 250ms デバウンス + 5 秒セーフティネット)。表示遅延が 2 秒 → 1 秒未満に
+- `.evo-live.json` の書き込みをアトミック化 (tmp + rename)。statusline が読み込み中の壊れた JSON を見るリスクを排除
+- 12 箇所の silent catch をログレベル分類に置換。JSONL パーサは 10 秒間に 5 件超のエラーで自動停止し暴走を抑制
 - Self-tracking statusline (`statusline.py`) — proxy なしでも常に EvoPet 表示。16 種類の tip ローテーション
 - `statusline.py` をリポジトリに同梱。`npm run setup` で `~/.claude/base_statusline.py` にデプロイ
 - Proxy が `~/.claude/.evo-live.json` にも書き込み（cwd ミスマッチ時のフォールバック）
@@ -13,6 +30,11 @@
 - `getShellHome()` に `__dirname` ベースのフォールバック追加 — `EVO_HOME` 未設定でも動作
 - User PATH (`HKCU\Environment`) に evo bin を追加。全ターミナル (cmd.exe/PowerShell/Git Bash) 対応
 - `undoShellIntegration` に `removeFromUserPath` 追加。uninstall 時に自動で元の claude に復帰
+
+### Fixed
+
+- proxy mode で対象 CLI の異常終了 (signal kill 含む) が記録されず、後追いで原因が分からなかった問題
+- proxy 停止中に古い live state が残り続け、statusline が嘘を表示し続けることがある問題（exit イベントで明示的にクリア）
 
 ### Previously added
 
