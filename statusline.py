@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Evo v3.0 statusline — Always-on, self-tracking. Works with or without proxy."""
-import json, sys, os, time, hashlib
+import json, sys, os, time
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', newline='\n')
 data = json.load(sys.stdin)
@@ -521,26 +521,49 @@ _session_reset = (
 if not _self or _session_reset:
     _self = {'start': _now_s, 'calls': 0, 'tip_idx': _self.get('tip_idx', 0),
              'cwd': cwd, 'session_id': _session_id, 'last_prompt_hash': ''}
-# Increment `calls` only when a NEW user prompt arrives. Claude Code re-renders
-# the statusline many times per turn (token streams, tool calls, etc.); a naive
-# per-render bump inflates the counter to dozens within a single user message.
+# Increment `calls` only when a NEW user message arrives. Claude Code re-renders
+# the statusline many times per turn (token streams, tool calls, debounced
+# permission changes, etc.); a naive per-render bump inflates the counter to
+# dozens within a single user message.
 #
-# Detection: hash the `prompt` field (last user message) Claude Code passes in
-# stdin. To handle the case where the user sends the SAME prompt text twice in
-# a row (e.g. "continue", "retry", "/cost"), also break the dedup window after
-# `_TURN_GAP_SEC` seconds of inactivity — a fresh prompt with identical text
-# arriving after the gap is treated as a new turn.
-_TURN_GAP_SEC = 30
-_prompt = data.get('prompt') or data.get('user_prompt') or ''
-_prompt_hash = hashlib.md5(_prompt.encode('utf-8', 'replace')).hexdigest() if _prompt else ''
-_prev_hash = _self.get('last_prompt_hash', '')
-_last_inc_at = _self.get('last_increment_at', 0)
-if _prompt_hash and (_prompt_hash != _prev_hash or (_now_s - _last_inc_at) > _TURN_GAP_SEC):
-    _self['calls'] = _self.get('calls', 0) + 1
-    _self['last_prompt_hash'] = _prompt_hash
-    _self['last_increment_at'] = _now_s
-elif not _prompt_hash and _self.get('calls', 0) == 0:
-    # First render of a brand-new session with no prompt field yet → start at 1.
+# True signal: `transcript_path` is the JSONL conversation log (documented at
+# https://code.claude.com/docs/en/statusline.md). Each user message appends
+# at least one `"type":"user"` (or `"role":"user"`) entry. Counting those
+# entries gives the real per-session conversation count regardless of how
+# many times Claude Code re-renders.
+#
+# Performance: transcripts are typically <1MB; a single linear scan per render
+# is acceptable. We also cache by (path, size) so unchanged transcripts skip
+# the scan entirely.
+def _count_user_messages(transcript_path, cache):
+    if not transcript_path:
+        return None
+    try:
+        st = os.stat(transcript_path)
+    except OSError:
+        return None
+    cache_key = f"{transcript_path}:{st.st_size}:{int(st.st_mtime)}"
+    if cache.get('transcript_cache_key') == cache_key:
+        return cache.get('transcript_user_count')
+    try:
+        n = 0
+        with open(transcript_path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                if '"type":"user"' in line or '"role":"user"' in line:
+                    n += 1
+        cache['transcript_cache_key'] = cache_key
+        cache['transcript_user_count'] = n
+        return n
+    except OSError:
+        return None
+
+_transcript_path = data.get('transcript_path') or ''
+_user_msg_count = _count_user_messages(_transcript_path, _self)
+if _user_msg_count is not None:
+    _self['calls'] = _user_msg_count
+elif _self.get('calls', 0) == 0:
+    # No transcript_path available (legacy Claude Code or first render) →
+    # at least show "1回目" so we don't render an empty counter.
     _self['calls'] = 1
 # `tip_idx` rotates on every render so cosmetic tip cycling is independent of
 # the (semantic) per-prompt `calls` counter. This keeps the visual variety the
@@ -559,10 +582,13 @@ _line2 = ""
 # `.evo-live.json` is shared across sessions and carries cumulative state
 # (sessionGrade/promptScore/advice/before/after) from the previous session,
 # which is meaningless until the current session has its first graded turn.
-# Gate on the proxy-reported `userMessages == 0` (real signal), and apply to
-# both fresh AND stale proxy paths so prior-session bleed-through is closed
-# in either case.
-if _evo and _evo_source in ('proxy', 'proxy_stale') and _evo.get('userMessages', 0) == 0:
+#
+# Only apply this when proxy actually provides `userMessages` (newer payloads).
+# For legacy proxies that don't emit the field, fall through and let the
+# downstream `turns` fallback handle display — otherwise we'd lose all
+# grade/advice rendering for those installations.
+if (_evo and _evo_source in ('proxy', 'proxy_stale')
+        and 'userMessages' in _evo and _evo.get('userMessages', 0) == 0):
     _evo = None
     _evo_source = None
 

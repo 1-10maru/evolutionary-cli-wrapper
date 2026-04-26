@@ -193,5 +193,43 @@ class TestStatuslineRender(unittest.TestCase):
         )
 
 
+    # ------------------------------------------------------------------
+    # Path 4: transcript-based per-session counter
+    # ------------------------------------------------------------------
+    def test_counter_tracks_transcript_user_messages(self) -> None:
+        """`calls` should reflect actual user-message count from transcript_path,
+        not bump on every render. This is the regression that the v1/v2 fixes
+        of PR #13 missed (Claude Code does not pass `prompt` in stdin)."""
+        transcript = self.cwd_dir / "t.jsonl"
+        # Two user messages → counter should display 2.
+        transcript.write_text(
+            '{"type":"user","message":{"text":"hi"}}\n'
+            '{"type":"assistant","message":{"text":"yo"}}\n'
+            '{"type":"user","message":{"text":"more"}}\n',
+            encoding="utf-8",
+        )
+        stdin = {
+            "model": {"display_name": "claude"},
+            "session_id": "sess-X",
+            "cwd": str(self.cwd_dir),
+            "transcript_path": str(transcript),
+            "context_window": {"used_percentage": 5},
+            "rate_limits": {},
+        }
+        out = run_statusline(stdin, self.fake_home, self.cwd_dir)
+        self.assertIn("2回目", strip_ansi(out))
+
+        # Render again with NO new user message → counter must stay at 2,
+        # not creep up just because the statusline was re-invoked.
+        out2 = run_statusline(stdin, self.fake_home, self.cwd_dir)
+        self.assertIn("2回目", strip_ansi(out2))
+
+        # Append another user message → counter advances to 3.
+        with open(transcript, "a", encoding="utf-8") as f:
+            f.write('{"type":"user","message":{"text":"again"}}\n')
+        out3 = run_statusline(stdin, self.fake_home, self.cwd_dir)
+        self.assertIn("3回目", strip_ansi(out3))
+
+
 if __name__ == "__main__":
     unittest.main()
