@@ -8,8 +8,10 @@ import { createFrictionCaptureAdapter } from "./capture";
 import { diffSymbolSnapshots } from "./ast";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
+import { getLogger } from "./logger";
 import {
   comboMilestoneMessage,
+  computeIdealStateGauge,
   loadMascotProfile,
   renderMascotLevelUp,
   renderMascotSpecialEvent,
@@ -36,6 +38,7 @@ import {
   EpisodeArtifacts,
   EpisodeEvent,
   ProxyRunOptions,
+  SupportedCli,
   TurnRecord,
   TurnSummary,
   UsageObservation,
@@ -66,6 +69,32 @@ const NON_INTERACTIVE_FLAGS = new Set([
   "--json",
 ]);
 
+const proxyModeLog = getLogger().child("proxy.mode");
+const proxyResolveLog = getLogger().child("proxy.resolve");
+const proxyStartupLog = getLogger().child("proxy.startup");
+const proxySpawnLog = getLogger().child("proxy.spawn");
+const proxyLiveStateLog = getLogger().child("proxy.livestate");
+const proxyJsonlWatchLog = getLogger().child("proxy.jsonl.watch");
+const proxyJsonlStatLog = getLogger().child("proxy.jsonl.stat");
+const proxyEpisodeLog = getLogger().child("proxy.episode");
+const proxySubprocessLog = getLogger().child("proxy.subprocess");
+
+// Module-level ring buffer for JSONL parse failure rate limiting.
+// More than 5 parse failures within 10 seconds escalates to ERROR and
+// disables the watcher for the remainder of the session.
+const PARSE_FAIL_WINDOW_MS = 10_000;
+const PARSE_FAIL_THRESHOLD = 5;
+let parseFailTimestamps: number[] = [];
+let parseFailCircuitTripped = false;
+
+function normalizeErr(err: unknown): { message: string; code?: string; stack?: string } {
+  if (err instanceof Error) {
+    const e = err as Error & { code?: string };
+    return { message: e.message, code: e.code, stack: e.stack };
+  }
+  return { message: String(err) };
+}
+
 function createEvent(
   type: EpisodeEvent["type"],
   source: EpisodeEvent["source"],
@@ -91,9 +120,29 @@ function createEmptyTurn(): ProxyTurnState {
 }
 
 function shouldUseInteractivePassthrough(args: string[]): boolean {
-  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) return false;
-  if (args.length === 0) return true;
-  return !args.some((arg) => NON_INTERACTIVE_FLAGS.has(arg.toLowerCase()));
+  let result: boolean;
+  let reason: string;
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) {
+    result = false;
+    reason = "non-tty std streams";
+  } else if (args.length === 0) {
+    result = true;
+    reason = "tty stdin/stdout/stderr with no args";
+  } else {
+    const flagged = args.find((arg) => NON_INTERACTIVE_FLAGS.has(arg.toLowerCase()));
+    if (flagged) {
+      result = false;
+      reason = `non-interactive flag detected: ${flagged.toLowerCase()}`;
+    } else {
+      result = true;
+      reason = "tty std streams; no non-interactive flag in args";
+    }
+  }
+  proxyModeLog.info("interactive passthrough decision", {
+    interactivePassthrough: result,
+    reason,
+  });
+  return result;
 }
 
 function normalizeTurnOutput(outputText: string): string {
@@ -135,23 +184,47 @@ function hasProjectMarkers(cwd: string): boolean {
 
 export function shouldUseLightweightTracking(cwd: string): boolean {
   const resolved = path.resolve(cwd);
-  if (resolved === path.resolve(os.homedir())) return true;
-  if (hasProjectMarkers(resolved)) return false;
+  let result: boolean;
+  let reason: string;
+  if (resolved === path.resolve(os.homedir())) {
+    result = true;
+    reason = "cwd is user home directory";
+  } else if (hasProjectMarkers(resolved)) {
+    result = false;
+    reason = "project marker file present";
+  } else {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(resolved, { withFileTypes: true });
+    } catch {
+      proxyModeLog.info("lightweight tracking decision", {
+        lightweight: true,
+        reason: "readdir failed; assuming non-project",
+      });
+      return true;
+    }
 
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(resolved, { withFileTypes: true });
-  } catch {
-    return true;
+    const visibleEntries = entries.filter((entry) => !entry.name.startsWith("."));
+    const directoryCount = visibleEntries.filter((entry) => entry.isDirectory()).length;
+    const fileCount = visibleEntries.filter((entry) => entry.isFile()).length;
+
+    if (directoryCount >= 8) {
+      result = true;
+      reason = `directoryCount=${directoryCount} >= 8 (looks like aggregate parent dir)`;
+    } else if (directoryCount >= 5 && visibleEntries.length >= 15 && fileCount <= 6) {
+      result = true;
+      reason = `dirs=${directoryCount}, total=${visibleEntries.length}, files=${fileCount} (sparse aggregate)`;
+    } else {
+      result = false;
+      reason = `dirs=${directoryCount}, total=${visibleEntries.length}, files=${fileCount} (looks like project)`;
+    }
   }
+  proxyModeLog.info("lightweight tracking decision", { lightweight: result, reason });
+  return result;
+}
 
-  const visibleEntries = entries.filter((entry) => !entry.name.startsWith("."));
-  const directoryCount = visibleEntries.filter((entry) => entry.isDirectory()).length;
-  const fileCount = visibleEntries.filter((entry) => entry.isFile()).length;
-
-  if (directoryCount >= 8) return true;
-  if (directoryCount >= 5 && visibleEntries.length >= 15 && fileCount <= 6) return true;
-  return false;
+function formatMissingOriginalCommandMessage(cli: SupportedCli): string {
+  return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.`;
 }
 
 function createEmptySnapshot(): WorkspaceSnapshot {
@@ -229,14 +302,25 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   const originalCommand = resolveOriginalCommand(cwd, cli);
   if (!originalCommand) {
+    proxyResolveLog.error("original command not found", {
+      cli,
+      cwd,
+      pathHead: process.env.PATH?.slice(0, 200),
+    });
     db.close();
-    throw new Error(`Could not resolve the original ${cli} command. Run npm run setup again.`);
+    throw new Error(formatMissingOriginalCommandMessage(cli));
   }
 
   const interactivePassthrough = shouldUseInteractivePassthrough(options.args);
+  const mode = `${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}`;
   process.stderr.write(
     `Evo tracking ON | cli=${cli} | dir=${cwd} | mode=${config.proxy.defaultMode}${lightweightTracking ? " | light" : ""}\n`,
   );
+  proxyStartupLog.info("session header emitted", {
+    cli,
+    mode,
+    mascotSpecies: mascotProfile.speciesId,
+  });
 
   const beforeSnapshotPromise = lightweightTracking
     ? Promise.resolve(createEmptySnapshot())
@@ -289,17 +373,30 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   if (interactivePassthrough) {
     process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+  } else {
+    // Non-interactive path: emit a single startup line to stderr unless this is
+    // an immediate-exit invocation (--help / --version / -h / -v). This makes
+    // EvoPet visible in piped/scripted runs while keeping `--help` clean.
+    const immediateExitFlags = new Set(["--help", "-h", "--version", "-v"]);
+    const isImmediateExit = options.args.some((arg) => immediateExitFlags.has(arg.toLowerCase()));
+    if (!isImmediateExit) {
+      process.stderr.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+    }
   }
 
   // ── JSONL watcher + live-state file for statusline integration ──
   // No terminal painting or title bar writes — those break Claude Code's TUI
   // and conflict with Zellij pane names. Instead, write state to a file that
   // ~/.claude/statusline.py reads.
-  let jsonlWatcher: fs.FSWatcher | null = null;
+  // jsonlWatcher is a chokidar FSWatcher (not node:fs.FSWatcher). Typed loosely
+  // because we only need close() and on(event, handler).
+  let jsonlWatcher: { close: () => unknown; on: (event: string, fn: (...args: unknown[]) => void) => unknown } | null = null;
   let jsonlPollTimer: NodeJS.Timeout | null = null;
+  let jsonlDebounceTimer: NodeJS.Timeout | null = null;
+  let liveStateTornDown = false;
   const liveTrackingEnabled =
     interactivePassthrough &&
-    process.stderr.isTTY &&
+    (process.stderr.isTTY || process.env.EVO_LIVE_TRACKING_FORCE === "1") &&
     process.env.EVO_LIVE_TRACKING !== "0";
   const liveStateFile = path.join(cwd, ".evo", "live-state.json");
   const homeLiveStateFile = path.join(os.homedir(), ".claude", ".evo-live.json");
@@ -307,6 +404,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   // Live session state tracked via JSONL monitoring
   const liveState = {
     turns: 0,
+    userMessages: 0,
     toolCalls: 0,
     lastTool: "",
     lastFile: "",
@@ -330,18 +428,53 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     lastHasTestRef: false,
     lastStructureScore: 0,
     lastFirstPassGreen: true,
+    // Exit tracking — populated when the wrapped CLI subprocess closes.
+    lastExitCode: null as number | null,
+    lastExitSignal: null as string | null,
+    lastExitAt: null as number | null,
+    lastSubcommand: null as string | null,
+  };
+
+  const atomicWrite = (target: string, json: string): void => {
+    const tmp = `${target}.tmp`;
+    try {
+      fs.writeFileSync(tmp, json);
+      fs.renameSync(tmp, target);
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyLiveStateLog.warn("atomic rename failed, falling back to direct write", {
+        path: target,
+        errno: n.code,
+        message: n.message,
+      });
+      // Best-effort cleanup of stale tmp file
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      try {
+        fs.writeFileSync(target, json);
+      } catch (writeErr) {
+        const wn = normalizeErr(writeErr);
+        proxyLiveStateLog.warn("live-state write failed", {
+          path: target,
+          errno: wn.code,
+          message: wn.message,
+        });
+      }
+    }
   };
 
   const writeLiveState = (): void => {
+    if (liveStateTornDown) return;
     const state = renderMascotState(mascotProfile);
     const payload = {
       turns: liveState.turns,
+      userMessages: liveState.userMessages,
       toolCalls: liveState.toolCalls,
       advice: liveState.advice,
       mood: mascotProfile.mood,
       avatar: state.avatar,
       nickname: mascotProfile.nickname,
       bond: state.progressPercent,
+      idealStateGauge: computeIdealStateGauge(mascotProfile),
       updatedAt: Date.now(),
       sessionGrade: liveState.sessionGrade,
       promptScore: liveState.promptScore,
@@ -351,17 +484,66 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       signalKind: liveState.signalKind,
       beforeExample: liveState.beforeExample,
       afterExample: liveState.afterExample,
+      lastExitCode: liveState.lastExitCode,
+      lastExitSignal: liveState.lastExitSignal,
+      lastExitAt: liveState.lastExitAt,
+      lastSubcommand: liveState.lastSubcommand,
     };
     const json = JSON.stringify(payload);
-    try { fs.writeFileSync(liveStateFile, json); } catch { /* ignore */ }
-    try { fs.writeFileSync(homeLiveStateFile, json); } catch { /* ignore */ }
+
+    let mtimeBefore = 0;
+    try {
+      mtimeBefore = fs.statSync(homeLiveStateFile).mtimeMs;
+    } catch {
+      // file may not exist yet — that's fine
+    }
+    proxyLiveStateLog.debug("writing live state", {
+      mtimeBefore,
+      turns: liveState.turns,
+      mood: mascotProfile.mood,
+    });
+
+    atomicWrite(liveStateFile, json);
+    atomicWrite(homeLiveStateFile, json);
   };
 
   const teardownLiveTracking = (): void => {
     if (jsonlPollTimer) { clearInterval(jsonlPollTimer); jsonlPollTimer = null; }
-    if (jsonlWatcher) { jsonlWatcher.close(); jsonlWatcher = null; }
-    try { fs.unlinkSync(liveStateFile); } catch { /* ignore */ }
-    try { fs.unlinkSync(homeLiveStateFile); } catch { /* ignore */ }
+    if (jsonlDebounceTimer) { clearTimeout(jsonlDebounceTimer); jsonlDebounceTimer = null; }
+    if (jsonlWatcher) {
+      try {
+        const closeResult = (jsonlWatcher as unknown as { close: () => unknown }).close();
+        // chokidar's close() returns a Promise; swallow rejections so teardown stays sync-safe
+        if (closeResult && typeof (closeResult as Promise<unknown>).then === "function") {
+          (closeResult as Promise<unknown>).catch(() => { /* best-effort */ });
+        }
+      } catch {
+        // best-effort close
+      }
+      jsonlWatcher = null;
+    }
+    for (const p of [liveStateFile, homeLiveStateFile]) {
+      try {
+        fs.unlinkSync(p);
+      } catch (err) {
+        const n = normalizeErr(err);
+        // ENOENT is expected when no live-state was ever written; skip noise.
+        if (n.code !== "ENOENT") {
+          proxyLiveStateLog.warn("live-state cleanup failed", {
+            path: p,
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }
+      // Also clean up any leftover atomic-write tmp file
+      try {
+        fs.unlinkSync(`${p}.tmp`);
+      } catch {
+        // ENOENT or perm — ignore
+      }
+    }
+    liveStateTornDown = true;
   };
 
   // ── JSONL transcript watcher ──
@@ -378,7 +560,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
           break;
         }
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyJsonlWatchLog.warn("readdir failed for claude projects dir", {
+        path: claudeProjectsDir,
+        errno: n.code,
+        message: n.message,
+      });
+    }
     if (!projectDir || !fs.existsSync(projectDir)) return;
 
     let newestJsonl = "";
@@ -390,19 +579,62 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         for (const entry of fs.readdirSync(projectDir)) {
           if (!entry.endsWith(".jsonl")) continue;
           const fullPath = path.join(projectDir, entry);
-          const stat = fs.statSync(fullPath);
+          let stat: fs.Stats;
+          try {
+            stat = fs.statSync(fullPath);
+          } catch (err) {
+            const n = normalizeErr(err);
+            if (n.code === "ENOENT") {
+              proxyJsonlStatLog.debug("jsonl stat ENOENT (transient)", {
+                path: fullPath,
+                errno: n.code,
+              });
+            } else {
+              proxyJsonlStatLog.warn("jsonl stat failed", {
+                path: fullPath,
+                errno: n.code,
+                message: n.message,
+              });
+            }
+            continue;
+          }
           if (stat.mtimeMs > newestMtime) {
             newestMtime = stat.mtimeMs;
             newestJsonl = fullPath;
           }
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("readdir failed for project dir", {
+          path: projectDir,
+          errno: n.code,
+          message: n.message,
+        });
+      }
     };
 
     const processNewLines = (): void => {
-      if (!newestJsonl) return;
+      if (!newestJsonl || parseFailCircuitTripped) return;
       try {
-        const stat = fs.statSync(newestJsonl);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(newestJsonl);
+        } catch (err) {
+          const n = normalizeErr(err);
+          if (n.code === "ENOENT") {
+            proxyJsonlStatLog.debug("jsonl stat ENOENT (file rotated/removed)", {
+              path: newestJsonl,
+              errno: n.code,
+            });
+          } else {
+            proxyJsonlStatLog.warn("jsonl stat failed", {
+              path: newestJsonl,
+              errno: n.code,
+              message: n.message,
+            });
+          }
+          return;
+        }
         if (stat.size <= jsonlReadOffset) return;
         const fd = fs.openSync(newestJsonl, "r");
         const buf = Buffer.alloc(Math.min(stat.size - jsonlReadOffset, 64 * 1024));
@@ -411,14 +643,94 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         jsonlReadOffset += buf.length;
         for (const line of buf.toString("utf8").split("\n")) {
           if (!line.trim()) continue;
-          try { processJsonlEntry(JSON.parse(line)); } catch { /* skip */ }
+          try {
+            processJsonlEntry(JSON.parse(line));
+          } catch (err) {
+            const n = normalizeErr(err);
+            const now = Date.now();
+            parseFailTimestamps.push(now);
+            // prune timestamps older than the window
+            parseFailTimestamps = parseFailTimestamps.filter(
+              (t) => now - t <= PARSE_FAIL_WINDOW_MS,
+            );
+            if (parseFailTimestamps.length > PARSE_FAIL_THRESHOLD) {
+              parseFailCircuitTripped = true;
+              proxyJsonlWatchLog.error("excessive parse failures, disabling watcher", {
+                path: newestJsonl,
+                failuresInWindow: parseFailTimestamps.length,
+                windowMs: PARSE_FAIL_WINDOW_MS,
+                lastErrno: n.code,
+                lastMessage: n.message,
+              });
+              if (jsonlPollTimer) {
+                clearInterval(jsonlPollTimer);
+                jsonlPollTimer = null;
+              }
+              if (jsonlDebounceTimer) {
+                clearTimeout(jsonlDebounceTimer);
+                jsonlDebounceTimer = null;
+              }
+              if (jsonlWatcher) {
+                try {
+                  const closeResult = jsonlWatcher.close();
+                  if (closeResult && typeof (closeResult as Promise<unknown>).then === "function") {
+                    (closeResult as Promise<unknown>).catch(() => { /* best-effort */ });
+                  }
+                } catch {
+                  // best-effort close
+                }
+                jsonlWatcher = null;
+              }
+              return;
+            }
+            proxyJsonlWatchLog.warn("jsonl parse failed", {
+              path: newestJsonl,
+              errno: n.code,
+              message: n.message,
+            });
+          }
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("jsonl read failed", {
+          path: newestJsonl,
+          errno: n.code,
+          message: n.message,
+        });
+      }
     };
 
     const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
+      const wasTurns = liveState.turns;
+      const wasUserMessages = liveState.userMessages;
+      const wasToolCalls = liveState.toolCalls;
+      const wasSignal = liveState.signalKind;
       if (entry.type === "user") {
         liveState.turns += 1;
+        // Distinguish "real" user messages from tool_result echoes.
+        // Anthropic API wire-formats tool results as user-type entries with
+        // a content array of {type:"tool_result", ...} blocks. We treat an
+        // entry as a real user message if:
+        //   - content is a string (always real), OR
+        //   - content is an array AND at least one item has type !== "tool_result"
+        // If every item is a tool_result, it is a tool response, not a user message.
+        const msgObj = (entry as Record<string, unknown>).message;
+        let isRealUserMessage = false;
+        if (msgObj && typeof msgObj === "object") {
+          const msgContent = (msgObj as Record<string, unknown>).content;
+          if (typeof msgContent === "string") {
+            isRealUserMessage = true;
+          } else if (Array.isArray(msgContent)) {
+            isRealUserMessage = msgContent.some((item) => {
+              if (!item || typeof item !== "object") return false;
+              const t = (item as Record<string, unknown>).type;
+              return typeof t === "string" && t !== "tool_result";
+            });
+          }
+        }
+        if (isRealUserMessage) {
+          liveState.userMessages += 1;
+        }
         // Extract prompt features for signal detection
         const content = (entry as Record<string, unknown>).message;
         if (content && typeof content === "object") {
@@ -461,6 +773,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
             }
           }
         }
+      }
+      // Event-driven live-state write: trigger only when meaningful change occurs.
+      const turnsChanged = liveState.turns !== wasTurns;
+      const userMessagesChanged = liveState.userMessages !== wasUserMessages;
+      const toolCallsChanged = liveState.toolCalls !== wasToolCalls;
+      const signalChanged = liveState.signalKind !== wasSignal;
+      if (turnsChanged || userMessagesChanged || toolCallsChanged || signalChanged) {
+        writeLiveState();
       }
     };
 
@@ -523,55 +843,178 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
     findNewestJsonl();
     if (newestJsonl) {
-      try { jsonlReadOffset = fs.statSync(newestJsonl).size; } catch { /* ignore */ }
+      try {
+        jsonlReadOffset = fs.statSync(newestJsonl).size;
+      } catch (err) {
+        const n = normalizeErr(err);
+        if (n.code === "ENOENT") {
+          proxyJsonlStatLog.debug("initial jsonl stat ENOENT", {
+            path: newestJsonl,
+            errno: n.code,
+          });
+        } else {
+          proxyJsonlStatLog.warn("initial jsonl stat failed", {
+            path: newestJsonl,
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }
     }
 
-    try {
-      jsonlWatcher = fs.watch(projectDir, { persistent: false }, (_ev, filename) => {
-        if (filename && filename.endsWith(".jsonl")) {
-          const fullPath = path.join(projectDir, filename);
-          if (fullPath !== newestJsonl) {
-            try {
-              const stat = fs.statSync(fullPath);
-              if (stat.mtimeMs > newestMtime) {
-                newestMtime = stat.mtimeMs;
-                newestJsonl = fullPath;
-                jsonlReadOffset = 0; // FIX: read new file from start, not EOF
-                // Session reset: clear stale live state
-                liveState.turns = 0;
-                liveState.toolCalls = 0;
-                liveState.lastTool = "";
-                liveState.lastFile = "";
-                liveState.promptScore = 0;
-                liveState.efficiencyScore = 0;
-                liveState.sessionGrade = "C";
-                liveState.signalKind = "";
-                liveState.advice = "";
-                liveState.adviceDetail = "";
-                liveState.beforeExample = "";
-                liveState.afterExample = "";
-                liveState.sessionStartMs = Date.now();
-                liveState.filePatchCounts.clear();
-                liveState.symbolTouchCounts.clear();
-                liveState.lastPromptLength = 0;
-                liveState.lastHasFileRefs = false;
-                liveState.lastHasSymbolRefs = false;
-                liveState.lastHasAcceptanceRef = false;
-                liveState.lastHasTestRef = false;
-                liveState.lastStructureScore = 0;
-                liveState.lastFirstPassGreen = true;
-              }
-            } catch { /* ignore */ }
-          }
-          processNewLines();
+    // Rotation handler: when a new JSONL appears (or an existing one bumps mtime
+    // ahead of our tracked newest), reset offset + live state so the new session
+    // starts clean. Returns true if rotation happened.
+    const handleRotationCandidate = (fullPath: string): boolean => {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch (err) {
+        const n = normalizeErr(err);
+        if (n.code === "ENOENT") {
+          proxyJsonlStatLog.debug("rotation stat ENOENT", {
+            path: fullPath,
+            errno: n.code,
+          });
+        } else {
+          proxyJsonlStatLog.warn("rotation stat failed", {
+            path: fullPath,
+            errno: n.code,
+            message: n.message,
+          });
         }
-      });
-      if (typeof (jsonlWatcher as unknown as { unref?: () => void }).unref === "function") {
-        (jsonlWatcher as unknown as { unref: () => void }).unref();
+        return false;
       }
-    } catch { /* ignore */ }
+      if (stat.mtimeMs <= newestMtime) return false;
+      const oldPath = newestJsonl;
+      newestMtime = stat.mtimeMs;
+      newestJsonl = fullPath;
+      jsonlReadOffset = 0; // read new file from start
+      // Session reset: clear stale live state
+      liveState.turns = 0;
+      liveState.userMessages = 0;
+      liveState.toolCalls = 0;
+      liveState.lastTool = "";
+      liveState.lastFile = "";
+      liveState.promptScore = 0;
+      liveState.efficiencyScore = 0;
+      liveState.sessionGrade = "C";
+      liveState.signalKind = "";
+      liveState.advice = "";
+      liveState.adviceDetail = "";
+      liveState.beforeExample = "";
+      liveState.afterExample = "";
+      liveState.sessionStartMs = Date.now();
+      liveState.filePatchCounts.clear();
+      liveState.symbolTouchCounts.clear();
+      liveState.lastPromptLength = 0;
+      liveState.lastHasFileRefs = false;
+      liveState.lastHasSymbolRefs = false;
+      liveState.lastHasAcceptanceRef = false;
+      liveState.lastHasTestRef = false;
+      liveState.lastStructureScore = 0;
+      liveState.lastFirstPassGreen = true;
+      proxyJsonlWatchLog.info("jsonl rotated", { oldPath, newPath: fullPath });
+      // Write a "session changed" snapshot so statusline reflects rotation immediately.
+      writeLiveState();
+      return true;
+    };
 
-    jsonlPollTimer = setInterval(() => { findNewestJsonl(); processNewLines(); writeLiveState(); }, 2000);
+    // Debounced flush: collapses rapid bursts of writes from the wrapped CLI.
+    const scheduleFlush = (): void => {
+      if (jsonlDebounceTimer) return; // already pending; let the existing timer fire
+      jsonlDebounceTimer = setTimeout(() => {
+        jsonlDebounceTimer = null;
+        try {
+          processNewLines();
+        } catch (err) {
+          const n = normalizeErr(err);
+          proxyJsonlWatchLog.warn("debounced flush failed", {
+            errno: n.code,
+            message: n.message,
+          });
+        }
+      }, 250);
+      if (typeof jsonlDebounceTimer.unref === "function") jsonlDebounceTimer.unref();
+    };
+
+    let watcherMode: "fs.watch" | "chokidar" = "chokidar";
+    try {
+      const cw = chokidar.watch(path.join(projectDir, "*.jsonl"), {
+        ignoreInitial: false,
+        persistent: false,
+        awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
+      });
+      cw.on("add", (p: string) => {
+        handleRotationCandidate(p);
+        scheduleFlush();
+      });
+      cw.on("change", (p: string) => {
+        // A "change" on a file other than newestJsonl with a fresher mtime is
+        // also a rotation (e.g. CLI resumed an older session file).
+        if (p !== newestJsonl) {
+          handleRotationCandidate(p);
+        }
+        scheduleFlush();
+      });
+      cw.on("error", (err: unknown) => {
+        const n = normalizeErr(err);
+        proxyJsonlWatchLog.warn("chokidar watcher error", {
+          path: projectDir,
+          errno: n.code,
+          message: n.message,
+        });
+      });
+      jsonlWatcher = cw as unknown as typeof jsonlWatcher;
+      proxyJsonlWatchLog.info("watcher started", {
+        path: projectDir,
+        mode: watcherMode,
+      });
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyJsonlWatchLog.warn("chokidar init failed, falling back to fs.watch", {
+        path: projectDir,
+        errno: n.code,
+        message: n.message,
+      });
+      watcherMode = "fs.watch";
+      try {
+        const fw = fs.watch(projectDir, { persistent: false }, (_ev, filename) => {
+          if (!filename) return;
+          const name = String(filename);
+          if (!name.endsWith(".jsonl")) return;
+          const fullPath = path.join(projectDir, name);
+          if (fullPath !== newestJsonl) {
+            handleRotationCandidate(fullPath);
+          }
+          scheduleFlush();
+        });
+        if (typeof (fw as unknown as { unref?: () => void }).unref === "function") {
+          (fw as unknown as { unref: () => void }).unref();
+        }
+        jsonlWatcher = fw as unknown as typeof jsonlWatcher;
+        proxyJsonlWatchLog.info("watcher started", {
+          path: projectDir,
+          mode: watcherMode,
+        });
+      } catch (innerErr) {
+        const inner = normalizeErr(innerErr);
+        proxyJsonlWatchLog.warn("fs.watch init failed", {
+          path: projectDir,
+          errno: inner.code,
+          message: inner.message,
+        });
+      }
+    }
+
+    // Safety-net: re-run processNewLines every 5 s regardless. If the watcher
+    // missed an event (rare, but happens on some Windows network mounts) this
+    // keeps tracking alive. Note: this does NOT call writeLiveState — that is
+    // event-driven (see processJsonlEntry, finalizeTurn, episode end).
+    jsonlPollTimer = setInterval(() => {
+      findNewestJsonl();
+      processNewLines();
+    }, 5000);
     if (typeof jsonlPollTimer.unref === "function") jsonlPollTimer.unref();
   };
 
@@ -589,6 +1032,13 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   process.on("SIGINT", onProcessExit);
   process.on("SIGTERM", onProcessExit);
 
+  proxySpawnLog.info("spawning subprocess", {
+    command: originalCommand,
+    argvLength: options.args.length,
+    cwd,
+    envKeyCount: Object.keys(process.env).length,
+    interactivePassthrough,
+  });
   const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
   const stdinListener = (chunk: Buffer | string): void => {
@@ -670,43 +1120,60 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       maxLines: config.nudge.maxInlineLines,
     });
 
-    turnRecords.push({
-      turnIndex,
-      startedAt: turnState.startedAt,
-      finishedAt: new Date().toISOString(),
-      promptProfile: turnPromptProfile,
-      inputText: turnState.inputText.trim(),
-      outputPreview: turnState.outputText.trim().slice(-300),
-      events: [...turnState.events],
-    });
-    turnSummaries.push(summary);
-    const leadMessage = summary.adviceMessages[0];
-    if (leadMessage) {
-      recentMessageKeys.push(leadMessage.key);
-      if (recentMessageKeys.length > 12) recentMessageKeys.shift();
-      const strongestSaving = Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0);
-      const special =
-        leadMessage.category === "recovery" ||
-        leadMessage.category === "exploration_focus" ||
-        strongestSaving >= 0.35;
-      const rendered = special
-        ? renderMascotSpecialEvent(mascotProfile, {
-            message: leadMessage,
-            summary,
-          })
-        : renderMascotTurnLine(mascotProfile, summary);
-      process.stdout.write(`\r\n${rendered}\r\n`);
-    } else {
-      process.stdout.write(`\r\n${renderMascotTurnLine(mascotProfile, summary)}\r\n`);
-    }
-    pushTurnEvent(
-      createEvent("turn_closed", "proxy", {
+    try {
+      turnRecords.push({
         turnIndex,
-        interventionMode: summary.intervention.mode,
-        adviceCount: summary.adviceMessages.length,
-      }),
-    );
+        startedAt: turnState.startedAt,
+        finishedAt: new Date().toISOString(),
+        promptProfile: turnPromptProfile,
+        inputText: turnState.inputText.trim(),
+        outputPreview: turnState.outputText.trim().slice(-300),
+        events: [...turnState.events],
+      });
+      turnSummaries.push(summary);
+      const leadMessage = summary.adviceMessages[0];
+      if (leadMessage) {
+        recentMessageKeys.push(leadMessage.key);
+        if (recentMessageKeys.length > 12) recentMessageKeys.shift();
+        const strongestSaving = Math.max(...summary.nudges.map((item) => item.predictedSavingRate), 0);
+        const special =
+          leadMessage.category === "recovery" ||
+          leadMessage.category === "exploration_focus" ||
+          strongestSaving >= 0.35;
+        const rendered = special
+          ? renderMascotSpecialEvent(mascotProfile, {
+              message: leadMessage,
+              summary,
+            })
+          : renderMascotTurnLine(mascotProfile, summary);
+        process.stdout.write(`\r\n${rendered}\r\n`);
+      } else {
+        process.stdout.write(`\r\n${renderMascotTurnLine(mascotProfile, summary)}\r\n`);
+      }
+      pushTurnEvent(
+        createEvent("turn_closed", "proxy", {
+          turnIndex,
+          interventionMode: summary.intervention.mode,
+          adviceCount: summary.adviceMessages.length,
+        }),
+      );
+      proxyEpisodeLog.info("turn summary written", { episodeId, turnIndex });
+    } catch (err) {
+      const n = normalizeErr(err);
+      proxyEpisodeLog.warn("turn summary write failed", {
+        episodeId,
+        turnIndex,
+        errno: n.code,
+        message: n.message,
+      });
+    }
     turnState = createEmptyTurn();
+    // Event-driven live-state refresh: a finalized turn changes nothing in
+    // liveState directly, but combo/grade may have shifted via mascot updates
+    // elsewhere. Cheap to write — keeps statusline aligned with turn boundaries.
+    if (liveTrackingEnabled) {
+      writeLiveState();
+    }
   };
 
   const restartIdleTimer = (): void => {
@@ -750,9 +1217,33 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     child.stderr?.on("data", (chunk: Buffer) => consumeStream("stderr", chunk));
   }
 
+  const subprocessStartMs = Date.now();
+  let exitSignal: string | null = null;
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", (code, signal) => {
+      const durationMs = Date.now() - subprocessStartMs;
+      const ctx = { exitCode: code, signal, durationMs };
+      if ((code !== null && code !== 0) || signal !== null) {
+        proxySubprocessLog.warn("subprocess exited", ctx);
+      } else {
+        proxySubprocessLog.info("subprocess exited", ctx);
+      }
+      // Record exit details into live state and flush so observers
+      // (statusline / future analytics) can see how the wrapped CLI ended.
+      liveState.lastExitCode = code;
+      liveState.lastExitSignal = signal === null ? null : String(signal);
+      liveState.lastExitAt = Date.now();
+      liveState.lastSubcommand = options.args[0] ?? null;
+      exitSignal = liveState.lastExitSignal;
+      writeLiveState();
+      proxySubprocessLog.info("live state updated with exit code", {
+        exitCode: code,
+        signal,
+        durationMs,
+      });
+      resolve(code ?? 1);
+    });
   });
 
   process.off("SIGINT", onProcessExit);
@@ -860,13 +1351,18 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     changedLinesCount,
     turns: turnSummaries,
   });
-  const mascotUpdate = updateMascotAfterEpisode(cwd, summary);
+  const mascotUpdate = updateMascotAfterEpisode(cwd, summary, undefined, {
+    promptScore: liveState.promptScore,
+    sessionGrade: liveState.sessionGrade,
+    signalKind: liveState.signalKind,
+  });
   mascotProfile = loadMascotProfile(cwd);
 
   db.saveTurns(episodeId, turnRecords, turnSummaries);
   db.finishEpisode(episodeId, {
     finishedAt: new Date().toISOString(),
     exitCode,
+    exitSignal,
     terminationReason: exitCode === 0 ? "completed" : "child_exit_non_zero",
     summary,
     observedTotalTokens: usageObservations[usageObservations.length - 1]?.totalTokens ?? null,

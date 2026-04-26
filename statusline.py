@@ -466,6 +466,10 @@ _evo = None
 _evo_source = None
 _now_ms = time.time() * 1000
 
+# Staleness window: 60s. Fresh data renders normally; stale-but-recent (<=60s)
+# renders in dim/gray with a marker so the user still sees last-known state
+# instead of EvoPet silently disappearing.
+_FRESH_WINDOW_MS = 60000
 for _try_path in [
     os.path.join(cwd, '.evo', 'live-state.json'),
     os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'),
@@ -473,9 +477,10 @@ for _try_path in [
     try:
         with open(_try_path, encoding='utf-8') as _f:
             _candidate = json.load(_f)
-        if _now_ms - _candidate.get('updatedAt', 0) < 10000:
+        _age_ms = _now_ms - _candidate.get('updatedAt', 0)
+        if _age_ms < _FRESH_WINDOW_MS:
             _evo = _candidate
-            _evo_source = 'proxy'
+            _evo_source = 'proxy' if _age_ms < 10000 else 'proxy_stale'
             break
     except Exception:
         pass
@@ -513,12 +518,15 @@ _save_self(_self)
 _line1_bits = []
 _line2 = ""
 
-if _evo and _evo_source == 'proxy':
+if _evo and _evo_source in ('proxy', 'proxy_stale'):
     # ═══ Full proxy data ═══
+    _is_stale = _evo_source == 'proxy_stale'
     _avatar = _evo.get('avatar', '\U0001f423')
     _nick = _evo.get('nickname', 'EvoPet')
     _turns = _evo.get('turns', 0)
+    _user_msgs = _evo.get('userMessages', 0)
     _bond = _evo.get('bond', 0)
+    _isg = _evo.get('idealStateGauge', -1)
     _combo = _evo.get('comboCount', 0)
     _grade = _evo.get('sessionGrade', '')
     _ps = _evo.get('promptScore', 0)
@@ -529,12 +537,20 @@ if _evo and _evo_source == 'proxy':
     _after = _evo.get('afterExample', '')
 
     _gc = _grade_color(_grade)
-    _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
+    if _is_stale:
+        # Stale fallback: render last-known state in dim/gray with a marker so
+        # the user knows it's lagging, instead of EvoPet vanishing entirely.
+        _line1_bits = [f"{DIM}{_avatar} {_nick} (待機中){R}"]
+    else:
+        _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
     if _grade:
         _line1_bits.append(f"{_gc}{BOLD}{_grade_label(_grade)}{R}")
-    if _turns > 0:
-        _line1_bits.append(f"{_EVO_INFO}{_turns}\u56de\u76ee\u306e\u4f1a\u8a71{R}")
+    # Counter source: userMessages (real human-sent count) when proxy provides the field,
+    # else fall back to turns (legacy total-events count) for old proxy builds.
+    _conv_count = _user_msgs if 'userMessages' in _evo else _turns
+    if _conv_count > 0:
+        _line1_bits.append(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}")
     if _ps > 0:
         if _ps >= 80:
             _line1_bits.append(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}")
@@ -547,8 +563,15 @@ if _evo and _evo_source == 'proxy':
     if _combo >= 3:
         _cc = _EVO_GOLD if _combo >= 10 else _EVO_ACCENT if _combo >= 5 else _EVO_GREEN
         _line1_bits.append(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}")
-    if _bond < 100:
-        _line1_bits.append(f"{_EVO_GREEN}\u80b2\u6210\u5ea6 {BOLD}{_bond}%{R}")
+    # \u80b2\u6210\u5ea6: prefer Ideal State Gauge (quality-based) when available; -1 = no data yet.
+    # Falls back to legacy stage-EXP bond only when ISG hasn't been emitted yet.
+    if _isg >= 0:
+        _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_isg}%{R}")
+    elif _isg == -1:
+        # No ISG data yet \u2014 render "-" per design (instead of fake 100).
+        _line1_bits.append(f"{DIM}\u80b2\u6210\u5ea6 -{R}")
+    elif _bond < 100:
+        _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_bond}%{R}")
 
     if _signal and _signal in ('prompt_too_vague', 'same_file_revisit', 'same_function_revisit',
                                 'scope_creep', 'no_success_criteria', 'approval_fatigue',
@@ -556,26 +579,26 @@ if _evo and _evo_source == 'proxy':
         if _before and _after:
             _b = _before[:30] + '...' if len(_before) > 30 else _before
             _a = _after[:55] + '...' if len(_after) > 55 else _after
-            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {_EVO_GREEN}\"{_a}\"{R}"
+            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
         elif _advice:
             _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}"
             if _detail:
-                _line2 += f"\n   {DIM}{_detail[:70]}{R}"
+                _line2 += f"\n   {BOLD}{_EVO_WARN}{_detail[:70]}{R}"
     elif _signal in ('good_structure', 'first_pass_success', 'improving_trend'):
         _line2 = f"\u2728 {_EVO_GREEN}{BOLD}{_advice}{R}"
         if _detail:
-            _line2 += f"\n   {DIM}{_detail[:70]}{R}"
+            _line2 += f"\n   {BOLD}{_EVO_GREEN}{_detail[:70]}{R}"
     elif _signal == 'tip' and _advice:
         if _before and _after:
             _b = _before[:30] + '...' if len(_before) > 30 else _before
             _a = _after[:55] + '...' if len(_after) > 55 else _after
-            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {_EVO_GREEN}\"{_a}\"{R}"
+            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
         else:
             _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}"
             if _detail:
-                _line2 += f"\n   {DIM}{_detail[:80]}{R}"
+                _line2 += f"\n   {BOLD}{_EVO_INFO}{_detail[:80]}{R}"
     elif _advice:
-        _line2 = f"\U0001f4a1 {_EVO_INFO}{_advice}{R}"
+        _line2 = f"\U0001f4a1 {BOLD}{_EVO_INFO}{_advice}{R}"
 
 else:
     # ═══ No proxy — self-tracked fallback ═══
@@ -601,9 +624,9 @@ else:
     if _curr_ctx >= 80:
         _line1_bits.append(f"{_EVO_RED}{BOLD}{_comment}{R}")
     elif _curr_ctx >= 60:
-        _line1_bits.append(f"{_EVO_WARN}{_comment}{R}")
+        _line1_bits.append(f"{BOLD}{_EVO_WARN}{_comment}{R}")
     else:
-        _line1_bits.append(f"{_EVO_GREEN}{_comment}{R}")
+        _line1_bits.append(f"{BOLD}{_EVO_GREEN}{_comment}{R}")
 
     _line1_bits.append(f"{DIM}{_calls}\u56de\u76ee{R}")
 
@@ -615,7 +638,7 @@ else:
     if _tb and _ta:
         _tb_d = _tb[:30] + '...' if len(_tb) > 30 else _tb
         _ta_d = _ta[:55] + '...' if len(_ta) > 55 else _ta
-        _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}\n   {DIM}\u274c{R} {_EVO_RED}\"{_tb_d}\"{R} \u2192 {DIM}\u2705{R} {_EVO_GREEN}\"{_ta_d}\"{R}"
+        _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_tb_d}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_ta_d}\"{R}"
     else:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}"
 

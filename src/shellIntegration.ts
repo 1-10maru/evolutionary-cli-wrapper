@@ -9,7 +9,20 @@ import {
   getDefaultPwshProfilePath,
   updateEvoConfig,
 } from "./config";
+import { getLogger } from "./logger";
 import { SupportedCli } from "./types";
+
+const shellPathLog = getLogger().child("shell.path");
+const shellResolveLog = getLogger().child("shell.resolve");
+const shellRegistryLog = getLogger().child("shell.registry");
+
+function normalizeErr(err: unknown): { message: string; code?: string } {
+  if (err instanceof Error) {
+    const e = err as Error & { code?: string };
+    return { message: e.message, code: e.code };
+  }
+  return { message: String(err) };
+}
 
 const PROFILE_START = "# >>> evo shell integration >>>";
 const PROFILE_END = "# <<< evo shell integration <<<";
@@ -35,6 +48,27 @@ function setPathEnv(env: NodeJS.ProcessEnv, value: string): NodeJS.ProcessEnv {
 
 function normalize(p: string): string {
   return path.resolve(p).toLowerCase();
+}
+
+function isLegacyEvoBackupCommand(commandPath: string): boolean {
+  return /\.evo-original(\.(cmd|ps1))?$/i.test(path.basename(commandPath));
+}
+
+function rankResolvedCommandCandidate(commandPath: string): number {
+  // Ranking is deterministic across platforms: Evo wraps Windows-native CLI shims
+  // (claude.cmd / claude.exe), and tests must verify the same preference order on
+  // Linux CI as on Windows hosts.
+  const ext = path.extname(commandPath).toLowerCase();
+  if (ext === ".exe") return 0;
+  if (ext === ".cmd") return 1;
+  if (ext === ".bat") return 2;
+  if (ext === ".ps1") return 3;
+  if (ext === ".sh") return 5;
+  if (ext === ".bash") return 6;
+  // Extensionless shim (npm posix wrapper) — ranked after Windows-native shims so
+  // that `.cmd` siblings win the resolution race on both platforms.
+  if (!ext) return 4;
+  return 7;
 }
 
 function runPowerShell(command: string): string {
@@ -68,7 +102,12 @@ function addToUserPath(binDir: string): void {
     runPowerShell(
       `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
     );
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry write failed (addToUserPath)", {
+      errno: n.code,
+      message: n.message,
+    });
     /* best-effort — user can add manually */
   }
 }
@@ -90,7 +129,12 @@ function removeFromUserPath(binDir: string): void {
     runPowerShell(
       `[System.Environment]::SetEnvironmentVariable('Path','${escaped}','User')`,
     );
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry write failed (removeFromUserPath)", {
+      errno: n.code,
+      message: n.message,
+    });
     /* best-effort */
   }
 }
@@ -127,7 +171,12 @@ function getCmdAutoRunValue(): string | null {
       ].join("; "),
     );
     return value || null;
-  } catch {
+  } catch (err) {
+    const n = normalizeErr(err);
+    shellRegistryLog.warn("registry read failed (getCmdAutoRunValue)", {
+      errno: n.code,
+      message: n.message,
+    });
     return null;
   }
 }
@@ -191,6 +240,9 @@ function normalizeCmdAutoRunValue(value: string | null): string | null {
 
 function getManagedPowerShellProfilePaths(cwd: string): string[] {
   const config = ensureEvoConfig(cwd);
+  if (process.env.EVO_TEST_MODE === "1") {
+    return [path.resolve(config.shellIntegration.profilePath)];
+  }
   return Array.from(
     new Set(
       [config.shellIntegration.profilePath, getDefaultPowerShellProfilePath(), getDefaultPwshProfilePath()]
@@ -205,18 +257,96 @@ function buildCmdAutoRunChain(cwd: string, original: string | null): string {
   return original && original.trim().length > 0 ? `${managed} & ${original}` : managed;
 }
 
-export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
-  if (cli === "generic") return null;
-  const shellHome = getShellHome(cwd);
-  const localConfig = ensureEvoConfig(cwd);
-  const localKnown = localConfig.shellIntegration.originalCommandMap[cli];
-  if (localKnown && fs.existsSync(localKnown)) return localKnown;
+function dedupeCommandCandidates(candidates: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = normalize(candidate);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
 
-  const shellConfig = shellHome === cwd ? localConfig : ensureEvoConfig(shellHome);
-  const shellKnown = shellConfig.shellIntegration.originalCommandMap[cli];
-  if (shellKnown && fs.existsSync(shellKnown)) return shellKnown;
+function extractShimTargetPath(commandPath: string): string | null {
+  const ext = path.extname(commandPath).toLowerCase();
+  if (ext === ".exe") return null;
 
-  const binDir = getBinDir(shellHome);
+  let contents: string;
+  try {
+    contents = fs.readFileSync(commandPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  const patterns = [
+    /%dp0%[\\/](?<target>node_modules[^"\r\n]+)/i,
+    /\$basedir[\\/](?<target>node_modules[^"\r\n]+)/i,
+    /\$PSScriptRoot[\\/](?<target>node_modules[^'"\r\n]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const target = pattern.exec(contents)?.groups?.target;
+    if (!target) continue;
+    const normalizedTarget = target.replace(/[\\/]+/g, path.sep);
+    return path.resolve(path.dirname(commandPath), normalizedTarget);
+  }
+  return null;
+}
+
+function isUsableCommandCandidate(commandPath: string): boolean {
+  if (!commandPath || !fs.existsSync(commandPath)) return false;
+  const shimTarget = extractShimTargetPath(commandPath);
+  return shimTarget ? fs.existsSync(shimTarget) : true;
+}
+
+function getSiblingCommandCandidates(commandPath: string, cli: Exclude<SupportedCli, "generic">): string[] {
+  const dir = path.dirname(commandPath);
+  const base = path.join(dir, cli);
+  // Always probe both Windows-native (.cmd/.exe/.bat/.ps1) and Unix-style (.sh/.bash)
+  // siblings. Evo proxies CLIs that ship Windows shims via npm even when the host
+  // OS is Linux (e.g. CI), so the legacy self-heal path must locate the .cmd
+  // sibling regardless of process.platform.
+  const candidates = [
+    base,
+    `${base}.cmd`,
+    `${base}.exe`,
+    `${base}.bat`,
+    `${base}.ps1`,
+    `${base}.sh`,
+    `${base}.bash`,
+  ];
+  return dedupeCommandCandidates(candidates)
+    .filter((candidate) => normalize(candidate) !== normalize(commandPath))
+    .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b));
+}
+
+function persistResolvedCommand(cwd: string, shellHome: string, cli: Exclude<SupportedCli, "generic">, resolved: string): void {
+  const persistFor = (targetCwd: string): void => {
+    const config = ensureEvoConfig(targetCwd);
+    if (config.shellIntegration.originalCommandMap[cli] === resolved) return;
+    updateEvoConfig(targetCwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: {
+          ...config.shellIntegration.originalCommandMap,
+          [cli]: resolved,
+        },
+      },
+    });
+  };
+
+  persistFor(cwd);
+  if (normalize(shellHome) !== normalize(cwd)) {
+    persistFor(shellHome);
+  }
+}
+
+function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli: Exclude<SupportedCli, "generic">): string[] {
+  const testWhereStdout = process.env.EVO_TEST_MODE === "1" ? process.env.EVO_TEST_WHERE_STDOUT : undefined;
+  const stdout = testWhereStdout ?? (() => {
   const currentPath = getPathEnv(process.env);
   const filteredPath = currentPath
     .split(";")
@@ -230,14 +360,55 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
     env: setPathEnv(process.env, filteredPath),
   });
 
-  if (result.status !== 0) return null;
-  const candidates = String(result.stdout ?? "")
+    if (result.status !== 0) return "";
+    return String(result.stdout ?? "");
+  })();
+
+  const candidates = dedupeCommandCandidates(
+    String(stdout ?? "")
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean)
-    .filter((item) => normalize(path.dirname(item)) !== normalize(binDir));
+    .filter((item) => normalize(path.dirname(item)) !== normalize(binDir))
+    .filter((item) => !isLegacyEvoBackupCommand(item))
+    .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b)),
+  );
+  for (const candidate of candidates) {
+    shellPathLog.debug("path candidate", { candidate, exists: fs.existsSync(candidate), cli });
+  }
+  return candidates;
+}
 
-  return candidates[0] ?? null;
+export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
+  if (cli === "generic") return null;
+  const shellHome = getShellHome(cwd);
+  const localConfig = ensureEvoConfig(cwd);
+  const shellConfig = shellHome === cwd ? localConfig : ensureEvoConfig(shellHome);
+  const localKnown = localConfig.shellIntegration.originalCommandMap[cli];
+  const shellKnown = shellConfig.shellIntegration.originalCommandMap[cli];
+  const binDir = getBinDir(shellHome);
+  const configuredCandidates = dedupeCommandCandidates([localKnown, shellKnown]);
+  const siblingCandidates = configuredCandidates.flatMap((commandPath) => getSiblingCommandCandidates(commandPath, cli));
+  const liveConfiguredCandidates = configuredCandidates.filter((commandPath) => !isLegacyEvoBackupCommand(commandPath));
+  const discoveredCandidates = discoverOriginalCommandsFromPath(shellHome, binDir, cli);
+  const fallbackCandidates = configuredCandidates;
+
+  const resolved = dedupeCommandCandidates([
+    ...siblingCandidates,
+    ...liveConfiguredCandidates,
+    ...discoveredCandidates,
+    ...fallbackCandidates,
+  ]).find((candidate) => isUsableCommandCandidate(candidate)) ?? null;
+
+  if (resolved && !isLegacyEvoBackupCommand(resolved)) {
+    persistResolvedCommand(cwd, shellHome, cli, resolved);
+  }
+
+  if (resolved) {
+    shellResolveLog.info("resolved original command", { cli, resolvedPath: resolved });
+  }
+
+  return resolved;
 }
 
 function getWrapperTargets(basePath: string): Array<{ path: string; backupPath: string; kind: "sh" | "cmd" | "ps1" }> {

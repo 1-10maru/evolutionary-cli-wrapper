@@ -3,7 +3,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import chokidar from "chokidar";
 import { ensureEvoConfig } from "./config";
+import { getLogger } from "./logger";
 import { detectCli, extractEventsFromLine, parseUsageObservation } from "./adapters";
+
+const log = getLogger().child("episode");
 import { diffSymbolSnapshots } from "./ast";
 import { EvoDatabase } from "./db";
 import { extractPromptProfile } from "./promptProfile";
@@ -85,6 +88,7 @@ export async function runEpisode(options: RunOptions): Promise<{
   const promptProfile = extractPromptProfile(promptText);
   const db = new EvoDatabase(cwd);
   const startedAt = new Date().toISOString();
+  const episodeStartMs = Date.now();
   const episodeId = db.createEpisode({
     cwd,
     cli,
@@ -92,6 +96,7 @@ export async function runEpisode(options: RunOptions): Promise<{
     startedAt,
     promptProfile,
   });
+  log.info("episode started", { episodeId, cwd, cli });
 
   const events: EpisodeEvent[] = [
     createEvent("prompt_submitted", "wrapper", {
@@ -299,6 +304,13 @@ export async function runEpisode(options: RunOptions): Promise<{
   }
 
   db.close();
+
+  log.info("episode finished", {
+    episodeId,
+    durationMs: Date.now() - episodeStartMs,
+    turns: 0,
+    exitCode,
+  });
 
   return {
     episodeId,

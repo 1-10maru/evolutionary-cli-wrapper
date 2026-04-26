@@ -92,6 +92,16 @@ export interface TokenCalibrationEstimate {
   sampleSize: number;
 }
 
+export interface RecentEpisodeRecord {
+  promptScore: number;
+  structureScore: number;
+  grade: string;
+  hadFixLoop: boolean;
+  hadSearchLoop: boolean;
+  signalKind: string;
+  ts: number;
+}
+
 export interface MascotProfile {
   speciesId: string;
   nickname: string;
@@ -104,6 +114,7 @@ export interface MascotProfile {
   lastMessages: string[];
   comboCount: number;
   bestCombo: number;
+  recentEpisodes?: RecentEpisodeRecord[];
 }
 
 export interface MascotRenderState {
@@ -530,6 +541,15 @@ export interface AdviceConfig {
 
 export interface LiveStatePayload {
   turns: number;
+  /**
+   * Count of "real" user messages — JSONL `type: "user"` entries whose
+   * content includes at least one non-tool_result block (string content,
+   * text blocks, image blocks, etc.). Tool-result responses (which the
+   * Anthropic API wire-formats as user-type entries) do NOT increment
+   * this counter. `turns` continues to track total user-type events for
+   * backward compatibility.
+   */
+  userMessages?: number;
   toolCalls: number;
   advice: string;
   mood: MascotMood;
@@ -545,4 +565,12 @@ export interface LiveStatePayload {
   signalKind: AdviceSignalKind | "";
   beforeExample: string;
   afterExample: string;
+  /** Last observed exit code of the wrapped CLI. null if it has not exited yet. */
+  lastExitCode?: number | null;
+  /** Last observed termination signal (e.g. "SIGTERM"). null if exit was clean. */
+  lastExitSignal?: string | null;
+  /** Epoch ms timestamp of the last exit observation. */
+  lastExitAt?: number | null;
+  /** Last subcommand observed (e.g. "review" for passthrough). */
+  lastSubcommand?: string | null;
 }

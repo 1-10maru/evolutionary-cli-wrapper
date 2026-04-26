@@ -329,6 +329,7 @@ export class EvoDatabase {
         compacted_at TEXT NOT NULL
       );
     `);
+    this.ensureColumn("episodes", "exit_signal", "TEXT");
     this.ensureColumn("episode_summaries", "attention_entropy", "REAL NOT NULL DEFAULT 0");
     this.ensureColumn("episode_summaries", "attention_compression", "REAL NOT NULL DEFAULT 0");
     this.ensureColumn("episode_summaries", "novelty_ratio", "REAL NOT NULL DEFAULT 1");
@@ -692,6 +693,7 @@ export class EvoDatabase {
   finishEpisode(episodeId: number, input: {
     finishedAt: string;
     exitCode: number;
+    exitSignal?: string | null;
     terminationReason: string;
     summary: EpisodeSummary;
     observedTotalTokens?: number | null;
@@ -705,10 +707,19 @@ export class EvoDatabase {
     this.db
       .prepare(`
         UPDATE episodes
-        SET finished_at = @finishedAt, exit_code = @exitCode, termination_reason = @terminationReason
+        SET finished_at = @finishedAt,
+            exit_code = @exitCode,
+            exit_signal = @exitSignal,
+            termination_reason = @terminationReason
         WHERE id = @episodeId
       `)
-      .run({ episodeId, ...input });
+      .run({
+        episodeId,
+        finishedAt: input.finishedAt,
+        exitCode: input.exitCode,
+        exitSignal: input.exitSignal ?? null,
+        terminationReason: input.terminationReason,
+      });
 
     this.db
       .prepare(`
