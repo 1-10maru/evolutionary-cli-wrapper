@@ -521,16 +521,28 @@ if not _self or _session_reset:
 # Increment `calls` only when a NEW user prompt arrives. Claude Code re-renders
 # the statusline many times per turn (token streams, tool calls, etc.); a naive
 # per-render bump inflates the counter to dozens within a single user message.
-# Detection: hash the `prompt` field (last user message) Claude Code passes in stdin.
+#
+# Detection: hash the `prompt` field (last user message) Claude Code passes in
+# stdin. To handle the case where the user sends the SAME prompt text twice in
+# a row (e.g. "continue", "retry", "/cost"), also break the dedup window after
+# `_TURN_GAP_SEC` seconds of inactivity — a fresh prompt with identical text
+# arriving after the gap is treated as a new turn.
+_TURN_GAP_SEC = 30
 _prompt = data.get('prompt') or data.get('user_prompt') or ''
 _prompt_hash = hashlib.md5(_prompt.encode('utf-8', 'replace')).hexdigest() if _prompt else ''
 _prev_hash = _self.get('last_prompt_hash', '')
-if _prompt_hash and _prompt_hash != _prev_hash:
+_last_inc_at = _self.get('last_increment_at', 0)
+if _prompt_hash and (_prompt_hash != _prev_hash or (_now_s - _last_inc_at) > _TURN_GAP_SEC):
     _self['calls'] = _self.get('calls', 0) + 1
     _self['last_prompt_hash'] = _prompt_hash
+    _self['last_increment_at'] = _now_s
 elif not _prompt_hash and _self.get('calls', 0) == 0:
     # First render of a brand-new session with no prompt field yet → start at 1.
     _self['calls'] = 1
+# `tip_idx` rotates on every render so cosmetic tip cycling is independent of
+# the (semantic) per-prompt `calls` counter. This keeps the visual variety the
+# user expects without inflating the conversation count.
+_self['tip_idx'] = _self.get('tip_idx', 0) + 1
 _self['last'] = _now_s
 _self['ctx_pct'] = _curr_ctx
 _self['session_id'] = _session_id
@@ -540,10 +552,14 @@ _save_self(_self)
 _line1_bits = []
 _line2 = ""
 
-# Suppress proxy data when session just started (calls<=1). The proxy's `.evo-live.json`
-# carries cumulative state from prior sessions (sessionGrade/promptScore/advice/before/after)
-# which is meaningless on a fresh session before any user message has been graded.
-if _evo and _evo_source == 'proxy' and _self.get('calls', 0) <= 1:
+# Suppress proxy data when no user message has been graded yet. The proxy's
+# `.evo-live.json` is shared across sessions and carries cumulative state
+# (sessionGrade/promptScore/advice/before/after) from the previous session,
+# which is meaningless until the current session has its first graded turn.
+# Gate on the proxy-reported `userMessages == 0` (real signal), and apply to
+# both fresh AND stale proxy paths so prior-session bleed-through is closed
+# in either case.
+if _evo and _evo_source in ('proxy', 'proxy_stale') and _evo.get('userMessages', 0) == 0:
     _evo = None
     _evo_source = None
 
@@ -643,7 +659,10 @@ else:
     _calls = _self.get('calls', 1)
     _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
-    # Pick comment based on ctx bracket + call count rotation
+    # Pick comment based on ctx bracket + render rotation (tip_idx rotates per
+    # render, so cosmetic copy varies even when the conversation count holds
+    # steady within a single user turn).
+    _ridx = _self.get('tip_idx', _calls)
     if _curr_ctx >= 80:
         _pool = _COMMENTS['critical']
     elif _curr_ctx >= 60:
@@ -655,7 +674,7 @@ else:
     else:
         _pool = _COMMENTS['start']
 
-    _comment = _pool[_calls % len(_pool)]
+    _comment = _pool[_ridx % len(_pool)]
 
     if _curr_ctx >= 80:
         _line1_bits.append(f"{_EVO_RED}{BOLD}{_comment}{R}")
@@ -666,8 +685,8 @@ else:
 
     _line1_bits.append(f"{BOLD}{_EVO_INFO}{_calls}\u56de\u76ee{R}")
 
-    # Tip rotation
-    _tip = _TIPS[_calls % len(_TIPS)]
+    # Tip rotation — keyed on render index so tips cycle even within a single turn
+    _tip = _TIPS[_ridx % len(_TIPS)]
     _th = _tip['headline']
     _tb = _tip.get('before')
     _ta = _tip.get('after')
