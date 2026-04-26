@@ -530,6 +530,15 @@ export interface AdviceConfig {
 
 export interface LiveStatePayload {
   turns: number;
+  /**
+   * Count of "real" user messages — JSONL `type: "user"` entries whose
+   * content includes at least one non-tool_result block (string content,
+   * text blocks, image blocks, etc.). Tool-result responses (which the
+   * Anthropic API wire-formats as user-type entries) do NOT increment
+   * this counter. `turns` continues to track total user-type events for
+   * backward compatibility.
+   */
+  userMessages?: number;
   toolCalls: number;
   advice: string;
   mood: MascotMood;

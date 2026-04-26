@@ -394,6 +394,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   // Live session state tracked via JSONL monitoring
   const liveState = {
     turns: 0,
+    userMessages: 0,
     toolCalls: 0,
     lastTool: "",
     lastFile: "",
@@ -456,6 +457,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     const state = renderMascotState(mascotProfile);
     const payload = {
       turns: liveState.turns,
+      userMessages: liveState.userMessages,
       toolCalls: liveState.toolCalls,
       advice: liveState.advice,
       mood: mascotProfile.mood,
@@ -689,10 +691,35 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
     const processJsonlEntry = (entry: { type?: string; message?: { content?: unknown[] } }): void => {
       const wasTurns = liveState.turns;
+      const wasUserMessages = liveState.userMessages;
       const wasToolCalls = liveState.toolCalls;
       const wasSignal = liveState.signalKind;
       if (entry.type === "user") {
         liveState.turns += 1;
+        // Distinguish "real" user messages from tool_result echoes.
+        // Anthropic API wire-formats tool results as user-type entries with
+        // a content array of {type:"tool_result", ...} blocks. We treat an
+        // entry as a real user message if:
+        //   - content is a string (always real), OR
+        //   - content is an array AND at least one item has type !== "tool_result"
+        // If every item is a tool_result, it is a tool response, not a user message.
+        const msgObj = (entry as Record<string, unknown>).message;
+        let isRealUserMessage = false;
+        if (msgObj && typeof msgObj === "object") {
+          const msgContent = (msgObj as Record<string, unknown>).content;
+          if (typeof msgContent === "string") {
+            isRealUserMessage = true;
+          } else if (Array.isArray(msgContent)) {
+            isRealUserMessage = msgContent.some((item) => {
+              if (!item || typeof item !== "object") return false;
+              const t = (item as Record<string, unknown>).type;
+              return typeof t === "string" && t !== "tool_result";
+            });
+          }
+        }
+        if (isRealUserMessage) {
+          liveState.userMessages += 1;
+        }
         // Extract prompt features for signal detection
         const content = (entry as Record<string, unknown>).message;
         if (content && typeof content === "object") {
@@ -738,9 +765,10 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       }
       // Event-driven live-state write: trigger only when meaningful change occurs.
       const turnsChanged = liveState.turns !== wasTurns;
+      const userMessagesChanged = liveState.userMessages !== wasUserMessages;
       const toolCallsChanged = liveState.toolCalls !== wasToolCalls;
       const signalChanged = liveState.signalKind !== wasSignal;
-      if (turnsChanged || toolCallsChanged || signalChanged) {
+      if (turnsChanged || userMessagesChanged || toolCallsChanged || signalChanged) {
         writeLiveState();
       }
     };
@@ -853,6 +881,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       jsonlReadOffset = 0; // read new file from start
       // Session reset: clear stale live state
       liveState.turns = 0;
+      liveState.userMessages = 0;
       liveState.toolCalls = 0;
       liveState.lastTool = "";
       liveState.lastFile = "";

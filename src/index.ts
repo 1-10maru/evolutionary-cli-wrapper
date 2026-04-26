@@ -12,6 +12,7 @@ import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from 
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import { runLogsCommand } from "./cli/logs";
+import { runDisplayCommand } from "./cli/display";
 import {
   getShellStatus,
   resolveOriginalCommand,
@@ -458,6 +459,13 @@ program
   .option("--cwd <dir>", "Working dir to resolve .evo/logs from", process.cwd())
   .action(async (options: { tail?: number; since?: string; cwd: string }) => {
     await runLogsCommand(options);
+  });
+
+program
+  .command("display [mode]")
+  .description("Toggle EvoPet statusline mode (minimum|expansion|toggle). Without arg, shows current mode.")
+  .action(async (mode?: string) => {
+    await runDisplayCommand(mode);
   });
 
 program
