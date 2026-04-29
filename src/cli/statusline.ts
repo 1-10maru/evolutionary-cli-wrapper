@@ -85,7 +85,19 @@ function safeReadJson<T>(filePath: string): T | null {
 function safeWriteJson(filePath: string, data: unknown): void {
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(data));
+    const json = JSON.stringify(data);
+    // Atomic write: write to tmp file then rename. Prevents truncated JSON
+    // from being read by a concurrent statusline tick (Claude Code re-renders
+    // rapidly). Mirrors the atomicWrite pattern from proxyRuntime.ts.
+    const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+    try {
+      fs.writeFileSync(tmp, json);
+      fs.renameSync(tmp, filePath);
+    } catch {
+      // Best-effort cleanup; fall back to direct write so state still updates.
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      try { fs.writeFileSync(filePath, json); } catch { /* ignore */ }
+    }
   } catch {
     // Best-effort
   }
