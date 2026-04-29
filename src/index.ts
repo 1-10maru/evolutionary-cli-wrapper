@@ -13,6 +13,7 @@ import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import { runLogsCommand } from "./cli/logs";
 import { runDisplayCommand } from "./cli/display";
+import { runStatuslineCommand } from "./cli/statusline";
 import {
   getShellStatus,
   resolveOriginalCommand,
@@ -466,6 +467,13 @@ program
   .description("Toggle EvoPet statusline mode (minimum|expansion|toggle). Without arg, shows current mode.")
   .action(async (mode?: string) => {
     await runDisplayCommand(mode);
+  });
+
+program
+  .command("statusline")
+  .description("Render EvoPet portion of the Claude Code statusline (reads JSON from stdin).")
+  .action(async () => {
+    await runStatuslineCommand();
   });
 
 program
