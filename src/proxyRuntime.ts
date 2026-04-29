@@ -254,6 +254,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   };
   process.on("SIGINT", onProcessExit);
   process.on("SIGTERM", onProcessExit);
+  // Windows-specific: SIGHUP fires when the console window is closed. SIGTERM
+  // is unreliable on Windows so SIGHUP is the closer-to-canonical "shutdown"
+  // signal there. Listening on both Unix and Windows is harmless.
+  process.on("SIGHUP", onProcessExit);
+  // Also flush live-state on exit() / uncaught exit to avoid stale .evo-live.json.
+  process.once("beforeExit", () => {
+    try { teardownLiveTracking(); } catch { /* best-effort */ }
+  });
 
   proxySpawnLog.info("spawning subprocess", {
     command: originalCommand,
@@ -389,6 +397,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   process.off("SIGINT", onProcessExit);
   process.off("SIGTERM", onProcessExit);
+  process.off("SIGHUP", onProcessExit);
   teardownLiveTracking();
   if (idleTimer) clearTimeout(idleTimer);
   if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
