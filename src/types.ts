@@ -1,4 +1,4 @@
-export type SupportedCli = "codex" | "claude" | "generic";
+export type SupportedCli = "claude";
 export type InterventionMode = "auto" | "active" | "quiet";
 export type InterventionDecisionMode = "active" | "quiet" | "silent";
 export type MascotStage = "egg" | "sprout" | "buddy" | "wizard" | "legend";
