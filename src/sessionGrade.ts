@@ -91,6 +91,13 @@ export function computeLiveGrade(input: {
   toolCalls: number;
   firstPassGreen: boolean;
   comboCount: number;
+  /**
+   * When true, the most recent advice signal is positive (e.g. first_pass_success,
+   * good_structure, improving_trend). Adds a boost to the overall score so the
+   * cumulative letter grade does not contradict the recent-turn signal kind.
+   * Picked to move a borderline grade up by ~1 letter (thresholds: D<45, C<60, B<75, A<90, S>=90).
+   */
+  recentPositiveSignal?: boolean;
 }): SessionGradeResult {
   const promptScore = clamp(input.promptScore, 0, 100);
 
@@ -105,7 +112,28 @@ export function computeLiveGrade(input: {
     100,
   ));
 
-  const overallScore = round(promptScore * 0.5 + efficiencyScore * 0.5);
+  const baseOverall = promptScore * 0.5 + efficiencyScore * 0.5;
+  const positiveSignalBoost = input.recentPositiveSignal ? 18 : 0;
+  // Cap boost to single-letter improvement to avoid 2-tier jumps
+  // (e.g. D 42 + 18 = 60 → B; intent was ~1 letter D → C).
+  // Map base letter → max score = top edge of next band (next band threshold - 1).
+  // Letter order: D < C < B < A < S. Thresholds: D<45, C<60, B<75, A<90, S>=90.
+  const boostedRaw = clamp(baseOverall + positiveSignalBoost, 0, 100);
+  let overallScore: number;
+  if (positiveSignalBoost > 0) {
+    const baseLetter = gradeFromScore(Math.round(baseOverall));
+    const maxByBaseLetter: Record<SessionGradeLetter, number> = {
+      D: 59, // top of C → cap improvement at C
+      C: 74, // top of B
+      B: 89, // top of A
+      A: 100, // already at A; allow up to S edge (effectively no further cap)
+      S: 100,
+    };
+    const cap = maxByBaseLetter[baseLetter];
+    overallScore = round(Math.min(boostedRaw, cap));
+  } else {
+    overallScore = round(boostedRaw);
+  }
 
   return {
     grade: gradeFromScore(overallScore),
