@@ -89,7 +89,7 @@ describe("integration: evo stats", () => {
     const db = new EvoDatabase(cwd);
     const raw = (db as unknown as { db: import("better-sqlite3").Database }).db;
     seedEpisode(raw, { id: 1, cli: "claude", surrogateCost: 12.5, expAwarded: 30 });
-    seedEpisode(raw, { id: 2, cli: "codex",  surrogateCost: 18.0, expAwarded: 40 });
+    seedEpisode(raw, { id: 2, cli: "claude", surrogateCost: 18.0, expAwarded: 40 });
     seedEpisode(raw, { id: 3, cli: "claude", surrogateCost: 6.0,  expAwarded: 50 });
     db.close();
 
