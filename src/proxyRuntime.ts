@@ -103,7 +103,7 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const turnRecords: TurnRecord[] = [];
   const turnSummaries: TurnSummary[] = [];
   const recentMessageKeys: string[] = [];
-  const frictionAdapter = createFrictionCaptureAdapter(cli);
+  const frictionAdapter = createFrictionCaptureAdapter();
   const turnStateRef: { current: ProxyTurnState } = { current: createEmptyTurn() };
   let turnIndex = 0;
   const bumpTurnIndex = (): number => {
@@ -250,13 +250,22 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     writeLiveState();
   }
 
-  // Graceful shutdown: ensure live-state cleanup on SIGINT/SIGTERM
+  // Graceful shutdown: ensure live-state cleanup on SIGINT/SIGTERM/SIGHUP and
+  // before the Node.js event loop exits. SIGHUP fires when a Windows console
+  // window is closed (or the parent terminal hangs up on POSIX), which is
+  // distinct from SIGINT/SIGTERM and was previously not cleaned up — leaving
+  // stale live-state files for the statusline observer.
   const onProcessExit = (): void => {
     teardownLiveTracking();
     process.exit(0);
   };
+  const onBeforeExit = (): void => {
+    teardownLiveTracking();
+  };
   process.on("SIGINT", onProcessExit);
   process.on("SIGTERM", onProcessExit);
+  process.on("SIGHUP", onProcessExit);
+  process.on("beforeExit", onBeforeExit);
 
   proxySpawnLog.info("spawning subprocess", {
     command: originalCommand,
@@ -394,6 +403,8 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   process.off("SIGINT", onProcessExit);
   process.off("SIGTERM", onProcessExit);
+  process.off("SIGHUP", onProcessExit);
+  process.off("beforeExit", onBeforeExit);
   teardownLiveTracking();
   if (idleTimer) clearTimeout(idleTimer);
   if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
