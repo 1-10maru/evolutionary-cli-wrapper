@@ -2,15 +2,14 @@ import { describe, expect, it } from "vitest";
 import { detectCli, extractEventsFromLine, parseUsageObservation } from "../src/adapters";
 
 describe("adapters", () => {
-  it("detects supported CLI families", () => {
-    expect(detectCli("codex")).toBe("codex");
+  it("always detects 'claude' (claude-only build)", () => {
     expect(detectCli("claude")).toBe("claude");
-    expect(detectCli("custom-wrapper")).toBe("generic");
+    expect(detectCli("custom-wrapper")).toBe("claude");
   });
 
   it("parses token usage lines when available", () => {
     const usage = parseUsageObservation(
-      "codex",
+      "claude",
       "stdout",
       "prompt tokens: 120 completion tokens: 34 total tokens: 154",
     );

@@ -301,7 +301,7 @@ function isUsableCommandCandidate(commandPath: string): boolean {
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }
 
-function getSiblingCommandCandidates(commandPath: string, cli: Exclude<SupportedCli, "generic">): string[] {
+function getSiblingCommandCandidates(commandPath: string, cli: SupportedCli): string[] {
   const dir = path.dirname(commandPath);
   const base = path.join(dir, cli);
   // Always probe both Windows-native (.cmd/.exe/.bat/.ps1) and Unix-style (.sh/.bash)
@@ -322,7 +322,7 @@ function getSiblingCommandCandidates(commandPath: string, cli: Exclude<Supported
     .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b));
 }
 
-function persistResolvedCommand(cwd: string, shellHome: string, cli: Exclude<SupportedCli, "generic">, resolved: string): void {
+function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCli, resolved: string): void {
   const persistFor = (targetCwd: string): void => {
     const config = ensureEvoConfig(targetCwd);
     if (config.shellIntegration.originalCommandMap[cli] === resolved) return;
@@ -344,7 +344,7 @@ function persistResolvedCommand(cwd: string, shellHome: string, cli: Exclude<Sup
   }
 }
 
-function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli: Exclude<SupportedCli, "generic">): string[] {
+function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli: SupportedCli): string[] {
   const testWhereStdout = process.env.EVO_TEST_MODE === "1" ? process.env.EVO_TEST_WHERE_STDOUT : undefined;
   const stdout = testWhereStdout ?? (() => {
   const currentPath = getPathEnv(process.env);
@@ -380,7 +380,6 @@ function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli
 }
 
 export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
-  if (cli === "generic") return null;
   const shellHome = getShellHome(cwd);
   const localConfig = ensureEvoConfig(cwd);
   const shellConfig = shellHome === cwd ? localConfig : ensureEvoConfig(shellHome);
@@ -438,7 +437,7 @@ function normalizeResolvedWrapperBase(resolved: string): string {
     : normalizedResolved;
 }
 
-function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: "codex" | "claude", cwd: string): string {
+function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: SupportedCli, cwd: string): string {
   const mainPath = path.join(cwd, "dist", "index.js");
   const configPath = path.join(cwd, ".evo", "config.json");
   const cmdBackup = `${cli}.evo-original.cmd`;
@@ -519,7 +518,7 @@ function installCommandWrappers(cwd: string): Partial<Record<SupportedCli, strin
   if (process.env.EVO_TEST_MODE === "1") return originalCommandMap;
   // Record original command locations without overwriting npm global files.
   // Evo bin takes priority via user PATH (addToUserPath) instead.
-  for (const cli of ["codex", "claude"] as const) {
+  for (const cli of ["claude"] as const) {
     const resolved = resolveOriginalCommand(cwd, cli);
     if (resolved) {
       originalCommandMap[cli] = resolved;
@@ -564,7 +563,7 @@ export function createProxyShims(cwd: string): string[] {
   fs.writeFileSync(cmdAutoRunPath, buildCmdAutoRunScript(cwd));
   created.push(cmdAutoRunPath);
 
-  for (const cli of ["codex", "claude"] as const) {
+  for (const cli of ["claude"] as const) {
     const cmdShimPath = path.join(binDir, `${cli}.cmd`);
     const cmdContent = [
       "@echo off",

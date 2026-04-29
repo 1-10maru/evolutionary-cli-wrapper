@@ -34,7 +34,6 @@ function seedFakeInstall(cwd: string): { binDir: string; evoDir: string } {
   const evoDir = path.join(cwd, ".evo");
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(path.join(binDir, "claude.cmd"), "@echo off\nrem fake shim\n");
-  fs.writeFileSync(path.join(binDir, "codex.cmd"), "@echo off\nrem fake shim\n");
   fs.mkdirSync(evoDir, { recursive: true });
   fs.writeFileSync(path.join(evoDir, "marker.txt"), "keep me unless --purge-data");
   return { binDir, evoDir };

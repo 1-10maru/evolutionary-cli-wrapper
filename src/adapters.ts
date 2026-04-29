@@ -1,4 +1,3 @@
-import path from "node:path";
 import stripAnsi from "strip-ansi";
 import { getLogger } from "./logger";
 import { EpisodeEvent, SupportedCli, UsageObservation } from "./types";
@@ -27,17 +26,14 @@ function buildEvent(
 }
 
 export function detectCli(command: string, cliOverride?: SupportedCli): SupportedCli {
-  if (cliOverride) {
-    log.debug("cli detected", { argv0: command, detectedCli: cliOverride, source: "override" });
-    return cliOverride;
-  }
-  const base = path.basename(command).toLowerCase();
-  let detectedCli: SupportedCli;
-  if (base.includes("codex")) detectedCli = "codex";
-  else if (base.includes("claude")) detectedCli = "claude";
-  else detectedCli = "generic";
-  log.debug("cli detected", { argv0: command, detectedCli });
-  return detectedCli;
+  // After dropping codex/generic, the wrapper only supports claude. detectCli still
+  // accepts the original argv0 for logging fidelity but always returns "claude".
+  log.debug("cli detected", {
+    argv0: command,
+    detectedCli: "claude",
+    source: cliOverride ? "override" : "claude-only",
+  });
+  return "claude";
 }
 
 export function parseUsageObservation(

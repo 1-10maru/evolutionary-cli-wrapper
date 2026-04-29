@@ -58,7 +58,7 @@ describe("proxy runtime", () => {
         ...config.shellIntegration,
         originalCommandMap: {
           ...config.shellIntegration.originalCommandMap,
-          codex: process.execPath,
+          claude: process.execPath,
         },
       },
       proxy: {
@@ -70,7 +70,7 @@ describe("proxy runtime", () => {
 
     const result = await runProxySession({
       cwd,
-      cli: "codex",
+      cli: "claude",
       args: [fakeCliPath],
       mode: "active",
     });
