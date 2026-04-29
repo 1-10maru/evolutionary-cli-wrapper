@@ -34,7 +34,7 @@ describe("database retention", () => {
       const promptProfile = extractPromptProfile(`- update file${index}.ts\n- done when tests pass`);
       const episodeId = db.createEpisode({
         cwd,
-        cli: "generic",
+        cli: "claude",
         command: ["echo", "hello"],
         startedAt: new Date(2026, 0, index + 1).toISOString(),
         promptProfile,
@@ -105,7 +105,7 @@ describe("database retention", () => {
     const promptProfile = extractPromptProfile("- update src/index.ts\n- done when tests pass");
     const episodeId = sourceDb.createEpisode({
       cwd: sourceCwd,
-      cli: "generic",
+      cli: "claude",
       command: ["echo", "hello"],
       startedAt: new Date(2026, 0, 1).toISOString(),
       promptProfile,

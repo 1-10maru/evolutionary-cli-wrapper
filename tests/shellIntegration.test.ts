@@ -79,7 +79,6 @@ describe("shell integration", () => {
     const result = setupShellIntegration(cwd);
     const status = getShellStatus(cwd);
 
-    expect(fs.existsSync(path.join(cwd, "bin", "codex.cmd"))).toBe(true);
     expect(fs.existsSync(path.join(cwd, "bin", "claude.cmd"))).toBe(true);
     expect(fs.existsSync(path.join(cwd, "bin", "evo-cmd-autorun.cmd"))).toBe(true);
     expect(fs.readFileSync(path.join(cwd, "bin", "claude.cmd"), "utf8")).toContain("title claude [Evo ON]");

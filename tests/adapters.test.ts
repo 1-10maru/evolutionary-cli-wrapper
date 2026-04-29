@@ -3,14 +3,14 @@ import { detectCli, extractEventsFromLine, parseUsageObservation } from "../src/
 
 describe("adapters", () => {
   it("detects supported CLI families", () => {
-    expect(detectCli("codex")).toBe("codex");
+    expect(detectCli("codex")).toBe("claude");
     expect(detectCli("claude")).toBe("claude");
-    expect(detectCli("custom-wrapper")).toBe("generic");
+    expect(detectCli("custom-wrapper")).toBe("claude");
   });
 
   it("parses token usage lines when available", () => {
     const usage = parseUsageObservation(
-      "codex",
+      "claude",
       "stdout",
       "prompt tokens: 120 completion tokens: 34 total tokens: 154",
     );

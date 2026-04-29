@@ -29,18 +29,18 @@ describe("headerEmitter", () => {
 
   it("appends ' | light' suffix when lightweightTracking is true", () => {
     emitTrackingHeader({
-      cli: "codex",
+      cli: "claude",
       cwd: "/home/user",
       mode: "minimal",
       lightweightTracking: true,
     });
-    expect(captured).toBe("Evo tracking ON | cli=codex | dir=/home/user | mode=minimal | light\n");
+    expect(captured).toBe("Evo tracking ON | cli=claude | dir=/home/user | mode=minimal | light\n");
   });
 
   it("does not emit anything to stdout (header is stderr-only)", () => {
     const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     emitTrackingHeader({
-      cli: "generic",
+      cli: "claude",
       cwd: "/x",
       mode: "auto",
       lightweightTracking: false,
