@@ -189,12 +189,22 @@ export function refreshLiveAdvice(
   }
 
   // Update session grade
+  // Avoid contradiction between cumulative grade and recent-turn signal kind
+  // (e.g. grade='D' co-occurring with signal='first_pass_success'): when the
+  // current top-advice signal is positive, boost the cumulative score.
+  const POSITIVE_SIGNAL_KINDS = new Set([
+    "first_pass_success",
+    "good_structure",
+    "improving_trend",
+  ]);
+  const recentPositiveSignal = !!topAdvice && POSITIVE_SIGNAL_KINDS.has(topAdvice.signal.kind);
   const gradeResult = computeLiveGrade({
     promptScore: liveState.promptScore,
     turns: liveState.turns,
     toolCalls: liveState.toolCalls,
     firstPassGreen: liveState.lastFirstPassGreen,
     comboCount: liveState.comboCount,
+    recentPositiveSignal,
   });
   liveState.sessionGrade = gradeResult.grade;
   liveState.promptScore = gradeResult.promptScore;

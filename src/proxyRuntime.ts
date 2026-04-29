@@ -2,6 +2,7 @@ import path from "node:path";
 import chokidar from "chokidar";
 import { detectCli, extractEventsFromLine, parseUsageObservation } from "./adapters";
 import { createFrictionCaptureAdapter } from "./capture";
+import { readCurrentMode } from "./cli/display";
 import { ensureEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { getLogger } from "./logger";
@@ -147,14 +148,16 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   });
 
   if (interactivePassthrough) {
-    process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+    if (readCurrentMode() === "expansion") {
+      process.stdout.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
+    }
   } else {
     // Non-interactive path: emit a single startup line to stderr unless this is
     // an immediate-exit invocation (--help / --version / -h / -v). This makes
     // EvoPet visible in piped/scripted runs while keeping `--help` clean.
     const immediateExitFlags = new Set(["--help", "-h", "--version", "-v"]);
     const isImmediateExit = options.args.some((arg) => immediateExitFlags.has(arg.toLowerCase()));
-    if (!isImmediateExit) {
+    if (!isImmediateExit && readCurrentMode() === "expansion") {
       process.stderr.write(`${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\n`);
     }
   }
@@ -287,7 +290,9 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const showStartupNotice = (): void => {
     if (startupNoticeShown || !process.stderr.isTTY) return;
     startupNoticeShown = true;
-    process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
+    if (readCurrentMode() === "expansion") {
+      process.stdout.write(`\r\n${renderMascotStartupLine(mascotProfile, cli, lightweightTracking)}\r\n`);
+    }
   };
 
   if (process.stderr.isTTY && !interactivePassthrough) {
