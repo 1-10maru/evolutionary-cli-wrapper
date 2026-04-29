@@ -1,5 +1,9 @@
 import { EpisodeEvent } from "../types";
-import { FrictionCaptureAdapter } from "./codexCapture";
+
+export interface FrictionCaptureAdapter {
+  consumeOutputLine(source: "stdout" | "stderr", line: string): EpisodeEvent[];
+  consumeInputChunk(text: string): EpisodeEvent[];
+}
 
 function createEvent(type: EpisodeEvent["type"], details: Record<string, unknown>): EpisodeEvent {
   return {

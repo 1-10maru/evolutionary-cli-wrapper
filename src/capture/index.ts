@@ -1,10 +1,10 @@
 import { SupportedCli } from "../types";
-import { createClaudeCaptureAdapter } from "./claudeCapture";
-import { createCodexCaptureAdapter, FrictionCaptureAdapter } from "./codexCapture";
-import { createGenericCaptureAdapter } from "./genericCapture";
+import { createClaudeCaptureAdapter, FrictionCaptureAdapter } from "./claudeCapture";
 
-export function createFrictionCaptureAdapter(cli: SupportedCli): FrictionCaptureAdapter {
-  if (cli === "codex") return createCodexCaptureAdapter();
-  if (cli === "claude") return createClaudeCaptureAdapter();
-  return createGenericCaptureAdapter();
+export type { FrictionCaptureAdapter } from "./claudeCapture";
+
+// Single supported CLI: Claude. Parameter retained so call sites stay stable
+// if other CLIs are ever reintroduced; for now it is unused at runtime.
+export function createFrictionCaptureAdapter(_cli: SupportedCli): FrictionCaptureAdapter {
+  return createClaudeCaptureAdapter();
 }

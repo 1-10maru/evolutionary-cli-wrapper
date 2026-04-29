@@ -31,13 +31,13 @@ const PASSTHROUGH_SUBCOMMANDS = new Set(["review"]);
 const cliPassthroughLog = getLogger().child("cli.passthrough");
 const cliResolveLog = getLogger().child("cli.resolve");
 
-function formatMissingOriginalCommandMessage(cli: "codex" | "claude"): string {
+function formatMissingOriginalCommandMessage(cli: "claude"): string {
   return `Could not resolve the original ${cli} command. Evo checked PATH after excluding its own shim, but no live ${cli} install was found. Reinstall the upstream ${cli} CLI, then run npm run setup again if needed.\n`;
 }
 
 /**
  * Patch the wrapped-CLI live-state files with passthrough exit info, but ONLY
- * if the files already exist. Passthrough subcommands (e.g. `codex review`)
+ * if the files already exist. Passthrough subcommands (e.g. `claude review`)
  * should never CREATE these files — that is the proxy runtime's job.
  *
  * Failures are swallowed silently; this is best-effort observability.
@@ -104,7 +104,7 @@ program
   .option("--cwd <path>", "Working directory for the wrapped command.", process.cwd())
   .option("--prompt-text <text>", "Prompt text to profile without storing the raw body.")
   .option("--prompt-file <path>", "Read prompt text from a file.")
-  .option("--cli <name>", "Override detected CLI kind (codex|claude|generic).")
+  .option("--cli <name>", "Override detected CLI kind (claude).")
   .option("--test-cmd <command>", "Run a verification command after the main command exits.", collectOption, [])
   .argument("<command...>", "Command after --")
   .action(async (command: string[], options: Record<string, unknown>) => {
@@ -114,7 +114,7 @@ program
       promptText: options.promptText ? String(options.promptText) : undefined,
       promptFile: options.promptFile ? String(options.promptFile) : undefined,
       cliOverride: options.cli
-        ? (String(options.cli).toLowerCase() as "codex" | "claude" | "generic")
+        ? (String(options.cli).toLowerCase() as "claude")
         : undefined,
       testCommands: (options.testCmd as string[]) ?? [],
       command,
@@ -140,17 +140,17 @@ program
 
 program
   .command("proxy")
-  .description("Run codex/claude through the Evo auto-proxy.")
+  .description("Run claude through the Evo auto-proxy.")
   .allowUnknownOption(true)
   .passThroughOptions()
-  .requiredOption("--cli <name>", "CLI family to proxy (codex|claude).")
+  .option("--cli <name>", "CLI family to proxy (claude).", "claude")
   .option("--cwd <path>", "Working directory for the proxied command.", process.cwd())
   .argument("[args...]", "Arguments after --")
   .action(async (args: string[], options: Record<string, unknown>) => {
     const cwd = path.resolve(String(options.cwd));
-    const cli = String(options.cli).toLowerCase() as "codex" | "claude";
+    const cli = String(options.cli ?? "claude").toLowerCase() as "claude";
 
-    // Passthrough: native subcommands like `codex review` bypass Evo entirely
+    // Passthrough: native subcommands like `claude review` bypass Evo entirely
     if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
       const originalCommand = resolveOriginalCommand(cwd, cli);
       if (!originalCommand) {
@@ -270,9 +270,8 @@ program
     console.log(`Shell integration ready.`);
     console.log(`bin: ${result.binDir}`);
     console.log(`profile: ${result.profilePath}`);
-    console.log(`codex: ${result.originalCommandMap.codex ?? "not found"}`);
     console.log(`claude: ${result.originalCommandMap.claude ?? "not found"}`);
-    console.log(`Open a new terminal session to start using codex/claude through Evo automatically.`);
+    console.log(`Open a new terminal session to start using claude through Evo automatically.`);
   });
 
 program
@@ -357,7 +356,6 @@ shell
     console.log(`current_session_disabled=${status.currentSessionDisabled ? "yes" : "no"}`);
     console.log(`bin=${status.binDir}`);
     console.log(`profile=${status.profilePath}`);
-    console.log(`codex=${status.originalCommandMap.codex ?? "not found"}`);
     console.log(`claude=${status.originalCommandMap.claude ?? "not found"}`);
   });
 
@@ -527,8 +525,8 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   // Resolution failure messages from runProxySession are loud-by-design;
   // surface them at ERROR level too so the log file captures them.
-  if (/Could not resolve the original (codex|claude) command/.test(message)) {
-    const cliMatch = /the original (codex|claude) command/.exec(message);
+  if (/Could not resolve the original claude command/.test(message)) {
+    const cliMatch = /the original (claude) command/.exec(message);
     cliResolveLog.error("could not resolve original CLI", {
       cli: cliMatch ? cliMatch[1] : "unknown",
       message,

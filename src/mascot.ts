@@ -414,16 +414,12 @@ export function renderMascotTurnLine(profile: MascotProfile, summary: TurnSummar
   return `${prefix} ${action} | ${savingLabel}${comboText} | ${expLabel}`;
 }
 
-export function renderMascotStartupLine(profile: MascotProfile, cli: "codex" | "claude" | "generic", lightweightTracking: boolean): string {
+export function renderMascotStartupLine(profile: MascotProfile, _cli: "claude", lightweightTracking: boolean): string {
   const state = renderMascotState(profile);
   const prefix = colorize(`${state.avatar} ${profile.nickname}`, state.accentTone, true);
   const stageLabel = stageSkillLabel(profile.stage);
   const action = colorize(
-    cli === "claude"
-      ? "いっしょに見守るよ! 指示の出し方のコツを教えてあげるね"
-      : cli === "codex"
-        ? "準備できてるよ! 良い指示が出たら褒めるからね"
-        : "準備OK! 指示のコツを一緒に学んでいこう",
+    "いっしょに見守るよ! 指示の出し方のコツを教えてあげるね",
     "accent",
   );
   const status = colorize(lightweightTracking ? "軽量モード" : "記録中", lightweightTracking ? "warning" : "success", true);

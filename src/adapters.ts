@@ -27,16 +27,14 @@ function buildEvent(
 }
 
 export function detectCli(command: string, cliOverride?: SupportedCli): SupportedCli {
-  if (cliOverride) {
-    log.debug("cli detected", { argv0: command, detectedCli: cliOverride, source: "override" });
-    return cliOverride;
-  }
-  const base = path.basename(command).toLowerCase();
-  let detectedCli: SupportedCli;
-  if (base.includes("codex")) detectedCli = "codex";
-  else if (base.includes("claude")) detectedCli = "claude";
-  else detectedCli = "generic";
-  log.debug("cli detected", { argv0: command, detectedCli });
+  // Claude is the only supported CLI. Detection is preserved for log telemetry,
+  // but the return value is always "claude".
+  const detectedCli: SupportedCli = "claude";
+  log.debug("cli detected", {
+    argv0: command,
+    detectedCli,
+    source: cliOverride ? "override" : "default",
+  });
   return detectedCli;
 }
 
