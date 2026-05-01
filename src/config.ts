@@ -46,9 +46,14 @@ export function getEvoDir(cwd: string): string {
 }
 
 export function getGlobalEvoHome(cwd: string): string {
+  // v3.1: EVO_HOME default = ~/.claude (PC-global). Previously defaulted to
+  // cwd which created a per-project mascot. The shim writers in
+  // shellIntegration.ts still set EVO_HOME to a specific install cwd; that
+  // takes precedence via the env-var branch below.
   const fromEnv = process.env.EVO_HOME;
   if (fromEnv && fromEnv.trim().length > 0) return path.resolve(fromEnv);
-  return path.resolve(cwd);
+  void cwd; // retained for signature stability / future per-project override
+  return path.join(os.homedir(), ".claude");
 }
 
 export function getGlobalEvoDir(cwd: string): string {

@@ -93,20 +93,23 @@ describe("mascot", () => {
     expect(chosen.speciesId).toBe("fox");
   });
 
-  it("levels up the mascot with accumulated EXP", () => {
+  it("levels up the mascot when ISG-based stage threshold is crossed", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
     tempDirs.push(home, project);
     process.env.EVO_HOME = home;
 
     loadMascotProfile(project);
-    // Skill-based EXP: structured + first-pass-green + balanced = ~110 per episode
-    // sprout threshold is 120, so 2 good episodes should level up
-    updateMascotAfterEpisode(project, createSummary());
-    const update = updateMascotAfterEpisode(project, createSummary());
+    // v3.1: stage now ISG-driven. Feed high-quality episodes with prompt
+    // metrics that compute to ISG >= 25 (sprout threshold).
+    const highQuality = { promptScore: 90, sessionGrade: "A", signalKind: "" };
+    let lastUpdate = updateMascotAfterEpisode(project, createSummary(), 4, highQuality);
+    for (let i = 0; i < 5; i++) {
+      lastUpdate = updateMascotAfterEpisode(project, createSummary(), 4, highQuality);
+    }
 
-    expect(update.leveledUp).toBe(true);
-    expect(update.nextStage).toBe("sprout");
+    // Stage should advance past egg as ISG climbs out of the egg band.
+    expect(lastUpdate.nextStage).not.toBe("egg");
   });
 
   it("renders a compact one-line turn message", () => {
@@ -285,6 +288,105 @@ describe("mascot", () => {
     // Bad-quality history must NOT yield 100 even on legend stage.
     expect(state.progressPercent).toBeLessThan(100);
     expect(state.progressPercent).toBeGreaterThanOrEqual(0);
+  });
+
+  it("stageForIsg returns egg for empty/low-quality history", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+
+    loadMascotProfile(project);
+    // promptScore=0 -> ISG ~ 0 -> egg
+    const lowQuality = { promptScore: 0, sessionGrade: "C", signalKind: "" };
+    let update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+    for (let i = 0; i < 5; i++) {
+      update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+    }
+    expect(update.nextStage).toBe("egg");
+  });
+
+  it("stageForIsg reaches sprout band at promptScore ~30%", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+
+    loadMascotProfile(project);
+    // promptScore=30 -> ISG just above 25 (sprout). No fix loops -> no penalty.
+    const midQuality = { promptScore: 30, sessionGrade: "B", signalKind: "" };
+    let update = updateMascotAfterEpisode(project, createSummary({ fixLoopOccurred: false }), 4, midQuality);
+    for (let i = 0; i < 6; i++) {
+      update = updateMascotAfterEpisode(project, createSummary({ fixLoopOccurred: false }), 4, midQuality);
+    }
+    // Should be sprout (>=25) or higher, never "egg".
+    expect(update.nextStage).not.toBe("egg");
+  });
+
+  it("stageForIsg reaches legend band at sustained promptScore ~85%+", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+
+    loadMascotProfile(project);
+    const highQuality = { promptScore: 95, sessionGrade: "A", signalKind: "" };
+    let update = updateMascotAfterEpisode(
+      project,
+      createSummary({ structureScore: 5, fixLoopOccurred: false, searchLoopOccurred: false }),
+      5,
+      highQuality,
+    );
+    for (let i = 0; i < 12; i++) {
+      update = updateMascotAfterEpisode(
+        project,
+        createSummary({ structureScore: 5, fixLoopOccurred: false, searchLoopOccurred: false }),
+        5,
+        highQuality,
+      );
+    }
+    expect(update.nextStage).toBe("legend");
+  });
+
+  it("legend stage with bad recent episodes is demoted under ISG", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+
+    // Seed a "stuck on legend" profile manually (mimics the v3.0 bug).
+    const seedProfile: MascotProfile = {
+      speciesId: "fox",
+      nickname: "EvoPet",
+      stage: "legend",
+      totalBondExp: 9135,
+      mood: "happy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 1,
+      recentEpisodes: Array.from({ length: 10 }, () => ({
+        promptScore: 0,
+        structureScore: 0,
+        grade: "C",
+        hadFixLoop: false,
+        hadSearchLoop: false,
+        signalKind: "",
+        ts: Date.now(),
+      })),
+    };
+    fs.mkdirSync(path.join(home, ".evo"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".evo", "mascot.json"), JSON.stringify(seedProfile));
+
+    // Run an episode through the new logic.
+    const lowQuality = { promptScore: 0, sessionGrade: "C", signalKind: "" };
+    const update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+
+    // Must not remain on legend with this quality history.
+    expect(update.nextStage).not.toBe("legend");
+    expect(update.nextStage).toBe("egg");
   });
 
   it("progressPercent rises with high-quality episodes on egg stage", () => {

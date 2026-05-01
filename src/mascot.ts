@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getGlobalEvoDir } from "./config";
+import { migrateMascotFromCwd } from "./mascotMigration";
 import {
   EpisodeSummary,
   MascotEpisodeUpdate,
@@ -23,6 +24,20 @@ const STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minExp: number; t
   { stage: "buddy", minExp: 320, tone: "accent" },
   { stage: "wizard", minExp: 720, tone: "magic" },
   { stage: "legend", minExp: 1400, tone: "magic" },
+];
+
+// v3.1: Stage progression now driven by Ideal State Gauge (quality), not
+// cumulative totalBondExp. Cumulative EXP inflates indefinitely so users
+// auto-promote to legend regardless of quality. ISG-based stages reflect
+// current sustained prompt quality.
+//
+// ISG ranges: egg < 25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+
+const ISG_STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minIsg: number; tone: MascotRenderState["accentTone"] }> = [
+  { stage: "egg", minIsg: 0, tone: "info" },
+  { stage: "sprout", minIsg: 25, tone: "success" },
+  { stage: "buddy", minIsg: 45, tone: "accent" },
+  { stage: "wizard", minIsg: 65, tone: "magic" },
+  { stage: "legend", minIsg: 82, tone: "magic" },
 ];
 
 export const MASCOT_SPECIES = [
@@ -139,10 +154,28 @@ function ensureMascotDir(cwd: string): void {
   fs.mkdirSync(getGlobalEvoDir(cwd), { recursive: true });
 }
 
+// Legacy: stage by cumulative EXP. Kept for backward compat / data analysis;
+// no longer wired into the live update path as of v3.1.
 function stageForExp(totalBondExp: number): MascotProfile["stage"] {
   let current = STAGE_THRESHOLDS[0].stage;
   for (const threshold of STAGE_THRESHOLDS) {
     if (totalBondExp >= threshold.minExp) current = threshold.stage;
+  }
+  return current;
+}
+
+/**
+ * v3.1 stage selector — driven by Ideal State Gauge.
+ *
+ * Returns "egg" when ISG is -1 (no recent-episode data) so new users start
+ * at the bottom of the ladder until their prompt quality is measured.
+ */
+function stageForIsg(profile: MascotProfile): MascotProfile["stage"] {
+  const isg = computeIdealStateGauge(profile);
+  if (isg < 0) return "egg";
+  let current = ISG_STAGE_THRESHOLDS[0].stage;
+  for (const threshold of ISG_STAGE_THRESHOLDS) {
+    if (isg >= threshold.minIsg) current = threshold.stage;
   }
   return current;
 }
@@ -176,6 +209,9 @@ function favoriteHint(summary: EpisodeSummary): NudgeCategory | "none" {
 }
 
 export function loadMascotProfile(cwd: string): MascotProfile {
+  // v3.1: one-time migration from cwd-based .evo/ to ~/.claude/.evo/.
+  // Sentinel file makes this a no-op after the first successful run.
+  migrateMascotFromCwd(cwd);
   ensureMascotDir(cwd);
   const filePath = mascotPath(cwd);
   if (!fs.existsSync(filePath)) {
@@ -209,7 +245,11 @@ export function saveMascotProfile(cwd: string, profile: MascotProfile): void {
 }
 
 export function renderMascotState(profile: MascotProfile): MascotRenderState {
-  const threshold = STAGE_THRESHOLDS.find((item) => item.stage === profile.stage) ?? STAGE_THRESHOLDS[0];
+  // v3.1: tone now sourced from ISG_STAGE_THRESHOLDS since stage itself is
+  // ISG-driven. STAGE_THRESHOLDS is retained for backward compat only.
+  const threshold =
+    ISG_STAGE_THRESHOLDS.find((item) => item.stage === profile.stage) ??
+    ISG_STAGE_THRESHOLDS[0];
   const species = mascotSpecies(profile.speciesId);
   return {
     profile,
@@ -309,20 +349,24 @@ export function updateMascotAfterEpisode(
   // Compute skill-based EXP
   const expAwarded = computeSkillExp(summary, previous.comboCount, avgRecentStructureScore ?? 0);
   const totalBondExp = previous.totalBondExp + expAwarded;
-  const nextStage = stageForExp(totalBondExp);
+  // v3.1: build the candidate profile WITHOUT a stage decision first; append
+  // the new episode record, then derive stage from the resulting ISG. This
+  // ensures the latest episode is reflected in the stage-relevant window.
   const nextProfile: MascotProfile = {
     ...previous,
     totalBondExp,
-    stage: nextStage,
+    stage: previous.stage, // placeholder — overwritten after ISG calc
     mood: pickMood(summary),
     favoriteHintStyle: favoriteHint(summary),
     streakDays: summary.firstPassGreen ? previous.streakDays + 1 : 0,
     lastSeenAt: new Date().toISOString(),
   };
-  // Append rolling-window record for Ideal State Gauge
+  // Append rolling-window record for Ideal State Gauge BEFORE deriving stage.
   if (qualityMetrics) {
     appendRecentEpisode(nextProfile, summary, qualityMetrics);
   }
+  const nextStage = stageForIsg(nextProfile);
+  nextProfile.stage = nextStage;
   saveMascotProfile(cwd, nextProfile);
 
   return {

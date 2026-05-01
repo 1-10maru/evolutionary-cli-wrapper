@@ -250,5 +250,151 @@ class TestStatuslineRender(unittest.TestCase):
         )
 
 
+class TestStatuslineV31(unittest.TestCase):
+    """v3.1 additions: 5-band mood, no auto-compact reset, signal->category."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="evo-statusline-v31-")
+        self.tmp_root = Path(self._tmp.name)
+        self.fake_home = self.tmp_root / "home"
+        self.fake_home.mkdir(parents=True, exist_ok=True)
+        (self.fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+        self.cwd_dir = self.tmp_root / "project"
+        self.cwd_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _import_module(self):
+        import importlib.util
+        import io as _io
+
+        original_stdin = sys.stdin
+        try:
+            sys.stdin = _io.StringIO("{}")
+            spec = importlib.util.spec_from_file_location(
+                "statusline_v31_under_test", str(STATUSLINE)
+            )
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+            except SystemExit:
+                pass
+        finally:
+            sys.stdin = original_stdin
+        return mod
+
+    def test_band_function_returns_5_bands(self) -> None:
+        mod = self._import_module()
+        self.assertEqual(mod._band(0), "start")
+        self.assertEqual(mod._band(15), "early")
+        self.assertEqual(mod._band(45), "working")
+        self.assertEqual(mod._band(70), "busy")
+        self.assertEqual(mod._band(85), "critical")
+
+    def test_signal_to_category_mapping_present(self) -> None:
+        mod = self._import_module()
+        self.assertEqual(
+            mod._SIGNAL_TO_CATEGORY.get("prompt_too_vague"), "specificity"
+        )
+        self.assertEqual(
+            mod._SIGNAL_TO_CATEGORY.get("error_spiral"), "recovery"
+        )
+        self.assertEqual(
+            mod._SIGNAL_TO_CATEGORY.get("approval_fatigue"), "permissions"
+        )
+
+    def test_pick_tip_filters_by_signal_category(self) -> None:
+        mod = self._import_module()
+        rotation = [
+            {"headline": "spec1", "tier": 1, "category": "specificity"},
+            {"headline": "rec1", "tier": 1, "category": "recovery"},
+            {"headline": "spec2", "tier": 1, "category": "specificity"},
+        ]
+        # With prompt_too_vague signal -> specificity tips only
+        for c in range(10):
+            tip = mod._pick_tip(rotation, c, "prompt_too_vague")
+            self.assertEqual(tip.get("category"), "specificity")
+
+    def test_pick_tip_falls_back_when_no_match(self) -> None:
+        mod = self._import_module()
+        rotation = [
+            {"headline": "no-cat-1", "tier": 2},
+            {"headline": "no-cat-2", "tier": 2},
+        ]
+        # No category in rotation -> fall back to full rotation despite signal.
+        tip = mod._pick_tip(rotation, 0, "prompt_too_vague")
+        self.assertIn(tip["headline"], {"no-cat-1", "no-cat-2"})
+
+    def test_session_does_not_reset_on_ctx_drop(self) -> None:
+        """v3.1: dropping ctx_pct from 50 -> 3 (auto-compact) MUST NOT reset
+        the call counter. Previously this fired a session reset."""
+        stdin = {
+            "model": {"display_name": "claude-opus-4-7"},
+            "cwd": str(self.cwd_dir),
+            "context_window": {"used_percentage": 50},
+            "rate_limits": {},
+        }
+        # First call at 50% ctx
+        run_statusline(stdin, self.fake_home, self.cwd_dir)
+        # Now simulate /compact: ctx drops to 3
+        stdin["context_window"]["used_percentage"] = 3
+        out = run_statusline(stdin, self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        # Counter should be 2 (incremented), NOT 1 (reset).
+        match = re.search(r"(\d+)回目", plain)
+        self.assertIsNotNone(match, f"no 回目 badge in output:\n{plain}")
+        self.assertEqual(
+            match.group(1),
+            "2",
+            f"counter reset on auto-compact (got {match.group(1)}回目)",
+        )
+
+    def test_proxy_active_path_includes_mood_when_no_advice(self) -> None:
+        """v3.1: when proxy is fresh BUT no advice line is emitted, the
+        proxy-active path should append a dimmed mood comment in line1."""
+        # Seed proxy state with NO signal/advice so _line2 stays empty.
+        evo_dir = self.cwd_dir / ".evo"
+        evo_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "avatar": "🦊",
+            "nickname": "TestPet",
+            "turns": 5,
+            "userMessages": 5,
+            "bond": 50,
+            "idealStateGauge": 70,
+            "comboCount": 0,
+            "sessionGrade": "A",
+            "promptScore": 75,
+            "signalKind": "",
+            "advice": "",
+            "adviceDetail": "",
+            "beforeExample": "",
+            "afterExample": "",
+            "updatedAt": int((time.time() * 1000) - 2000),
+        }
+        (evo_dir / "live-state.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        stdin = {
+            "model": {"display_name": "claude-opus-4-7"},
+            "cwd": str(self.cwd_dir),
+            "context_window": {"used_percentage": 5},
+            "rate_limits": {},
+        }
+        out = run_statusline(stdin, self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        # The "start" band has the egg / waiting messages — at ctx 5 we should
+        # see one of the start-band 'はじめ' style comments. Just assert that
+        # SOMETHING beyond the bare grade/育成度 chips ended up on line1.
+        self.assertIn("TestPet", plain)
+        # Line1 should include a 5-band comment string (lengthier than the
+        # raw chips). One of the start-band phrases contains "セッション" or
+        # "指示" — assert at least one such word lands in the output.
+        self.assertTrue(
+            any(token in plain for token in ("指示", "セッション", "始", "見守")),
+            f"no mood comment found on line1 of:\n{plain}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

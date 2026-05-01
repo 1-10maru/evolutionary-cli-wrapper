@@ -10,6 +10,13 @@
 
 EvoPet is a local statusline companion for [Claude Code](https://claude.com/claude-code) that surfaces short prompt-engineering tips, session mood comments, and a one-line context/rate-limit gauge directly inside the Claude Code statusline. Tips are sourced from a curated list plus an auto-synced subset of Anthropic's public Claude Code docs. The tool runs entirely locally — it does not consume Claude API tokens, send telemetry, or upload session content.
 
+#### v3.1 highlights
+
+- **Stage progression is now ISG-based** (Ideal State Gauge — sustained prompt quality), not cumulative EXP. Stages map to ISG bands: egg <25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+. Existing users may see their stage drop until prompt quality catches up.
+- **Mascot is PC-global**: `EVO_HOME` defaults to `~/.claude` instead of `<cwd>`. A one-time migration copies any existing per-cwd `.evo/mascot.json` into `~/.claude/.evo/` on first launch.
+- **Tips are now category-aware**: when the proxy detects a signal (e.g., `prompt_too_vague`), the statusline filters tips to the matching category (`specificity`, `verification`, `permissions`, `context`, `recovery`, `exploration`).
+- **Mood comments work in proxy mode too**: the 5-band mood comment (start / early / working / busy / critical) appears in the proxy-active path when no advice line is present, not just the no-proxy fallback.
+
 There are two distinct ways to use this repository:
 
 - **As an npm consumer** — install the package globally and wire only the statusline into Claude Code. This is the supported path for most users.
@@ -207,6 +214,13 @@ ISC. See [LICENSE](./LICENSE).
 ## 日本語
 
 EvoPet は、[Claude Code](https://claude.com/claude-code) のステータスラインに常駐するローカルのコンパニオンです。プロンプトエンジニアリングのヒント、セッションのムードコメント、コンテキスト/レート制限の 1 行ゲージを直接ステータスラインに表示します。ヒントは厳選リストと、Anthropic の Claude Code 公式ドキュメントから自動同期されたサブセットから供給されます。完全にローカルで動作し、Claude API トークンを消費せず、テレメトリも送信せず、セッション内容もアップロードしません。
+
+#### v3.1 ハイライト
+
+- **育成段階が ISG ベース化**: 累積 EXP ではなく Ideal State Gauge（直近の指示品質）で段階が決まります。バンド: egg <25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+。既存ユーザーは指示品質が安定するまで段階が下がる可能性があります。
+- **マスコットが PC グローバル**: `EVO_HOME` の既定が `<cwd>` から `~/.claude` に変更。初回起動時に既存の `<cwd>/.evo/mascot.json` を `~/.claude/.evo/` に自動コピーします（センチネルファイルで再実行を防止）。
+- **ヒントがカテゴリ対応**: プロキシが検出したシグナル（例: `prompt_too_vague`）に対応するカテゴリのヒント（`specificity` / `verification` / `permissions` / `context` / `recovery` / `exploration`）に絞り込まれます。
+- **ムードコメントがプロキシ稼働時にも表示**: アドバイス行がない場合、5 バンドのムードコメント（start / early / working / busy / critical）がプロキシ稼働パスにも表示されるようになりました。
 
 このリポジトリの使い方は 2 通りあります。
 

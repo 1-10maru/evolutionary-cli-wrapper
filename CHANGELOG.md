@@ -2,6 +2,24 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.1.0 (2026-05-02)
+
+### Breaking-flavored
+- **Stage progression now ISG-based**: previously cumulative `totalBondExp` drove stage; now `computeIdealStateGauge` drives stage with thresholds 25/45/65/82. Existing users may see their stage drop until prompt quality (promptScore / structureScore / loop-free streaks) sustains the new thresholds. Past `totalBondExp` is preserved but no longer affects stage.
+- **Mascot scope: PC-global by default**: `EVO_HOME` default changed from `<cwd>` to `<home>/.claude`. A one-time migration copies the existing cwd-based mascot.json to `~/.claude/.evo/mascot.json` on first launch (sentinel file prevents re-migration). Old cwd file is preserved as backup.
+
+### Added
+- Auto-synced tips now carry a `category` tag (`specificity`, `verification`, `permissions`, `context`, `recovery`, `exploration`, `general`).
+- Statusline filters tips by detected signal category (e.g., `prompt_too_vague` → `specificity`-tagged tips).
+- 5-band mood comments (`start` / `early` / `working` / `busy` / `critical`) now appear in the proxy-active main path, not just the no-proxy fallback.
+
+### Changed
+- `statusline.py` session-reset heuristic dropped the `_prev_ctx > 30 and _curr_ctx < 5` condition (was firing on benign auto-compact). Reset now triggers only on cwd change.
+
+### Fixed
+- Promotion to legend after low-quality sessions.
+- "Conversation count reset on auto-compact" issue.
+
 ## v3.0.0 (2026-05-01)
 
 ### Breaking-flavored
