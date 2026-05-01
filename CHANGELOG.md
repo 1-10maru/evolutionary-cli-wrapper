@@ -2,6 +2,19 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.0.0 (2026-05-01)
+
+### Breaking-flavored
+- Tip dict shape now includes a `tier` field (1=core / 2=default / 3=niche). Existing renderers using `.get('tier', 2)` are forward-compatible. Update legacy `~/.claude/base_statusline.py` deployments via `evo install-statusline`.
+
+### Added
+- All entries from public Anthropic Claude Code docs (`best-practices` and `commands`) are now ingested without per-source caps.
+- Tier-weighted deterministic round-robin (5 : 2 : 1) for tip rotation.
+
+### Changed
+- `scripts/sync-claude-docs.mjs` no longer limits to 30 entries per source.
+- `statusline.py` builds a tier-expanded rotation list at module load.
+
 ## [Unreleased]
 
 ### Changed (docs)
