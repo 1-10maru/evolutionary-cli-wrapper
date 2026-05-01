@@ -469,5 +469,168 @@ class TestStatuslineV33(unittest.TestCase):
         self.assertRegex(plain, r"\d+回目")
 
 
+class TestStatuslineV34PerSession(unittest.TestCase):
+    """v3.4.0: per-session live-state files in <cwd>/.evo/sessions/<id>.json.
+
+    Verifies the file-resolution priority added in statusline.py:
+      1. <cwd>/.evo/sessions/<session_id>.json (when payload provides session_id)
+      2. newest mtime in <cwd>/.evo/sessions/ (fallback)
+      3. <cwd>/.evo/live-state.json (legacy)
+      4. ~/.claude/.evo-live.json (legacy)
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="evo-statusline-v34-")
+        self.tmp_root = Path(self._tmp.name)
+        self.fake_home = self.tmp_root / "home"
+        self.fake_home.mkdir(parents=True, exist_ok=True)
+        (self.fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+        self.cwd_dir = self.tmp_root / "project"
+        self.cwd_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions_dir = self.cwd_dir / ".evo" / "sessions"
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_session_file(
+        self,
+        session_id: str,
+        nickname: str,
+        age_ms: float = 2_000,
+        embed_session_id: bool = True,
+    ) -> Path:
+        payload = {
+            "avatar": "🦊",
+            "nickname": nickname,
+            "turns": 5,
+            "userMessages": 5,
+            "bond": 50,
+            "idealStateGauge": 70,
+            "comboCount": 0,
+            "sessionGrade": "A",
+            "promptScore": 75,
+            "signalKind": "good_structure",
+            "advice": "test advice",
+            "adviceDetail": "",
+            "beforeExample": "",
+            "afterExample": "",
+            "updatedAt": int((time.time() * 1000) - age_ms),
+        }
+        if embed_session_id:
+            payload["sessionId"] = session_id
+        path_ = self.sessions_dir / f"{session_id}.json"
+        path_.write_text(json.dumps(payload), encoding="utf-8")
+        return path_
+
+    def _stdin(self, session_id: str | None = None) -> dict:
+        s = {
+            "model": {"display_name": "claude-opus-4-7"},
+            "cwd": str(self.cwd_dir),
+            "context_window": {"used_percentage": 25},
+            "rate_limits": {},
+        }
+        if session_id is not None:
+            s["session_id"] = session_id
+        return s
+
+    def test_session_id_match_wins_over_other_session_files(self) -> None:
+        """When session_id is provided AND a matching file exists in
+        sessions/, that file is read (not the newer-but-different file)."""
+        # Older file matches our session_id
+        self._write_session_file("sid-mine", "MyPet", age_ms=4_000)
+        # Newer file for a different session — should be ignored
+        self._write_session_file("sid-other", "OtherPet", age_ms=1_000)
+        out = run_statusline(self._stdin(session_id="sid-mine"), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        self.assertIn("MyPet", plain)
+        self.assertNotIn("OtherPet", plain)
+
+    def test_session_id_no_match_falls_back_to_newest_in_sessions_dir(self) -> None:
+        """When session_id has no matching file, fall through per-session
+        files entirely and use the legacy live-state.json (per-session files
+        for OTHER sessions must NOT shadow the current one)."""
+        # Two per-session files, neither matching
+        self._write_session_file("sid-a", "PetA", age_ms=3_000)
+        self._write_session_file("sid-b", "PetB", age_ms=1_000)
+        # Legacy file with a third nickname
+        evo_dir = self.cwd_dir / ".evo"
+        legacy_payload = {
+            "avatar": "🦊",
+            "nickname": "LegacyPet",
+            "turns": 5,
+            "userMessages": 5,
+            "bond": 50,
+            "idealStateGauge": 70,
+            "comboCount": 0,
+            "sessionGrade": "A",
+            "promptScore": 75,
+            "signalKind": "",
+            "advice": "",
+            "adviceDetail": "",
+            "beforeExample": "",
+            "afterExample": "",
+            "updatedAt": int(time.time() * 1000) - 2_000,
+        }
+        (evo_dir / "live-state.json").write_text(
+            json.dumps(legacy_payload), encoding="utf-8"
+        )
+        out = run_statusline(
+            self._stdin(session_id="sid-not-in-dir"), self.fake_home, self.cwd_dir
+        )
+        plain = strip_ansi(out)
+        # The mismatched per-session files must be skipped — neither nickname
+        # should leak into the render.
+        self.assertNotIn("PetA", plain)
+        self.assertNotIn("PetB", plain)
+        # The legacy file is the fallback for unknown session_id.
+        self.assertIn("LegacyPet", plain)
+
+    def test_no_session_id_picks_newest_in_sessions_dir(self) -> None:
+        """When the payload omits session_id, the newest-mtime per-session
+        file is used (back-compat for harnesses that don't pass session_id)."""
+        # Older file
+        older = self._write_session_file("sid-old", "OldPet", age_ms=8_000)
+        # Newer file
+        newer = self._write_session_file("sid-new", "NewPet", age_ms=1_000)
+        # Force mtime ordering to be unambiguous
+        now = time.time()
+        os.utime(older, (now - 8, now - 8))
+        os.utime(newer, (now - 1, now - 1))
+        out = run_statusline(self._stdin(session_id=None), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        self.assertIn("NewPet", plain)
+        self.assertNotIn("OldPet", plain)
+
+    def test_falls_back_to_legacy_when_sessions_dir_empty(self) -> None:
+        """Empty (or nonexistent) sessions/ dir → legacy live-state.json read."""
+        # Remove the empty dir so we exercise the os.path.isdir() == False branch
+        self.sessions_dir.rmdir()
+        evo_dir = self.cwd_dir / ".evo"
+        legacy_payload = {
+            "avatar": "🦊",
+            "nickname": "LegacyOnly",
+            "turns": 5,
+            "userMessages": 5,
+            "bond": 50,
+            "idealStateGauge": 70,
+            "comboCount": 0,
+            "sessionGrade": "A",
+            "promptScore": 75,
+            "signalKind": "",
+            "advice": "",
+            "adviceDetail": "",
+            "beforeExample": "",
+            "afterExample": "",
+            "updatedAt": int(time.time() * 1000) - 2_000,
+        }
+        (evo_dir / "live-state.json").write_text(
+            json.dumps(legacy_payload), encoding="utf-8"
+        )
+        out = run_statusline(self._stdin(session_id="anything"), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        self.assertIn("LegacyOnly", plain)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -675,13 +675,66 @@ _now_ms = time.time() * 1000
 # stale-but-recent (<=5min) renders in dim/gray with the full layout preserved
 # so the user still sees last-known state instead of EvoPet collapsing.
 _FRESH_WINDOW_MS = 300000  # 5 minutes
-for _try_path in [
-    os.path.join(cwd, '.evo', 'live-state.json'),
-    os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'),
-]:
+
+# v3.4.0: prefer the per-session live-state file under
+# <cwd>/.evo/sessions/<session_id>.json so parallel Claude Code sessions in
+# the same cwd don't shadow each other. Fall back to the newest file in
+# sessions/ when Claude Code's payload omits session_id, then to the legacy
+# single-file dual targets.
+_session_id = data.get('session_id')
+_candidates = []
+_sessions_dir = os.path.join(cwd, '.evo', 'sessions')
+if _session_id:
+    _candidates.append(os.path.join(_sessions_dir, f'{_session_id}.json'))
+# Fallback 1: newest mtime in sessions/ — handles cases where session_id is
+# absent from the payload but the proxy has written per-session files.
+if os.path.isdir(_sessions_dir):
+    try:
+        _entries = []
+        for _f in os.listdir(_sessions_dir):
+            if not _f.endswith('.json'):
+                continue
+            _full = os.path.join(_sessions_dir, _f)
+            try:
+                _entries.append((-os.path.getmtime(_full), _full))
+            except OSError:
+                pass
+        _entries.sort()
+        for _, _p in _entries:
+            if _p not in _candidates:
+                _candidates.append(_p)
+    except Exception:
+        pass
+# Fallback 2: legacy single-file dual targets (back-compat with pre-v3.4.0
+# proxies and statusline deploys that haven't migrated yet).
+_candidates.append(os.path.join(cwd, '.evo', 'live-state.json'))
+_candidates.append(os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'))
+
+for _try_path in _candidates:
     try:
         with open(_try_path, encoding='utf-8') as _f:
             _candidate = json.load(_f)
+        # v3.4.0: when session_id is supplied by Claude Code, prefer files
+        # whose embedded sessionId matches OR whose filename stem matches.
+        # If neither matches AND there are other candidates left to try,
+        # skip this one. The final legacy fallbacks (no session_id field)
+        # are accepted unconditionally so the statusline stays functional
+        # for pre-v3.4 proxies.
+        if _session_id:
+            _file_sid = _candidate.get('sessionId')
+            _stem = os.path.splitext(os.path.basename(_try_path))[0]
+            _is_per_session_file = os.path.dirname(_try_path).endswith(
+                os.path.join('.evo', 'sessions')
+            )
+            _matches = (
+                _file_sid == _session_id
+                or (_is_per_session_file and _stem == _session_id)
+            )
+            if not _matches and _is_per_session_file:
+                # A per-session file that's not for our session_id — skip it
+                # and keep looking. (Legacy non-per-session files are still
+                # eligible as last-resort fallback below.)
+                continue
         _age_ms = _now_ms - _candidate.get('updatedAt', 0)
         if _age_ms < _FRESH_WINDOW_MS:
             _evo = _candidate

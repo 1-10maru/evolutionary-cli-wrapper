@@ -59,6 +59,8 @@ The Python statusline script is invoked by Claude Code on each render (no pollin
 
 EvoPet's "X回目" counter reflects only user-typed messages within the current Claude Code session (identified by session ID). Sub-agent dispatches are tracked separately in the sub-agent's own JSONL and do not inflate the parent count. Switching directories or starting a new session resets the counter.
 
+Starting in v3.4.0, EvoPet's state is written per-session to `<cwd>/.evo/sessions/<sessionId>.json` (alongside the legacy `<cwd>/.evo/live-state.json` kept for back-compat). The statusline reads the file matching Claude Code's current `session_id` from the stdin payload, so multiple Claude Code sessions in the same directory no longer interfere with each other's metrics. Per-session files older than 7 days are pruned automatically at proxy startup. (v3.4.0 以降、EvoPet の状態は `<cwd>/.evo/sessions/<sessionId>.json` にセッション単位で保存され、同一ディレクトリで並列起動した Claude Code セッションが互いのメトリクスを上書きすることはなくなりました。)
+
 ### Updating
 
 The published patch versions of this package roll forward automatically:
