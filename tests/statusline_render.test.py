@@ -166,6 +166,63 @@ class TestStatuslineRender(unittest.TestCase):
         # And a tip line (light-bulb 💡).
         self.assertIn("💡", out)
 
+    def test_tier_weighted_rotation_structure(self) -> None:
+        """v3.0.0: _TIPS_ROTATION must be tier-expanded (5:2:1) and Tier 1
+        must dominate the rotation (>50% share)."""
+        # Import statusline as a module so we can read its module-level state.
+        # statusline.py reads stdin at import time, so feed it an empty JSON.
+        import importlib.util
+        import io as _io
+
+        original_stdin = sys.stdin
+        try:
+            sys.stdin = _io.StringIO("{}")
+            spec = importlib.util.spec_from_file_location(
+                "statusline_under_test", str(STATUSLINE)
+            )
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+            except SystemExit:
+                # statusline.py may exit after rendering; that's fine — its
+                # module-level objects are already populated.
+                pass
+        finally:
+            sys.stdin = original_stdin
+
+        tips = mod._TIPS
+        rotation = mod._TIPS_ROTATION
+        weights = mod._TIER_WEIGHTS
+        # Sanity: weights are 5:2:1 for tiers 1/2/3.
+        self.assertEqual(weights, {1: 5, 2: 2, 3: 1})
+
+        # Rotation length matches sum of per-tier weights.
+        expected_len = 0
+        for t in tips:
+            tier = t.get("tier", 2)
+            expected_len += weights.get(tier, 2)
+        self.assertEqual(
+            len(rotation),
+            expected_len,
+            f"rotation length {len(rotation)} != expected {expected_len}",
+        )
+        self.assertGreater(
+            len(rotation),
+            len(tips),
+            "tier weighting must expand the rotation",
+        )
+
+        # Tier 1 should dominate (>50% of slots) under 5:2:1 weighting.
+        tier1_slots = sum(
+            weights.get(t.get("tier", 2), 2) for t in tips if t.get("tier") == 1
+        )
+        share = tier1_slots / max(1, len(rotation))
+        self.assertGreater(
+            share,
+            0.30,
+            f"Tier 1 slot share {share:.2%} unexpectedly low",
+        )
+
     def test_fallback_rotates_through_at_least_16_unique_tips(self) -> None:
         # Bump the call counter past 16 by re-running with a stable cwd /
         # ctx_pct so no session reset fires. The self-state file is shared

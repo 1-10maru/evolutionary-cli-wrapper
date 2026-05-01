@@ -48,7 +48,7 @@ After installing, your Claude Code statusline shows three things:
 
 ### How it works
 
-The Python statusline script is invoked by Claude Code on each render (no polling, no background process). It reads the JSON Claude Code passes on stdin, plus an optional `~/.claude/.evo-live.json` file that the in-repo proxy writes when a developer is running through it. When `~/.claude/.evo-live.json` is absent, the statusline self-tracks call counts in `~/.claude/.evo-self.json` and rotates through 125 tips (60 of which are auto-synced from the official Claude Code docs; see [Updating](#updating) below).
+The Python statusline script is invoked by Claude Code on each render (no polling, no background process). It reads the JSON Claude Code passes on stdin, plus an optional `~/.claude/.evo-live.json` file that the in-repo proxy writes when a developer is running through it. When `~/.claude/.evo-live.json` is absent, the statusline self-tracks call counts in `~/.claude/.evo-self.json` and rotates through every tip — both the curated list and all entries auto-synced from the official Claude Code docs — using a tier-weighted round-robin (Tier 1 core / Tier 2 default / Tier 3 niche, weighted 5 : 2 : 1; see [Updating](#updating) below).
 
 ### Updating
 
@@ -273,7 +273,7 @@ claude
 
 ### 仕組み
 
-Python ステータスラインスクリプトは Claude Code が描画ごとに呼び出します（ポーリングなし、バックグラウンドプロセスなし）。Claude Code が stdin で渡す JSON と、開発者が proxy 経由で動かしている時に書き込まれるオプションの `~/.claude/.evo-live.json` を読みます。`~/.claude/.evo-live.json` がない時はステータスライン側で `~/.claude/.evo-self.json` に呼び出し回数を記録し、125 種類のヒント（うち 60 は Claude Code 公式ドキュメントから自動同期）をローテーションします。
+Python ステータスラインスクリプトは Claude Code が描画ごとに呼び出します（ポーリングなし、バックグラウンドプロセスなし）。Claude Code が stdin で渡す JSON と、開発者が proxy 経由で動かしている時に書き込まれるオプションの `~/.claude/.evo-live.json` を読みます。`~/.claude/.evo-live.json` がない時はステータスライン側で `~/.claude/.evo-self.json` に呼び出し回数を記録し、手書きヒントと公式ドキュメントから自動同期される全件ヒントを Tier 1 (主要) / Tier 2 (標準) / Tier 3 (ニッチ) を 5:2:1 で重み付けしたラウンドロビンでローテーションします。
 
 ### 一時的に切る・再開する
 

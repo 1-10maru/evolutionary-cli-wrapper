@@ -30,14 +30,55 @@ const SOURCES = [
   {
     url: 'https://code.claude.com/docs/en/best-practices',
     kind: 'best-practices',
-    maxEntries: 30,
   },
   {
     url: 'https://code.claude.com/docs/en/commands',
     kind: 'slash-commands',
-    maxEntries: 30,
   },
 ];
+
+// ─── Tier classification (v3.0.0) ───
+// Tier 1 = core daily-use; Tier 3 = niche/diagnostic; Tier 2 = default (everything else).
+const SC_TIER1 = new Set([
+  '/clear', '/compact', '/context', '/help', '/agents', '/permissions',
+  '/hooks', '/effort', '/model', '/usage', '/init', '/memory', '/mcp',
+  '/skill', '/review', '/feedback', '/exit', '/quit'
+]);
+const SC_TIER3 = new Set([
+  '/heapdump', '/debug', '/doctor', '/migrate-installer', '/desktop',
+  '/chrome', '/copy', '/export', '/color', '/config', '/extra-usage',
+  '/fewer-permission-prompts'
+]);
+const BP_TIER1_KEYWORDS = [
+  '@', 'reference files', 'image', 'paste', 'url', 'context', 'verify',
+  'test', 'permission', 'claude.md', 'subagent', 'todo', 'specific'
+];
+const BP_TIER3_KEYWORDS = [
+  'kebab-case', 'camelcase', 'json properties', 'url paths', 'pagination'
+];
+
+function assignTier(headline, kind) {
+  if (kind === 'slash-commands') {
+    const m = headline.match(/^(\/[a-z][a-z0-9_-]*)/i);
+    if (m) {
+      const cmd = m[1].toLowerCase();
+      if (SC_TIER1.has(cmd)) return 1;
+      if (SC_TIER3.has(cmd)) return 3;
+    }
+    return 2;
+  }
+  if (kind === 'best-practices') {
+    const lower = headline.toLowerCase();
+    for (const kw of BP_TIER3_KEYWORDS) {
+      if (lower.includes(kw)) return 3;
+    }
+    for (const kw of BP_TIER1_KEYWORDS) {
+      if (lower.includes(kw)) return 1;
+    }
+    return 2;
+  }
+  return 2;
+}
 
 const SELF_TEST_STUBS = {
   'https://code.claude.com/docs/en/best-practices':
@@ -135,7 +176,7 @@ function pyEscape(s) {
 // These are TOC entries, not real tips. Drop them.
 const TOC_LINK_ONLY_RE = /^\[[^\]]+\]\([^)]+\)$/;
 
-function extractBestPractices(markdown, maxEntries) {
+function extractBestPractices(markdown) {
   const seen = new Set();
   const out = [];
   for (const raw of markdown.split(/\r?\n/)) {
@@ -153,7 +194,6 @@ function extractBestPractices(markdown, maxEntries) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(cleaned);
-    if (out.length >= maxEntries) break;
   }
   return out;
 }
@@ -175,7 +215,7 @@ function firstSentence(s) {
   return m ? m[1] : s;
 }
 
-function extractSlashCommands(markdown, maxEntries) {
+function extractSlashCommands(markdown) {
   const seen = new Set();
   const out = [];
   const lines = markdown.split(/\r?\n/);
@@ -225,7 +265,7 @@ function extractSlashCommands(markdown, maxEntries) {
     out.push(headline);
   }
 
-  for (let i = 0; i < lines.length && out.length < maxEntries; i++) {
+  for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
 
     // 1) Heading-style command entries: lines like "### /clear" or "## /compact"
@@ -268,7 +308,6 @@ function extractSlashCommands(markdown, maxEntries) {
       let rest = (m[2] || '').replace(/^[\s—–:\-]+/, '').trim();
       rest = rest.replace(/^[*_`\s]+/, '').replace(/[*_`\s]+$/, '').trim();
       record(name, rest || null);
-      if (out.length >= maxEntries) break;
     }
   }
 
@@ -286,16 +325,18 @@ function buildBlockBody(indent, entries) {
   if (entries.length === 0) {
     return (
       indent +
-      "{'headline': '(同期失敗: 次回 cron で再試行されます)', 'before': None, 'after': None},"
+      "{'headline': '(同期失敗: 次回 cron で再試行されます)', 'tier': 2, 'before': None, 'after': None},"
     );
   }
   return entries
     .map(
-      (h) =>
+      (e) =>
         indent +
         "{'headline': '" +
-        pyEscape(h) +
-        "', 'before': None, 'after': None},"
+        pyEscape(e.headline) +
+        "', 'tier': " +
+        e.tier +
+        ", 'before': None, 'after': None},"
     )
     .join('\n');
 }
@@ -376,13 +417,18 @@ async function main() {
     let entries;
     try {
       const md = htmlToMarkdown(html);
+      let rawHeadlines;
       if (src.kind === 'best-practices') {
-        entries = extractBestPractices(md, src.maxEntries);
+        rawHeadlines = extractBestPractices(md);
       } else if (src.kind === 'slash-commands') {
-        entries = extractSlashCommands(md, src.maxEntries);
+        rawHeadlines = extractSlashCommands(md);
       } else {
-        entries = [];
+        rawHeadlines = [];
       }
+      entries = rawHeadlines.map((h) => ({
+        headline: h,
+        tier: assignTier(h, src.kind),
+      }));
     } catch (e) {
       failCount += 1;
       console.warn('[skip] parse failed for ' + src.url + ': ' + e.message);
