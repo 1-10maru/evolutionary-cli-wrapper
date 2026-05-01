@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         追加したい機能や改善案をまとめる issue です。
-        未実装の全体像は `ROADMAP.md` も確認してください。
+        未実装の全体像は `docs/ROADMAP.md` も確認してください。
   - type: textarea
     id: goal
     attributes:

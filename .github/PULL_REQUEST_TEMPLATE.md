@@ -16,11 +16,10 @@
 
 ## Docs
 
-- [ ] README updated if user-facing behavior changed
-- [ ] START_HERE_JA updated if setup flow changed
-- [ ] ROADMAP updated if scope or status changed
-- [ ] DECISIONS updated if a new product or architecture decision was made
-- [ ] PROJECT_MAP / REVIEW_PLAYBOOK updated if the collaboration flow changed
+- [ ] README (English + 日本語) updated if user-facing behavior or setup flow changed
+- [ ] docs/ROADMAP.md updated if scope or status changed
+- [ ] docs/ai/DECISIONS.md updated if a new product or architecture decision was made
+- [ ] docs/ai/PROJECT_MAP.md / docs/ai/REVIEW_PLAYBOOK.md updated if the collaboration flow changed
 
 ## Checks
 

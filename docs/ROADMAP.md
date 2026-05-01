@@ -36,7 +36,7 @@
 
 ## Good First Parallel Tasks
 
-- README と `START_HERE_JA.md` の同期
+- README の英語版と日本語版の整合性維持
 - EvoPet 文言テンプレートの追加
 - `stats` / `explain` の表示改善
 - テストケース追加
@@ -56,7 +56,7 @@
 
 - 新しい未実装を見つけたらこのファイルへ追加する
 - 片付いたら `done` へ移す
-- 仕様判断が入ったら `docs/DECISIONS.md` に理由も残す
+- 仕様判断が入ったら `docs/ai/DECISIONS.md` に理由も残す
 ## Friction Track
 
 - Now: Codex friction capture and stop-and-reframe feedback

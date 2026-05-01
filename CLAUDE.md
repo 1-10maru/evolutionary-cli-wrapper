@@ -32,7 +32,7 @@ npm run setup          # shim デプロイ + PATH 設定
 - `tests/` — vitest テスト群
 
 ## バージョニング
-Semantic Versioning。詳細は [VERSIONING.md](VERSIONING.md)。
+Semantic Versioning。詳細は [docs/VERSIONING.md](docs/VERSIONING.md)。
 現行: v2.x 系。リリース前は必ず `npm run release:check`。
 
 ## 既知の問題
