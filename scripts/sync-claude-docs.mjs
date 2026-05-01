@@ -33,7 +33,7 @@ const SOURCES = [
     maxEntries: 30,
   },
   {
-    url: 'https://docs.claude.com/en/docs/claude-code/slash-commands',
+    url: 'https://code.claude.com/docs/en/commands',
     kind: 'slash-commands',
     maxEntries: 30,
   },
@@ -42,16 +42,25 @@ const SOURCES = [
 const SELF_TEST_STUBS = {
   'https://code.claude.com/docs/en/best-practices':
     '<html><body><ul>' +
-    "<li>Ask Claude questions you'd ask a senior engineer</li>" +
-    '<li>Use /clear after two failed attempts</li>' +
-    '<li>Reference files with @ instead of describing where code lives</li>' +
+    // TOC anchor link (should be filtered out)
+    '<li><a href="#give-claude-a-way-to-verify">Give Claude a way to verify its work</a></li>' +
+    // Real prose tips
+    "<li><strong>Reference files with <code>@</code></strong> instead of describing where code lives. Claude reads the file before responding.</li>" +
+    '<li><strong>Paste images directly</strong>. Copy/paste or drag and drop images into the prompt.</li>' +
+    "<li>Ask Claude questions you'd ask a senior engineer who just joined the team.</li>" +
+    // Short navigation crumb (should be filtered)
+    '<li>Auto mode</li>' +
+    // Pure code (should be filtered)
+    '<li><code>/clear</code></li>' +
     '</ul></body></html>',
-  'https://docs.claude.com/en/docs/claude-code/slash-commands':
-    '<html><body><ul>' +
-    '<li><code>/clear</code> — Reset conversation history</li>' +
-    '<li><code>/compact</code> — Summarize older messages</li>' +
-    '<li><code>/help</code> — Show help</li>' +
-    '</ul></body></html>',
+  'https://code.claude.com/docs/en/commands':
+    '<html><body><table><thead><tr><th>Command</th><th>Purpose</th></tr></thead><tbody>' +
+    '<tr><td><code>/clear</code></td><td>Start a new conversation with empty context.</td></tr>' +
+    '<tr><td><code>/compact [instructions]</code></td><td>Free up context by summarizing the conversation so far.</td></tr>' +
+    '<tr><td><code>/help</code></td><td>Show help and available commands.</td></tr>' +
+    '<tr><td><code>/agents</code></td><td>Manage agent configurations.</td></tr>' +
+    '<tr><td><code>/diff</code></td><td>Open an interactive diff viewer showing uncommitted changes.</td></tr>' +
+    '</tbody></table></body></html>',
 };
 
 const args = process.argv.slice(2);
@@ -121,6 +130,11 @@ function pyEscape(s) {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+// A bullet whose entire content is a single markdown link, e.g.
+//   [Give Claude a way to verify](#give-claude-a-way-to-verify)
+// These are TOC entries, not real tips. Drop them.
+const TOC_LINK_ONLY_RE = /^\[[^\]]+\]\([^)]+\)$/;
+
 function extractBestPractices(markdown, maxEntries) {
   const seen = new Set();
   const out = [];
@@ -128,7 +142,13 @@ function extractBestPractices(markdown, maxEntries) {
     const text = bulletText(raw);
     if (!text) continue;
     const cleaned = sanitize(text);
-    if (!cleaned || cleaned.length < 4) continue;
+    if (!cleaned) continue;
+    // Filter: TOC anchor-link-only bullets (entire bullet is a single markdown link)
+    if (TOC_LINK_ONLY_RE.test(cleaned)) continue;
+    // Filter: too short to be a real tip (navigation crumbs, single words)
+    if (cleaned.length < 20) continue;
+    // Filter: bullets that start with backtick (pure code-only items)
+    if (cleaned.startsWith('`')) continue;
     const key = cleaned.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -138,52 +158,120 @@ function extractBestPractices(markdown, maxEntries) {
   return out;
 }
 
+// Strip markdown link syntax `[text](url)` -> `text`, leaving plain prose.
+function stripMarkdownLinks(s) {
+  return s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+}
+
+// Strip inline code wrapper backticks but keep contents readable.
+function stripBackticks(s) {
+  return s.replace(/`([^`]+)`/g, '$1');
+}
+
+// Take the first sentence (up to a period followed by space or end-of-string).
+// Falls back to the whole input if no sentence boundary is found.
+function firstSentence(s) {
+  const m = s.match(/^(.+?[.!?])(\s|$)/);
+  return m ? m[1] : s;
+}
+
 function extractSlashCommands(markdown, maxEntries) {
   const seen = new Set();
   const out = [];
-  // Detect a slash command at the start of bullet text:
-  //   /foo          (bare)
-  //   `/foo`        (inline code) - turndown emits `/foo`
-  //   **/foo**      (bold)
-  //   __/foo__      (alt bold)
-  // Accept any of these and normalize to "/<name>".
-  const slashPattern = /^(?:[*_`]+)?(\/[a-z][a-z0-9_-]*)(?:[*_`]+)?(.*)$/i;
+  const lines = markdown.split(/\r?\n/);
 
-  for (const raw of markdown.split(/\r?\n/)) {
-    const text = bulletText(raw);
-    if (!text) continue;
-    const m = text.match(slashPattern);
-    if (!m) continue;
+  // Patterns that indicate a slash-command definition line.
+  //   `/cmd ...`            - inline-code wrapper (turndown output for table cells)
+  //   ### /cmd              - heading-style (alternative renderings)
+  //   **/cmd**              - bold (rare)
+  // We capture the canonical "/name" from each.
+  const codeLineRe = /^\s*`(\/[a-z][a-z0-9_-]*)\b[^`]*`\s*$/i;
+  const headingLineRe = /^\s*#{1,6}\s+(\/[a-z][a-z0-9_-]*)\b/i;
+  const boldLineRe = /^\s*\*\*\s*(\/[a-z][a-z0-9_-]*)\b[^*]*\*\*\s*$/i;
+  // Bullet pattern used as fallback (matches existing extraction style).
+  const bulletSlashRe = /^(?:[*_`]+)?(\/[a-z][a-z0-9_-]*)(?:[*_`]+)?(.*)$/i;
 
-    const name = m[1];
-    let rest = m[2] || '';
-
-    // Strip leading separators: em-dash, en-dash, hyphen, colon
-    rest = rest.replace(/^[\s—–:\-]+/, '').trim();
-
-    // Clean wrapper artifacts left by turndown
-    rest = rest.replace(/^[*_`\s]+/, '').replace(/[*_`\s]+$/, '').trim();
-
-    let headline;
-    if (rest) {
-      headline = name + ' — ' + sanitize(rest);
-    } else {
-      // No description; try first separator anywhere in original text
-      const sepMatch = text.match(/[:\-—–]\s*(.+)$/);
-      if (sepMatch) {
-        headline = name + ' — ' + sanitize(sepMatch[1]);
-      } else {
-        headline = sanitize(text);
+  function pickDescription(startIdx) {
+    // Look ahead up to 5 lines for the first non-blank, non-definition paragraph.
+    for (let j = startIdx; j < Math.min(startIdx + 5, lines.length); j++) {
+      const ln = lines[j];
+      if (!ln || !ln.trim()) continue;
+      // Skip if next line is itself another command definition.
+      if (codeLineRe.test(ln) || headingLineRe.test(ln) || boldLineRe.test(ln)) {
+        return null;
       }
+      return ln.trim();
     }
+    return null;
+  }
 
-    if (!headline || headline.length < 2) continue;
+  function record(name, descRaw) {
+    let headline;
+    if (descRaw) {
+      let desc = stripMarkdownLinks(descRaw);
+      desc = stripBackticks(desc);
+      // Strip leading bold markers like "**[Skill]...**"
+      desc = desc.replace(/^\*\*[^*]*\*\*\s*\.?\s*/, '');
+      desc = sanitize(desc);
+      desc = firstSentence(desc);
+      headline = name + ' — ' + desc;
+    } else {
+      headline = name;
+    }
+    if (!headline || headline.length < 2) return;
     const key = headline.toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
     out.push(headline);
-    if (out.length >= maxEntries) break;
   }
+
+  for (let i = 0; i < lines.length && out.length < maxEntries; i++) {
+    const raw = lines[i];
+
+    // 1) Heading-style command entries: lines like "### /clear" or "## /compact"
+    let m = raw.match(headingLineRe);
+    if (m) {
+      const name = m[1];
+      const desc = pickDescription(i + 1);
+      record(name, desc);
+      continue;
+    }
+
+    // 2) Inline-code-wrapped command line (turndown table-cell rendering):
+    //    `/clear` on its own line, with description in the next non-blank line.
+    m = raw.match(codeLineRe);
+    if (m) {
+      const name = m[1];
+      const desc = pickDescription(i + 1);
+      record(name, desc);
+      continue;
+    }
+
+    // 3) Bold-wrapped command line.
+    m = raw.match(boldLineRe);
+    if (m) {
+      const name = m[1];
+      const desc = pickDescription(i + 1);
+      record(name, desc);
+      continue;
+    }
+  }
+
+  // Fallback: bullet-style "- /cmd description" if nothing else matched.
+  if (out.length === 0) {
+    for (const raw of lines) {
+      const text = bulletText(raw);
+      if (!text) continue;
+      const m = text.match(bulletSlashRe);
+      if (!m) continue;
+      const name = m[1];
+      let rest = (m[2] || '').replace(/^[\s—–:\-]+/, '').trim();
+      rest = rest.replace(/^[*_`\s]+/, '').replace(/[*_`\s]+$/, '').trim();
+      record(name, rest || null);
+      if (out.length >= maxEntries) break;
+    }
+  }
+
   return out;
 }
 
