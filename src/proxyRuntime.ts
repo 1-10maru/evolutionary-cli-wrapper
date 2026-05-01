@@ -240,8 +240,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
           onStateChanged: writeLiveState,
         });
       },
-      onRotation: () => {
+      onRotation: (sessionId) => {
         resetLiveStateOnRotation(liveState);
+        // Set the new sessionId (or undefined if not yet readable) so the
+        // live-state payload reflects the freshly-locked session immediately.
+        liveState.sessionId = sessionId;
         // Write a "session changed" snapshot so statusline reflects rotation immediately.
         writeLiveState();
       },

@@ -87,6 +87,13 @@ export interface ProxyLiveState {
   lastExitSignal: string | null;
   lastExitAt: number | null;
   lastSubcommand: string | null;
+  /**
+   * Claude Code session ID extracted from the locked JSONL file's first
+   * line. undefined until the watcher locks to a fresh JSONL and parses
+   * its header. Reset to undefined on rotation; re-populated when the
+   * new locked file's sessionId is read.
+   */
+  sessionId?: string;
 }
 
 const TURN_NOISE_PATTERNS = [
@@ -241,6 +248,7 @@ export function buildLiveStatePayload(
     lastExitSignal: liveState.lastExitSignal,
     lastExitAt: liveState.lastExitAt,
     lastSubcommand: liveState.lastSubcommand,
+    sessionId: liveState.sessionId,
   };
 }
 
@@ -367,6 +375,11 @@ export function resetLiveStateOnRotation(liveState: ProxyLiveState): void {
   liveState.lastHasTestRef = false;
   liveState.lastStructureScore = 0;
   liveState.lastFirstPassGreen = true;
+  // sessionId is intentionally NOT cleared here — callers (jsonl rotation
+  // handler) update it explicitly with the new session's ID after reset.
+  // Clearing it here would create a brief window where the live-state
+  // payload exposes the old sessionId; instead the caller sets it in
+  // the same tick as the reset.
 }
 
 // ── finalizeTurn ──
