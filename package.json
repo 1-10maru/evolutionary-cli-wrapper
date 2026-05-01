@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
-    "postinstall": "npm run build",
+    "prepublishOnly": "npm run build",
     "setup": "node scripts/setup.mjs",
     "test": "vitest run tests",
     "test:watch": "vitest tests",
