@@ -1,6 +1,6 @@
 {
   "name": "evolutionary-cli-wrapper",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "CLI wrapper that scores and guides LLM collaboration efficiency without depending on token access.",
   "type": "commonjs",
   "main": "dist/index.js",
