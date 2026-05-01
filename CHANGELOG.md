@@ -2,6 +2,14 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.2.0 (2026-05-02)
+
+### Fixed
+- "X回目" counter is now session-scoped instead of cwd-scoped. Previously, opening a new Claude Code session in the same directory could inherit the previous session's count if the old JSONL retained a recent mtime. Now the JSONL watcher only binds to files modified after proxy startup and additionally tracks `sessionId` from the JSONL header for rotation detection.
+
+### Added
+- `sessionId` field exposed in `live-state.json` for diagnostic / future statusline use.
+
 ## v3.1.0 (2026-05-02)
 
 ### Breaking-flavored

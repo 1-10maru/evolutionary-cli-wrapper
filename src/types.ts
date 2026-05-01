@@ -573,4 +573,11 @@ export interface LiveStatePayload {
   lastExitAt?: number | null;
   /** Last subcommand observed (e.g. "review" for passthrough). */
   lastSubcommand?: string | null;
+  /**
+   * Claude Code session identifier extracted from the first line of the
+   * locked JSONL file (when available). Surfaced for diagnostic /
+   * future statusline use; consumers should treat absence as "unknown
+   * session" and not depend on stable presence. v3.2.0+.
+   */
+  sessionId?: string;
 }
