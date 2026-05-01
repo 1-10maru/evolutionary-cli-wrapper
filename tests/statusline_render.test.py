@@ -396,5 +396,78 @@ class TestStatuslineV31(unittest.TestCase):
         )
 
 
+class TestStatuslineV33(unittest.TestCase):
+    """v3.3.0: heartbeat-extended fresh window + stale-but-full-layout."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="evo-statusline-v33-")
+        self.tmp_root = Path(self._tmp.name)
+        self.fake_home = self.tmp_root / "home"
+        self.fake_home.mkdir(parents=True, exist_ok=True)
+        (self.fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+        self.cwd_dir = self.tmp_root / "project"
+        self.cwd_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _stdin(self) -> dict:
+        return {
+            "model": {"display_name": "claude-opus-4-7"},
+            "cwd": str(self.cwd_dir),
+            "context_window": {"used_percentage": 25},
+            "rate_limits": {},
+        }
+
+    def test_fresh_window_extended_to_5_minutes(self) -> None:
+        """v3.3.0: 90 s old data must still render in the 'stale' branch
+        (i.e. with full layout + dim) instead of falling all the way through
+        to the no-proxy fallback path. Pre-v3.3 the cutoff was 60 s."""
+        write_live_state(self.cwd_dir, age_ms=90_000)  # 90 s old
+        out = run_statusline(self._stdin(), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        # Must have proxy-derived nickname (not the fallback default)
+        self.assertIn("TestPet", plain)
+        # Must include grade chip - that means we're in proxy-stale, not fallback
+        self.assertIn("A", plain)
+        # 5-band fallback never emits this exact "(待機中)" tag
+        self.assertIn("(待機中)", plain)
+
+    def test_proxy_stale_preserves_full_layout(self) -> None:
+        """v3.3.0: stale path must keep grade / 回目 / 指示の質 / 育成度
+        chips on line 1 (previously collapsed to avatar-only)."""
+        write_live_state(self.cwd_dir, age_ms=30_000)  # 30 s old → stale
+        out = run_statusline(self._stdin(), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        # All four data chips must remain visible in stale render
+        self.assertIn("回目", plain)
+        self.assertIn("指示の質", plain)
+        self.assertIn("育成度", plain)
+        # And the (待機中) suffix should be present at end of line 1
+        self.assertIn("(待機中)", plain)
+        # Line 1 should have multiple separator chips (not just avatar+marker)
+        line1 = next(
+            (ln for ln in plain.split("\n") if "TestPet" in ln), ""
+        )
+        # Expect at least 4 chips (avatar/name, grade, 回目, 育成度) joined by
+        # separator (middle-dot · in SEP).
+        self.assertGreaterEqual(
+            line1.count("·"),
+            3,
+            f"stale line1 looks collapsed (too few chips):\n{line1!r}",
+        )
+
+    def test_stale_beyond_5_minutes_falls_back(self) -> None:
+        """v3.3.0: 6 minutes is past the new 5-min window → fallback path."""
+        write_live_state(self.cwd_dir, age_ms=360_000)  # 6 min old
+        out = run_statusline(self._stdin(), self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        # Fallback path uses default 'EvoPet' nickname, not our 'TestPet'
+        self.assertNotIn("TestPet", plain)
+        self.assertNotIn("(待機中)", plain)
+        # And renders the call-count fallback
+        self.assertRegex(plain, r"\d+回目")
+
+
 if __name__ == "__main__":
     unittest.main()
