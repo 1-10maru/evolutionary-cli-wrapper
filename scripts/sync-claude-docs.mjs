@@ -191,9 +191,8 @@ function extractSlashCommands(markdown, maxEntries) {
 // Marker rewrite
 // -------------------------------------------------------------
 
-function detectEol(text) {
-  return text.includes('\r\n') ? '\r\n' : '\n';
-}
+// EOL is preserved per-block by rewriteBlock() via the captured [\r\n]+ group,
+// so no whole-file EOL detection is needed.
 
 function buildBlockBody(indent, entries) {
   if (entries.length === 0) {
@@ -263,8 +262,6 @@ async function main() {
     process.exit(2);
   }
   const original = readFileSync(STATUSLINE_PATH, 'utf-8');
-  // detectEol kept for documentation; per-block EOL is preserved by rewriteBlock.
-  detectEol(original);
   let working = original;
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 

@@ -1,3 +1,10 @@
+# Required repository secret:
+#   GITHUB_TOKEN — provided automatically by GitHub Actions, no manual setup needed.
+#
+# This workflow creates a label `auto-merge-ok` on first run if missing.
+# Pair with an external auto-merge handler (e.g., ~/.claude/scripts/pr-handler.sh) that
+# squash-merges PRs carrying this label after CI passes.
+
 name: Sync Claude Code Docs
 
 on:
@@ -37,6 +44,12 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         run: python3 -m py_compile statusline.py
 
+      - name: Ensure auto-merge-ok label exists
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh label create auto-merge-ok --color "0E8A16" --description "Safe to auto-merge after CI passes" --force
+
       - name: Create PR
         if: steps.diff.outputs.changed == 'true'
         env:
@@ -46,10 +59,10 @@ jobs:
           BRANCH="chore/sync-claude-docs-$DATE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add statusline.py
           git commit -m "chore: sync Claude Code docs $DATE"
-          git push origin "$BRANCH"
+          git push -f origin "$BRANCH"
           gh pr create \
             --title "chore: sync Claude Code docs $DATE" \
             --body "Automated weekly sync of Anthropic Claude Code docs into statusline tips.

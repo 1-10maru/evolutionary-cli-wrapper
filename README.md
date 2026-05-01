@@ -37,6 +37,15 @@ npm update -g evolutionary-cli-wrapper
 
 No telemetry, no remote calls at runtime — sync happens server-side via GitHub Actions.
 
+### Maintainer setup (one-time)
+
+To enable the auto-sync + auto-publish pipeline on a fork or new repo:
+
+1. Generate an npm Automation token at `https://www.npmjs.com/settings/<user>/tokens`.
+2. Add it as a repository secret named `NPM_TOKEN` (Settings → Secrets and variables → Actions).
+3. The `auto-merge-ok` label is created automatically by `sync-claude-docs.yml` on first run.
+4. Optional: pair with an external auto-merge handler that squash-merges PRs carrying that label after CI passes.
+
 ## ✨ できること
 
 - 🤖 `codex` / `claude` のセッションを自動で記録する

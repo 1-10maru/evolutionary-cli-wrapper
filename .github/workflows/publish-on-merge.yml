@@ -1,3 +1,11 @@
+# Required repository secret:
+#   NPM_TOKEN — npmjs.com automation token for publishing.
+#   Generate at https://www.npmjs.com/settings/<user>/tokens with type "Automation".
+#   Add via: Settings → Secrets and variables → Actions → New repository secret.
+#
+# Required repository label (auto-created by sync-claude-docs.yml on first run):
+#   auto-merge-ok
+
 name: Publish to npm
 
 on:
@@ -15,6 +23,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
