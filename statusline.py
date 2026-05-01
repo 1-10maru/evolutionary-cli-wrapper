@@ -457,6 +457,15 @@ _TIPS = [
         'before': 'for\u30eb\u30fc\u30d7\u30671\u30d5\u30a1\u30a4\u30eb\u305a\u3064\u5909\u63db',
         'after': '/batch "React\u304b\u3089Vue\u306b\u79fb\u884c" \u3067\u5bfe\u8c61\u30d5\u30a1\u30a4\u30eb\u3092\u4e26\u5217\u5909\u63db',
     },
+    # \u2500\u2500 Claude Code \u516c\u5f0f\u30d9\u30b9\u30c8\u30d7\u30e9\u30af\u30c6\u30a3\u30b9 (auto-synced from code.claude.com) \u2500\u2500
+    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=PENDING
+    {'headline': '(\u521d\u56de\u540c\u671f\u524d: weekly cron \u3067\u81ea\u52d5\u53d6\u5f97\u3055\u308c\u307e\u3059)', 'before': None, 'after': None},
+    # AUTO-GENERATED:END
+
+    # \u2500\u2500 Claude Code \u516c\u5f0f\u30b9\u30e9\u30c3\u30b7\u30e5\u30b3\u30de\u30f3\u30c9 (auto-synced from docs.claude.com) \u2500\u2500
+    # AUTO-GENERATED:START source=https://docs.claude.com/en/docs/claude-code/slash-commands fetched=PENDING
+    {'headline': '(\u521d\u56de\u540c\u671f\u524d: weekly cron \u3067\u81ea\u52d5\u53d6\u5f97\u3055\u308c\u307e\u3059)', 'before': None, 'after': None},
+    # AUTO-GENERATED:END
 ]
 
 # ══════════════════════════════════════════════════════════════

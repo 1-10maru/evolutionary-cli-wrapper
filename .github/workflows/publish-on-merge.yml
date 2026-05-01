@@ -1,0 +1,54 @@
+# Required repository secret:
+#   NPM_TOKEN — npmjs.com automation token for publishing.
+#   Generate at https://www.npmjs.com/settings/<user>/tokens with type "Automation".
+#   Add via: Settings → Secrets and variables → Actions → New repository secret.
+#
+# Required repository label (auto-created by sync-claude-docs.yml on first run):
+#   auto-merge-ok
+
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'statusline.py'
+      - 'package.json'
+      - 'src/**'
+      - 'bin/**'
+      - 'dist/**'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          NEW_VERSION=$(npm version patch -m "chore: release v%s [skip ci]")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          git push origin main --tags
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

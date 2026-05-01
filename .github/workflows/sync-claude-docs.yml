@@ -1,0 +1,75 @@
+# Required repository secret:
+#   GITHUB_TOKEN — provided automatically by GitHub Actions, no manual setup needed.
+#
+# This workflow creates a label `auto-merge-ok` on first run if missing.
+# Pair with an external auto-merge handler (e.g., ~/.claude/scripts/pr-handler.sh) that
+# squash-merges PRs carrying this label after CI passes.
+
+name: Sync Claude Code Docs
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # Mon 03:00 UTC = Mon 12:00 JST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - name: Run sync script
+        run: node scripts/sync-claude-docs.mjs
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet statusline.py; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate Python parses
+        if: steps.diff.outputs.changed == 'true'
+        run: python3 -m py_compile statusline.py
+
+      - name: Ensure auto-merge-ok label exists
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh label create auto-merge-ok --color "0E8A16" --description "Safe to auto-merge after CI passes" --force
+
+      - name: Create PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          BRANCH="chore/sync-claude-docs-$DATE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add statusline.py
+          git commit -m "chore: sync Claude Code docs $DATE"
+          git push -f origin "$BRANCH"
+          gh pr create \
+            --title "chore: sync Claude Code docs $DATE" \
+            --body "Automated weekly sync of Anthropic Claude Code docs into statusline tips.
+
+          Sources:
+          - https://code.claude.com/docs/en/best-practices
+          - https://docs.claude.com/en/docs/claude-code/slash-commands" \
+            --label auto-merge-ok \
+            --base main \
+            --head "$BRANCH"
