@@ -37,7 +37,7 @@ describe("firstRunPrompt", () => {
     const runInstall = vi.fn();
     const messages: string[] = [];
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: {},
@@ -67,7 +67,7 @@ describe("firstRunPrompt", () => {
 
     const prompt = vi.fn();
     const runInstall = vi.fn();
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: {},
@@ -86,7 +86,7 @@ describe("firstRunPrompt", () => {
     const prompt = vi.fn();
     const runInstall = vi.fn();
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: false,
       env: {},
@@ -105,10 +105,29 @@ describe("firstRunPrompt", () => {
     const prompt = vi.fn();
     const runInstall = vi.fn();
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: { EVO_NO_INSTALL_PROMPT: "1" },
+      prompt: prompt as unknown as (q: string) => Promise<string>,
+      runInstall: runInstall as unknown as (h: string) => Promise<void>,
+      log: () => undefined,
+    });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(runInstall).not.toHaveBeenCalled();
+    expect(fs.existsSync(sentinelPath(home))).toBe(false);
+  });
+
+  it("does nothing when EVO_PROXY_ACTIVE=1 is set (running inside proxy spawn)", async () => {
+    const home = makeTempHome();
+    const prompt = vi.fn();
+    const runInstall = vi.fn();
+
+    await maybeRunFirstRunPrompt("init", {
+      homeDir: home,
+      isTTY: true,
+      env: { EVO_PROXY_ACTIVE: "1" },
       prompt: prompt as unknown as (q: string) => Promise<string>,
       runInstall: runInstall as unknown as (h: string) => Promise<void>,
       log: () => undefined,
@@ -137,16 +156,107 @@ describe("firstRunPrompt", () => {
     expect(runInstall).not.toHaveBeenCalled();
   });
 
-  it("calls installStatusline and writes sentinel on yes answer", async () => {
+  // --- skip-list expansion (the bug fix) ---
+  describe("expanded skip list", () => {
+    const skipCases = [
+      "proxy",
+      "run",
+      "pause",
+      "resume",
+      "shell",
+      "setup-shell",
+      "undo-shell",
+      "uninstall",
+      "logs",
+      "stats",
+      "storage",
+      "explain",
+      "compact",
+      "export-knowledge",
+      "import-knowledge",
+      "statusline",
+      "--version",
+      "-V",
+      "--help",
+      "-h",
+    ];
+    for (const sub of skipCases) {
+      it(`does nothing for subcommand "${sub}"`, async () => {
+        const home = makeTempHome();
+        const prompt = vi.fn();
+        const runInstall = vi.fn();
+
+        await maybeRunFirstRunPrompt(sub, {
+          homeDir: home,
+          isTTY: true,
+          env: {},
+          prompt: prompt as unknown as (q: string) => Promise<string>,
+          runInstall: runInstall as unknown as (h: string) => Promise<void>,
+          log: () => undefined,
+        });
+
+        expect(prompt).not.toHaveBeenCalled();
+        expect(runInstall).not.toHaveBeenCalled();
+        expect(fs.existsSync(sentinelPath(home))).toBe(false);
+      });
+    }
+  });
+
+  describe("argv-based shim detection", () => {
+    const shimNames = [
+      ["/usr/local/bin/claude", true],
+      ["/usr/local/bin/codex", true],
+      ["C:/Users/x/bin/claude.cmd", true],
+      ["C:/Users/x/bin/claude.ps1", true],
+      ["C:/Users/x/bin/claude.exe", true],
+      ["/path/to/claude.js", true],
+      ["/path/to/codex.cjs", true],
+      ["/path/to/CLAUDE", true], // case-insensitive
+      ["/path/to/Codex.cmd", true],
+      ["/path/to/dist/index.js", false],
+      ["/path/to/evo", false],
+      ["/path/to/evo.cmd", false],
+      ["/path/to/claudette", false], // does not equal "claude"
+      ["/path/to/codex-helper", false],
+    ] as const;
+
+    for (const [argv1, expectSkip] of shimNames) {
+      it(`${expectSkip ? "skips" : "runs"} when argv[1]=${argv1}`, async () => {
+        const home = makeTempHome();
+        const prompt = vi.fn(async () => "n");
+        const runInstall = vi.fn();
+
+        await maybeRunFirstRunPrompt("init", {
+          homeDir: home,
+          isTTY: true,
+          env: {},
+          argv: ["node", argv1],
+          prompt: prompt as unknown as (q: string) => Promise<string>,
+          runInstall: runInstall as unknown as (h: string) => Promise<void>,
+          log: () => undefined,
+        });
+
+        if (expectSkip) {
+          expect(prompt).not.toHaveBeenCalled();
+          expect(fs.existsSync(sentinelPath(home))).toBe(false);
+        } else {
+          expect(prompt).toHaveBeenCalledTimes(1);
+        }
+      });
+    }
+  });
+
+  it("calls installStatusline and writes sentinel on yes answer (init subcommand)", async () => {
     const home = makeTempHome();
     const prompt = vi.fn(async () => "y");
     const runInstall = vi.fn(async () => undefined);
     const messages: string[] = [];
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: {},
+      argv: ["node", "/path/to/dist/index.js"],
       prompt: prompt as unknown as (q: string) => Promise<string>,
       runInstall: runInstall as unknown as (h: string) => Promise<void>,
       log: (m) => messages.push(m),
@@ -162,10 +272,11 @@ describe("firstRunPrompt", () => {
     const home = makeTempHome();
     const runInstall = vi.fn(async () => undefined);
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: {},
+      argv: ["node", "/path/to/dist/index.js"],
       prompt: async () => "",
       runInstall: runInstall as unknown as (h: string) => Promise<void>,
       log: () => undefined,
@@ -179,10 +290,11 @@ describe("firstRunPrompt", () => {
     const home = makeTempHome();
     const runInstall = vi.fn(async () => undefined);
 
-    await maybeRunFirstRunPrompt("stats", {
+    await maybeRunFirstRunPrompt("init", {
       homeDir: home,
       isTTY: true,
       env: {},
+      argv: ["node", "/path/to/dist/index.js"],
       prompt: async () => "n",
       runInstall: runInstall as unknown as (h: string) => Promise<void>,
       log: () => undefined,
@@ -190,23 +302,5 @@ describe("firstRunPrompt", () => {
 
     expect(runInstall).not.toHaveBeenCalled();
     expect(fs.existsSync(sentinelPath(home))).toBe(true);
-  });
-
-  it("does nothing for --version subcommand name", async () => {
-    const home = makeTempHome();
-    const prompt = vi.fn();
-    const runInstall = vi.fn();
-
-    await maybeRunFirstRunPrompt("--version", {
-      homeDir: home,
-      isTTY: true,
-      env: {},
-      prompt: prompt as unknown as (q: string) => Promise<string>,
-      runInstall: runInstall as unknown as (h: string) => Promise<void>,
-      log: () => undefined,
-    });
-
-    expect(prompt).not.toHaveBeenCalled();
-    expect(runInstall).not.toHaveBeenCalled();
   });
 });
