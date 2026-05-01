@@ -26,22 +26,22 @@
 ## Docs Roles
 
 - `README.md`
-  - ユーザー向けの全体案内
-- `START_HERE_JA.md`
-  - 最短セットアップ
-- `CONTRIBUTING.md`
+  - ユーザー向けの全体案内（英語 + 日本語のバイリンガル、最短セットアップを含む）
+- `docs/CONTRIBUTING.md`
   - 並列開発ルール
-- `ROADMAP.md`
+- `docs/ROADMAP.md`
   - 未実装と優先度
-- `docs/DECISIONS.md`
+- `docs/VERSIONING.md`
+  - リリースライン状態と詳細プロセス
+- `docs/ai/DECISIONS.md`
   - 判断理由
-- `docs/AGENT_WORKFLOW.md`
+- `docs/ai/AGENT_WORKFLOW.md`
   - AI エージェント向け作業手順
-- `docs/REVIEW_PLAYBOOK.md`
+- `docs/ai/REVIEW_PLAYBOOK.md`
   - レビュー観点
-- `docs/issue-intake.md`
+- `docs/ai/issue-intake.md`
   - `evo issue show` の目的と使い方
-- `docs/knowledge/`
+- `docs/ai/knowledge/`
   - 環境依存や運用事故の再発防止ノウハウ
 - `docs/future/`
   - 将来のモジュール構想

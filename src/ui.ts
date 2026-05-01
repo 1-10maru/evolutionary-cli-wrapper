@@ -268,7 +268,7 @@ export function formatExplain(explanation: {
 
 export function formatIssueIntake(summary: IssueIntakeSummary): string {
   const nextActions = [
-    "1. ROADMAP.md で shared-risk area を確認",
+    "1. docs/ROADMAP.md で shared-risk area を確認",
     "2. `feature/<issue-or-topic>` ブランチを切る",
     "3. 完了条件を満たす差分だけに絞って着手",
   ];

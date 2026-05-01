@@ -12,9 +12,9 @@
 ## 何を置かないか
 
 - 長期の仕様判断
-  - `docs/DECISIONS.md` に置く
+  - `docs/ai/DECISIONS.md` に置く
 - 初心者向けのセットアップ本文
-  - `README.md` や `START_HERE_JA.md` を使う
+  - `README.md`（バイリンガル、日本語クイックインストールセクションを含む）を使う
 
 ## 命名ルール
 

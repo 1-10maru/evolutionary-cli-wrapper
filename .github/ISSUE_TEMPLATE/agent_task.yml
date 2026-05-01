@@ -26,7 +26,7 @@ body:
       placeholder: |
         - `.github/workflows/`
         - `README.md`
-        - `CONTRIBUTING.md`
+        - `docs/CONTRIBUTING.md`
     validations:
       required: true
   - type: textarea

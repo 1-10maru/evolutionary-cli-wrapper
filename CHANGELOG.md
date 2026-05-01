@@ -2,7 +2,26 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
-## [Unreleased] - 2026-04-26
+## [Unreleased]
+
+### Changed (docs)
+
+- README.md is now a single bilingual entry point (English + 日本語). The legacy `START_HERE_JA.md` was merged into the README's 日本語 section; npm-only quick install and clone-based full setup both live in README. No information was lost in the merge.
+- Top-level `ROADMAP.md` → `docs/ROADMAP.md`.
+- Top-level `CONTRIBUTING.md` → `docs/CONTRIBUTING.md`.
+- Top-level `VERSIONING.md` → `docs/VERSIONING.md`.
+- AI-agent-oriented docs were grouped under `docs/ai/`:
+  - `docs/AGENT_WORKFLOW.md` → `docs/ai/AGENT_WORKFLOW.md`
+  - `docs/DECISIONS.md` → `docs/ai/DECISIONS.md`
+  - `docs/PROJECT_MAP.md` → `docs/ai/PROJECT_MAP.md`
+  - `docs/REVIEW_PLAYBOOK.md` → `docs/ai/REVIEW_PLAYBOOK.md`
+  - `docs/issue-intake.md` → `docs/ai/issue-intake.md`
+  - `docs/knowledge/` → `docs/ai/knowledge/`
+- Added `docs/ai/README.md` (bilingual) describing the directory's purpose.
+- Internal references updated: `CLAUDE.md`, `setup.cmd`, `src/ui.ts`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/ISSUE_TEMPLATE/{config,agent_task,feature_request}.yml`, `.github/workflows/pr-doc-check.yml`, and the moved docs themselves.
+- `docs/future/` (ai-orchestration, friction-capture-architecture) kept in place — those are forward-looking design notes for humans, not agent runtime documentation.
+
+## [Previously Unreleased] - 2026-04-26
 
 ### Added
 
