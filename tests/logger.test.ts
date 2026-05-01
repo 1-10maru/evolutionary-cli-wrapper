@@ -274,6 +274,46 @@ describe("logger child", () => {
   });
 });
 
+describe("logger lightweight short-circuit", () => {
+  it("does NOT create .evo/logs/ when cwd is an aggregate parent dir (no project markers, many subdirs)", () => {
+    const dir = makeTempDir();
+    // Build aggregate-parent shape: 10 subdirs, no project markers.
+    for (let i = 0; i < 10; i += 1) {
+      fs.mkdirSync(path.join(dir, `sub${i}`));
+    }
+    // EVO_LOG_DIR is intentionally NOT set so isLightweightCwdForLogger inspects cwd.
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      __resetLoggerForTests();
+      const log = getLogger();
+      log.error("c", "should not write");
+      log.info("c", "also no");
+      log.flush();
+      expect(fs.existsSync(path.join(dir, ".evo"))).toBe(false);
+      expect(fs.existsSync(path.join(dir, ".evo", "logs"))).toBe(false);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("DOES create .evo/logs/ when cwd has a project marker (.git)", () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, ".git"));
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      __resetLoggerForTests();
+      const log = getLogger();
+      log.info("c", "project marker present");
+      log.flush();
+      expect(fs.existsSync(path.join(dir, ".evo", "logs"))).toBe(true);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+});
+
 describe("logger reset", () => {
   it("__resetLoggerForTests truly resets state — env re-read after reset", () => {
     const dir1 = makeTempDir();
