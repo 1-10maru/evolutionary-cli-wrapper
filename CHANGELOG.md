@@ -2,6 +2,19 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.4.0 (2026-05-02)
+
+### Fixed
+- Parallel Claude Code sessions in the same directory no longer overwrite each other's EvoPet state. Each proxy now writes to `<cwd>/.evo/sessions/<sessionId>.json`, and the statusline reads the file matching the current session ID from Claude Code's payload.
+- Stale `live-state.json` from prior sessions can no longer shadow the current session's metrics.
+
+### Added
+- Automatic GC: session files older than 7 days are pruned at proxy startup.
+- Backward-compatible writes: `<cwd>/.evo/live-state.json` is still updated alongside per-session files for compatibility with older statusline deployments.
+
+### Internal
+- `<cwd>/.evo/sessions/` directory introduced.
+
 ## v3.3.0 (2026-05-02)
 
 ### Fixed

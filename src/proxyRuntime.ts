@@ -23,7 +23,9 @@ import {
 } from "./types";
 import { emitTrackingHeader } from "./proxy/headerEmitter";
 import {
+  gcOldSessionFiles,
   liveStateTargets,
+  sessionLiveStatePath,
   teardownLiveStateFiles,
   writeLiveStateDual,
 } from "./proxy/liveState";
@@ -209,11 +211,24 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const writeLiveState = (): void => {
     if (liveStateTornDown) return;
     const payload = buildLiveStatePayload(liveState, mascotProfile);
+    // v3.4.0: write to per-session file `<cwd>/.evo/sessions/<sessionId>.json`
+    // when sessionId is known. Until then we only update the legacy dual
+    // targets — the per-session file lights up as soon as the JSONL watcher
+    // locks and parses the header.
+    const sessionTarget =
+      typeof liveState.sessionId === "string" && liveState.sessionId.length > 0
+        ? sessionLiveStatePath(cwd, liveState.sessionId)
+        : undefined;
     writeLiveStateDual({
       cwdTarget: liveStateFile,
       homeTarget: homeLiveStateFile,
+      sessionTarget,
       payload,
-      debugContext: { turns: liveState.turns, mood: mascotProfile.mood },
+      debugContext: {
+        turns: liveState.turns,
+        mood: mascotProfile.mood,
+        sessionId: liveState.sessionId,
+      },
     });
   };
 
@@ -241,6 +256,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   };
 
   if (liveTrackingEnabled) {
+    // v3.4.0: best-effort GC of stale per-session files (>7 days old).
+    // Errors are swallowed inside gcOldSessionFiles, but we still wrap the
+    // call defensively so a future regression cannot crash proxy startup.
+    try {
+      gcOldSessionFiles(cwd);
+    } catch {
+      // intentionally ignored — GC is opportunistic
+    }
     jsonlWatcherHandle = setupJsonlWatcher({
       cwd,
       onEntry: (entry) => {
