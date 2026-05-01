@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
+import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import {
   EpisodeComplexity,
   EpisodeEvent,
@@ -48,6 +49,14 @@ export class EvoDatabase {
   constructor(cwd: string) {
     this.cwd = cwd;
     this.evoDir = getEvoDir(cwd);
+    // Lightweight tracking: skip per-project .evo/ creation; use an in-memory
+    // SQLite database so the proxy still functions without disk artifacts.
+    if (shouldUseLightweightTracking(cwd)) {
+      this.dbPath = ":memory:";
+      this.db = new Database(this.dbPath);
+      this.initialize();
+      return;
+    }
     ensureDirectory(this.evoDir);
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
     ensureEvoConfig(cwd);
