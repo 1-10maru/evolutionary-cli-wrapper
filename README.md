@@ -239,6 +239,14 @@ bash install/evopet-install.sh
 - `~/.bash_profile` に shim の source 行を追記（既にあれば skip）
 - `~/.claude/settings.json` の `statusLine.command` を merge（他キーは保持）
 
+**npm 経由でインストールした場合（statusline だけ有効化）:**
+
+```bash
+evo install-statusline           # 対話モード（バックアップを作成して安全に上書き）
+evo install-statusline --yes     # CI / 確認スキップ
+evo install-statusline --uninstall  # 直近のバックアップから復元
+```
+
 **アンインストール:**
 
 ```bash

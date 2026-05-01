@@ -14,6 +14,7 @@ import { runEpisode } from "./runtime";
 import { runLogsCommand } from "./cli/logs";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
+import { runInstallStatusline } from "./cli/installStatusline";
 import {
   getShellStatus,
   resolveOriginalCommand,
@@ -471,6 +472,18 @@ program
   .description("Render EvoPet portion of the Claude Code statusline (reads JSON from stdin).")
   .action(async () => {
     await runStatuslineCommand();
+  });
+
+program
+  .command("install-statusline")
+  .description("Deploy statusline.py to ~/.claude/ and wire it into Claude Code's settings.json.")
+  .option("--yes", "Skip interactive confirmations.", false)
+  .option("--uninstall", "Remove the deployed statusline.py and restore the most recent settings.json backup.", false)
+  .action(async (options: Record<string, unknown>) => {
+    await runInstallStatusline({
+      yes: Boolean(options.yes),
+      uninstall: Boolean(options.uninstall),
+    });
   });
 
 program
