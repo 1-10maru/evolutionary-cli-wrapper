@@ -172,6 +172,8 @@ The proxy pipeline that records episodes, scores prompts, and writes per-project
 | `EVO_LOG_DISABLE` | `0` | When `1`, all log emission is a no-op. |
 | `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses the npm-registry update check. |
 | `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when invoking the underlying `claude` binary, used to detect re-entry. |
+| `EVO_FORCE_NORMAL` | unset | When `1` or `true`, forces full (non-lightweight) tracking regardless of cwd heuristics. Takes precedence over `EVO_FORCE_LIGHT`. Useful when running `claude` from an aggregate parent directory where subagents operate on child projects. |
+| `EVO_FORCE_LIGHT` | unset | When `1` or `true`, forces lightweight tracking regardless of cwd heuristics. Overridden by `EVO_FORCE_NORMAL` when both are set. |
 | `EVOPET_ENABLED` | `1` | Read by `install/evopet-install.sh`'s shim only. Set to `0` to skip PATH wiring. |
 | `DISABLE_OPTIONAL_PROJECTS` | `0` | Read by the same shim only. Master kill-switch for `optional-projects.sh`. |
 

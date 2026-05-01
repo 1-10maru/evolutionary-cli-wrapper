@@ -66,6 +66,22 @@ function hasProjectMarkers(cwd: string): boolean {
 }
 
 export function shouldUseLightweightTracking(cwd: string): boolean {
+  const forceNormal = process.env.EVO_FORCE_NORMAL;
+  if (forceNormal === "1" || forceNormal?.toLowerCase() === "true") {
+    proxyModeLog.info("lightweight tracking decision", {
+      lightweight: false,
+      reason: "EVO_FORCE_NORMAL env override",
+    });
+    return false;
+  }
+  const forceLight = process.env.EVO_FORCE_LIGHT;
+  if (forceLight === "1" || forceLight?.toLowerCase() === "true") {
+    proxyModeLog.info("lightweight tracking decision", {
+      lightweight: true,
+      reason: "EVO_FORCE_LIGHT env override",
+    });
+    return true;
+  }
   const resolved = path.resolve(cwd);
   let result: boolean;
   let reason: string;
