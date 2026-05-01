@@ -2,603 +2,182 @@
 
 [![CI](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml/badge.svg)](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml)
 
-EvoPet 🐣 は、`codex` / `claude` のバイブコーディングをちょっとずつ上手くしていく、育成型の CLI ペットです。
+EvoPet is a local statusline companion for [Claude Code](https://claude.com/claude-code) that surfaces short prompt-engineering tips, session mood comments, and a one-line context/rate-limit gauge directly inside the Claude Code statusline. Tips are sourced from a curated list plus an auto-synced subset of Anthropic's public Claude Code docs. The tool runs entirely locally — it does not consume Claude API tokens, send telemetry, or upload session content.
 
-LLM への頼み方を、あとから反省するだけじゃなく、その場で育てていくためのローカルコーチです 🎮
+There are two distinct ways to use this repository:
 
-「その一言を足すと、次の往復がかなり短くなる」  
-「今回は頼み方がハマっていて、かなり気持ちよく進んでいる」  
-そんな手応えを、`codex` / `claude` の作業中に、育つ相棒モンスターが 1 行で返します。
+- **As an npm consumer** — install the package globally and wire only the statusline into Claude Code. This is the supported path for most users.
+- **As a developer** — clone the repo to work on the codebase, run the test suite, or use the in-repo shell-integration / proxy machinery (which is not shipped to npm).
 
-難しいログをあとから読む道具というより、
+Skip ahead to the section that matches your goal.
 
-- 💡 いまの頼み方、どこを足すともっと通りやすいか
-- ⚡ あと一言で、どれくらい往復やトークンが浮きそうか
-- 🎁 いまの切り方がハマっていて、どれくらいおいしい流れか
+---
 
-を、その場で 1 行だけ、かわいく教えてくれる相棒です。
+## For users (install from npm)
 
-現状は Windows の PowerShell で使う `codex` と `claude` を対象にしています。  
-セットアップ後は、ふだん通り `codex` または `claude` と打つだけで Evo が裏で中継し、履歴・スコア・改善提案を残します。
+### What you get
 
-## Installation
+After installing, your Claude Code statusline shows three things:
+
+1. The model name, the cwd, and (when Claude Code provides them) `ctx`, `5h`, and `7d` usage gauges as colored dots with percentages.
+2. An EvoPet mood line that rotates a session-start boost message or a cwd/turn-aware comment.
+3. A short prompt-engineering tip with an optional `❌ before / ✅ after` example pair.
+
+The Python statusline script is invoked by Claude Code on each render (no polling, no background process). It reads the JSON Claude Code passes on stdin, plus an optional `~/.claude/.evo-live.json` file that the in-repo proxy writes when a developer is running through it. When `~/.claude/.evo-live.json` is absent, the statusline self-tracks call counts in `~/.claude/.evo-self.json` and rotates through 125 tips (60 of which are auto-synced from the official Claude Code docs; see [Update behavior](#update-behavior) below).
+
+### Install
 
 ```bash
 npm install -g evolutionary-cli-wrapper
+evo install-statusline
 ```
 
-## Auto-updating Claude Code knowledge
+`evo install-statusline` is interactive by default. It performs exactly two actions:
 
-This package's statusline tips are auto-synced weekly from Anthropic's public docs (`code.claude.com/docs/best-practices` and `docs.claude.com/en/docs/claude-code/slash-commands`). To get the latest tips, run:
+1. Copies `<package>/statusline.py` to `~/.claude/base_statusline.py`.
+2. Sets `statusLine` in `~/.claude/settings.json` to:
+   ```json
+   { "type": "command", "command": "python \"<HOME>/.claude/base_statusline.py\"" }
+   ```
+   Other keys in `settings.json` are preserved. If `settings.json` already exists, a timestamped backup is created at `~/.claude/settings.json.bak.<ISO-timestamp>` before the file is overwritten. If the existing `statusLine.command` is non-evopet, you are prompted before it is replaced.
+
+Flags:
+
+- `--yes` — skip all prompts (use in CI / automated provisioning).
+- `--uninstall` — delete `~/.claude/base_statusline.py` and restore the most recent `settings.json.bak.*`. If no backup exists but the current `statusLine.command` points at `base_statusline.py`, the key is deleted.
+
+After install, restart your Claude Code session to pick up the new statusline.
+
+### Update behavior
+
+The published patch versions of this package roll forward automatically:
+
+- Every Monday at 03:00 UTC, the upstream repository's `Sync Claude Code Docs` workflow regenerates the auto-synced tip blocks inside `statusline.py` from `https://code.claude.com/docs/en/best-practices` and `https://code.claude.com/docs/en/commands`.
+- If anything changed, the workflow opens a PR labeled `auto-merge-ok`. When that PR merges to `main`, `Publish to npm` bumps the patch version and runs `npm publish`.
+
+To pull the latest tips:
 
 ```bash
 npm update -g evolutionary-cli-wrapper
+evo install-statusline --yes   # re-deploy the refreshed statusline.py
 ```
 
-No telemetry, no remote calls at runtime — sync happens server-side via GitHub Actions.
+The deployed `~/.claude/base_statusline.py` is a copy of the file from the package, so you must re-run `install-statusline` after `npm update` for the new tips to take effect.
 
-### Maintainer setup (one-time)
+The statusline itself also performs a lightweight update check: on render, if there is no fresh cache at `<EVO_HOME>/.evo/update-check.json` (default: `~/.evo/update-check.json`), it fires a non-blocking HTTP GET to `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` with a 24-hour stale-while-revalidate cache. When the cached `latest` is newer than the running version, an `⚠ update: <current> → <latest> (npm update -g evolutionary-cli-wrapper)` notice is included in the render. Set `EVO_NO_UPDATE_CHECK=1` to disable.
 
-To enable the auto-sync + auto-publish pipeline on a fork or new repo:
+### Configuration
 
-1. Generate an npm Automation token at `https://www.npmjs.com/settings/<user>/tokens`.
-2. Add it as a repository secret named `NPM_TOKEN` (Settings → Secrets and variables → Actions).
-3. The `auto-merge-ok` label is created automatically by `sync-claude-docs.yml` on first run.
-4. Optional: pair with an external auto-merge handler that squash-merges PRs carrying that label after CI passes.
+Environment variables that affect the npm-installed statusline:
 
-## ✨ できること
+| Variable | Default | Effect |
+|---|---|---|
+| `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses both the registry fetch and the update notice. |
+| `EVO_HOME` | `~` | Override for where the update-check cache lives (`<EVO_HOME>/.evo/update-check.json`). |
 
-- 🤖 `codex` / `claude` のセッションを自動で記録する
-- 📊 手戻りや探索の散らばりを Surrogate Cost として評価する
-- 🌀 `edit loop` / `search loop` を検知する
-- 🧠 過去履歴をもとに、その人の癖に寄せた節約予測を出す
-- 💬 「次に一言足すならこれ」の形で、短く刺さる提案を返す
-- 🏆 良い頼み方が刺さった時に、EXP と称賛でちゃんと気分を上げる
-- 🐾 PC 全体で 1 体の EvoPet が育っていく
-- 🐶 EvoPet は Windows 標準絵文字にある動物から選べる
-- 🧩 TS / JS / Python は関数単位の差分も追う
-- 💾 ローカル学習結果を `.evo` に保存し、他 PC へ持ち運べる
+The remaining environment variables documented in the Developers section (`EVO_LOG_LEVEL`, `EVO_LOG_DIR`, `EVO_LOG_DISABLE`, `EVO_CONFIG`, `EVO_PROXY_ACTIVE`) only have effect when running the `evo` Node CLI itself, which the npm-shipped statusline does not invoke.
 
-## 🎮 ざっくり言うと
+### What gets stored locally
 
-1. ▶️ `codex` または `claude` をいつも通り起動する
-2. ⌨️ ふつうに作業する
-3. 👀 Evo が裏で見て、必要な時だけ口を出す
-4. 🎁 良い頼み方がハマると、ごほうび感つきで返してくる
+The npm package only ships `dist/`, `bin/`, `statusline.py`, `README.md`, and `LICENSE` (see `files` in `package.json`). When you run `evo install-statusline` plus normal Claude Code sessions, the following files appear under your home directory:
 
-`evo stats` や `evo explain` は、あとから見返したい人向けです。  
-普段はまず使わなくても大丈夫です。
+- `~/.claude/base_statusline.py` — the deployed statusline script (a copy of the package's `statusline.py`).
+- `~/.claude/settings.json` — modified in place to add the `statusLine` entry. A `.bak.<timestamp>` sibling is written before each overwrite.
+- `~/.claude/.evo-self.json` — small JSON file the statusline uses to track call counts and last-seen session id when running standalone (no proxy).
+- `~/.evo/update-check.json` — registry update cache (24h TTL). Path overridable via `EVO_HOME`.
 
-## 🐾 EvoPet をえらぶ
+No files are written under your project directories by the npm-installed flow. SQLite databases, `.evo/` per-project state, and shell shims described in `CLAUDE.md` only appear if you run the developer-mode `npm run setup` from a clone of this repo (see below).
 
-EvoPet は、Windows で見やすい動物絵文字を 10 種類用意しています。  
-その日の気分で変えて大丈夫です。
+### Network behavior
 
-```powershell
-evo pet list
-evo pet choose fox
+- No Claude API calls. The statusline does not consume Claude tokens.
+- No telemetry. Nothing is uploaded.
+- One non-blocking HEAD-style fetch to `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` per 24 hours, behind a stale-while-revalidate cache, used only to render the optional update notice. Disable with `EVO_NO_UPDATE_CHECK=1`.
+
+### Uninstall
+
+```bash
+evo install-statusline --uninstall
+npm uninstall -g evolutionary-cli-wrapper
 ```
 
-## 🗣️ EvoPet がどうしゃべるか
+`--uninstall` removes `~/.claude/base_statusline.py` and restores the most recent backup of `~/.claude/settings.json` (or strips the evopet `statusLine` key in place if no backup is present). It does not delete `~/.claude/.evo-self.json` or `~/.evo/update-check.json`; remove those manually if desired.
 
-Evo は常に同じ文を出すのではなく、状況に応じて出し分けます。
+---
 
-- 🎯 具体化が足りない時
-  「関数名か対象ファイルを 1 こ足すと、ぐっと刺さりやすいよ」
-- 🧱 構造が足りない時
-  「箇条書き + 完了条件 の 2 行だけで、かなり通りやすくなるよ」
-- ✅ 成功条件が足りない時
-  「成功条件を 1 行だけ足すと、やり直しを減らしやすいよ」
-- 🧭 探索が広がりすぎた時
-  「次は見るファイルを 1 つに絞ると、迷いにくいよ」
-- 🛟 同じ修正をぐるぐるしてる時
-  「ここ迷路かも。現状 / 期待 / NG 条件 に分けると抜けやすいよ」
-- 🏆 うまくハマっている時
-  「えへへ、いまの頼み方かなりハマってる」
-  「その切り方、かなり EXP おいしいやつ」
-  「今回はほぼボーナスターンかも」
+## For developers (clone and contribute)
 
-さらに、履歴がたまるとこういう出し方に変わります。
+### Clone, build, test
 
-- ⚡ 「次の一手で 18% 前後、軽くできそう」
-- 🧠 「あなたの類似履歴 12 件ベース」
-- 🎁 「うまく刺さると +50 EXP ルート」
-
-つまり、ただの監視ログではなく、エンジニアが  
-「あと一言足すだけで、金も時間も浮くのか」  
-「じゃあ試してみようかな」  
-と思えるような攻めの UI を目指しています。
-
-## 🧠 このツールの考え方
-
-このツールは、トークン API に依存して「何 token 使ったか」だけを見るものではありません。  
-本当に見たいのは、AI にどれだけ文脈を再学習させたか、どれだけやり直しが発生したか、どれだけ探索が散ったかです。
-
-そのため、中心になるのは次のような代理指標です。
-
-- 📄 読んだファイル数
-- 📏 読んだ行数
-- 🔁 同じ場所への再訪回数
-- 🛠️ 変更のやり直し回数
-- ❌ テストや検証の失敗回数
-- 🧭 探索の散らばり具合
-
-CLI 側が usage を表示する場合はそれも保存しますが、Evo の中核は token 非依存で動きます。
-
-## 🚀 セットアップ
-
-```powershell
+```bash
 git clone https://github.com/1-10maru/evolutionary-cli-wrapper.git
 cd evolutionary-cli-wrapper
 npm install
-npm run setup
+npm run build       # tsc → dist/
+npm test            # vitest run tests
 ```
 
-セットアップ後は PowerShell を開き直してください。  
-その後は `codex` または `claude` をいつも通り起動するだけです。
+`npm run setup` (defined in `package.json`) runs `node scripts/setup.mjs`, which performs `npm run build`, `evo init`, `evo setup-shell` (which writes PowerShell / cmd / bash profile hooks under the repo's `bin/` to make `claude` go through the Evo proxy), and copies `statusline.py` to `~/.claude/base_statusline.py`. This script is **not** shipped to npm; it only runs from a clone.
 
-最短手順だけ見たい場合は [START_HERE_JA.md](./START_HERE_JA.md) を読んでください。
+The proxy pipeline that records episodes, scores prompts, and writes per-project `.evo/` SQLite data is exercised through `claude` (intercepted by the shim) once `setup-shell` has run. Run `evo undo-shell` or `evo uninstall` to revert.
 
-## 🧷 バージョン管理
+### Repo layout
 
-- 🏷️ バージョンは Semantic Versioning で管理します
-- 🔖 タグは `vX.Y.Z`
-- 🌿 大きなメジャーアップデートごとに `release/vX` ブランチを切ります
-- 📘 詳細ルールは [VERSIONING.md](./VERSIONING.md)
-- 📝 変更履歴は [CHANGELOG.md](./CHANGELOG.md)
+- `src/index.ts` — `evo` CLI entrypoint (commander).
+- `src/cli/installStatusline.ts` — `evo install-statusline` (the npm-consumer path).
+- `src/cli/statusline.ts` + `src/cli/statusline-data*.ts` — `evo statusline` Node renderer (parallel implementation of the Python `statusline.py`, used in tests).
+- `src/proxyRuntime.ts` + `src/proxy/` — proxy session driver and live-state writer (`~/.claude/.evo-live.json`).
+- `src/runtime.ts`, `src/scoring.ts`, `src/signalDetector.ts` — episode lifecycle, surrogate cost scoring, signal detection.
+- `src/db.ts` — better-sqlite3 persistence (`<cwd>/.evo/evolutionary.db`).
+- `src/ast.ts` — tree-sitter function-level diffs (TypeScript / JavaScript / Python).
+- `src/shellIntegration.ts` — shim and profile management for PowerShell, cmd, and bash.
+- `src/logger.ts` — file logger writing to `<EVO_LOG_DIR or cwd>/.evo/logs/session-<UTC-date>.log`, 30-day retention.
+- `src/updateCheck.ts` — npm-registry update check with 24h cache.
+- `statusline.py` — the Python statusline shipped to npm consumers and deployed by `evo install-statusline`.
+- `scripts/setup.mjs` — developer convenience script (build + init + setup-shell + statusline copy).
+- `scripts/sync-claude-docs.mjs` — used by the weekly GitHub Actions cron to refresh AUTO-GENERATED tip blocks in `statusline.py`.
+- `install/evopet-install.sh` + `install/evopet-uninstall.sh` — bash-only alternative to `evo install-statusline` for users running from a clone (not in the npm package).
+- `tests/` — vitest suite plus a Python statusline render test.
 
-## 🤝 他の PC で clone して進める時
+### Environment variables (developer mode)
 
-このリポジトリは、他の PC で clone して未実装を確認したり、複数の人や AI エージェントが並列に進めやすい形で運用できるようにしてあります。
+| Variable | Default | Effect |
+|---|---|---|
+| `EVO_HOME` | repo root or `~` | Resolves the global `.evo` directory used by mascot state and the update-check cache. |
+| `EVO_CONFIG` | `<cwd>/.evo/config.json` | Set by the shell shims so the `evo` CLI knows which config to read. |
+| `EVO_LOG_LEVEL` | `INFO` | One of `ERROR` / `WARN` / `INFO` / `DEBUG`. `DEBUG` also mirrors lines to stderr. |
+| `EVO_LOG_DIR` | `<cwd>` | Base directory; logs are written under `<EVO_LOG_DIR>/.evo/logs/session-YYYYMMDD.log`. |
+| `EVO_LOG_DISABLE` | `0` | When `1`, all log emission is a no-op. |
+| `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses the npm-registry update check. |
+| `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when invoking the underlying `claude` binary, used to detect re-entry. |
+| `EVOPET_ENABLED` | `1` | Read by `install/evopet-install.sh`'s shim only. Set to `0` to skip PATH wiring. |
+| `DISABLE_OPTIONAL_PROJECTS` | `0` | Read by the same shim only. Master kill-switch for `optional-projects.sh`. |
 
-- 📌 日々の未実装を回す: GitHub Issues
-- 🗺️ repo 全体の地図を見る: [ROADMAP.md](./ROADMAP.md)
-- 📏 並列開発のルールを見る: [CONTRIBUTING.md](./CONTRIBUTING.md)
-- 🤖 AI の作業手順を見る: [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md)
-- 📥 agent intake の入口を見る: [docs/issue-intake.md](./docs/issue-intake.md)
-- 🧾 仕様判断の履歴を見る: [docs/DECISIONS.md](./docs/DECISIONS.md)
-- 🧭 repo の入口を見る: [docs/PROJECT_MAP.md](./docs/PROJECT_MAP.md)
-- 🔍 レビュー観点を見る: [docs/REVIEW_PLAYBOOK.md](./docs/REVIEW_PLAYBOOK.md)
-- 🛠️ 環境依存の再発防止ノウハウ: [docs/knowledge/README.md](./docs/knowledge/README.md)
-- ✅ PR 時の更新漏れを防ぐ: [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)
+### Auto-sync pipeline
 
-普段の流れはこれです。
+The weekly `Sync Claude Code Docs` workflow (`.github/workflows/sync-claude-docs.yml`, cron `0 3 * * 1`) does the following:
 
-1. 📥 clone
-2. 📦 `npm install`
-3. 🚀 `npm run setup`
-4. 🎯 GitHub Issues から 1 つ選ぶ
-5. 🗺️ `ROADMAP.md` で shared-risk area を確認する
-6. 🌿 `codex/<topic>` ブランチを切って進める
+1. Runs `node scripts/sync-claude-docs.mjs`, which fetches the public Claude Code best-practices and commands pages, extracts bullet points, and rewrites the `# AUTO-GENERATED:START ... # AUTO-GENERATED:END` blocks in `statusline.py`.
+2. If `statusline.py` changed, opens a PR labeled `auto-merge-ok`. The label is created on the workflow's first run.
+3. An external auto-merge handler (the upstream uses `~/.claude/scripts/pr-handler.sh`) squash-merges PRs carrying that label after CI passes.
+4. On merge to `main`, `.github/workflows/publish-on-merge.yml` triggers, runs `npm version patch` (creating a tag and a `chore: release vX.Y.Z [skip ci]` commit), pushes, and runs `npm publish --access public`.
 
-GitHub Projects を使うなら、列は次を推奨します。
+### Maintainer setup (one-time, on a fork)
 
-- `📥 Backlog`
-- `🟡 Ready`
-- `🔵 Active`
-- `🟣 Review`
-- `✅ Done`
+1. Generate an npm Automation token at `https://www.npmjs.com/settings/<user>/tokens`.
+2. Add it as a repository secret named `NPM_TOKEN` (Settings → Secrets and variables → Actions).
+3. Optionally pair with an auto-merge handler that squash-merges `auto-merge-ok` PRs after CI passes; otherwise merge them manually.
 
-## ▶️ 使い始め
+### Versioning
 
-```powershell
-codex
-```
+Semantic Versioning. Tags are `vX.Y.Z`. Patch bumps are produced by the publish workflow on every doc-sync merge. See [VERSIONING.md](./VERSIONING.md) and [CHANGELOG.md](./CHANGELOG.md).
 
-```powershell
-claude
-```
+### Other developer docs
 
-起動時に次のような表示が出れば、Evo 経由で動いています。
+- [ROADMAP.md](./ROADMAP.md), [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md), [docs/PROJECT_MAP.md](./docs/PROJECT_MAP.md), [docs/REVIEW_PLAYBOOK.md](./docs/REVIEW_PLAYBOOK.md).
 
-```text
-Evo tracking ON | cli=claude | dir=... | mode=auto
-```
+---
 
-親フォルダのように広すぎる場所で起動した場合は、軽量モードになり、末尾に `| light` が付きます。
+## License
 
-```text
-Evo tracking ON | cli=claude | dir=... | mode=auto | light
-```
-
-## 📸 スクリーンショット風の実行例
-
-### 1. セットアップ直後
-
-```text
-PS C:\work\evolutionary-cli-wrapper> npm install
-PS C:\work\evolutionary-cli-wrapper> npm run setup
-
-Setup complete. Open a new PowerShell session, then use codex or claude as usual.
-```
-
-### 2. Claude をいつも通り起動
-
-```text
-PS C:\work\my-app> claude
-Evo tracking ON | cli=claude | dir=C:\work\my-app | mode=auto
-
- ▐▛███▜▌   Claude Code v2.1.92
-▝▜█████▛▘  Opus 4.6 (1M context) · Claude Max
-  ▘▘ ▝▝    C:\work\my-app
-```
-
-### 2.5 statusline（常時表示）
-
-EvoPet は Claude Code 公式の `statusLine.command` 機構を使って、セッション中の各レンダーで常時表示されます。具体的には `~/.claude/settings.json` の `statusLine.command` に `python ~/.claude/base_statusline.py` が登録され、Claude Code が描画タイミングごとに自分でこのコマンドを呼び出します（ポーリングなし）。
-
-**インストール（自動）:**
-
-```bash
-bash install/evopet-install.sh
-```
-
-このスクリプトは以下を冪等に行います。
-
-- `~/.claude/local/optional-projects.sh` に shim を作成（`PATH` に `bin/` を追加、`EVOPET_ENABLED=0` で無効化可）
-- `~/.bash_profile` に shim の source 行を追記（既にあれば skip）
-- `~/.claude/settings.json` の `statusLine.command` を merge（他キーは保持）
-
-**npm 経由でインストールした場合（statusline だけ有効化）:**
-
-```bash
-evo install-statusline           # 対話モード（バックアップを作成して安全に上書き）
-evo install-statusline --yes     # CI / 確認スキップ
-evo install-statusline --uninstall  # 直近のバックアップから復元
-```
-
-**アンインストール:**
-
-```bash
-bash install/evopet-uninstall.sh
-```
-
-**データ更新の仕組み（イベントドリブン）:**
-
-`~/.claude/base_statusline.py` は `~/.evo-live.json` を読みます。このファイルは proxy がターン終了 / シグナル発火 / エピソード終了の各イベント時にだけ書き換えるため、ポーリングはなく、表示と内部状態がずれません。proxy が動いていない時（Desktop App 起動等）も自己追跡フォールバックが動き、16 種類の tip をローテーション表示します。proxy 経由時は sessionGrade、signalDetector（9 種類の問題シグナル + 3 種類の賞賛シグナル）、25 種類の tip が利用可能です。
-
-**proxy 経由時（フルデータ）:**
-```text
-🦊 EvoPet · ✨S 神 · 3回目の会話 · 📝 指示の質: とても良い!
-💡 ファイル名を1つ書くだけで、AIの探索が半分になるよ!
-   ❌ "バリデーションにメールアドレスのチェックを追加して" → ✅ "src/validators.ts にメールアドレスのバリデーションを追加"
-```
-
-**proxy なし時（自己追跡フォールバック）:**
-```text
-🦊 EvoPet · 順調に進んでるよ! · 5回目の呼び出し
-💡 箇条書きで指示すると、AIが見落としにくくなるよ!
-   ❌ "ユーザー登録の機能をつくって、メール確認もして..." → ✅ "ユーザー登録機能を作成:\n- POST /register エンドポイント追加..."
-```
-
-### 3. 親フォルダで起動した時の軽量モード
-
-```text
-PS C:\Users\name\Documents> claude
-Evo tracking ON | cli=claude | dir=C:\Users\name\Documents | mode=auto | light
-```
-
-### 4. セッション後に履歴を見る
-
-```text
-PS C:\work\my-app> evo stats --cwd .
-
-=== Evo Stats ===
-Episodes: 12
-Average Surrogate Cost: 8.4
-Total EXP: 540
-Recent Episodes:
-- #12 claude completed
-- #11 claude completed
-```
-
-### 5. 個別の採点理由を見る
-
-```text
-PS C:\work\my-app> evo explain 12 --cwd .
-
-Episode #12
-Surrogate Cost: 6.8
-Exploration Mode: balanced
-Nice Guidance: yes
-Predictive Nudges:
-- 対象ファイルや関数を少し具体化すると、探索の寄り道を減らしやすくなります。
-```
-
-### 6. 特別イベントだけ少し広がる
-
-```text
-┌─ ⚡ Evo Chance ───────────────────────
-│ 🐲 EvoPet | やる気MAX | Level 3
-│ 次は見るファイルを 1 つに絞ると、かなり収束しやすいよ。
-│ いまの節約見込み 36% | Bond 74%
-└───────────────────────────────────────
-```
-
-### 7. 迷走し始めた時のレスキュー表示
-
-```text
-┌─ 🛟 Evo Rescue ───────────────────────
-│ 🐲 EvoPet | しんぱい | Level 3
-│ ここ、同じ修正点をぐるぐるし始めてるよ。
-│ 次は 現状 / 期待 / NG 条件 に分けると抜けやすいかも。
-└───────────────────────────────────────
-```
-
-### 8. 進化やレベルアップ時だけお祝いが出る
-
-```text
-┌─ 🎉 Level Up ─────────────────────────
-│ 🦕 EvoPet が育ったよ
-│ buddy → wizard | +50 EXP | total 740
-│ 気分: どや顔 | Bond 12%
-└───────────────────────────────────────
-```
-
-## 何が保存されるか
-
-保存先は 2 つあります。
-
-```text
-<対象フォルダ>\.evo\config.json
-<対象フォルダ>\.evo\evolutionary.db
-<EVO_HOME>\.evo\mascot.json
-```
-
-既定では次を保存します。
-
-- プロンプト本文そのものではなく、長さや構造などの特徴量
-- episode ごとの要約
-- turn ごとの要約
-- adapter が拾えたイベント
-- 変更が入ったファイルのスナップショット
-- TS / JS / Python の関数単位差分
-- CLI が表示した usage 行
-- PC 全体で育つ EvoPet の状態
-
-保存しないもの:
-
-- 生の全文プロンプトを常に保存すること
-- リポジトリ全体の全ファイル内容
-- サーバーへの送信
-
-## 記録と育成の単位
-
-Evo では大きく 3 つの単位で管理します。
-
-- 保存先の単位: CLI を起動したフォルダごと
-- episode の単位: `codex` / `claude` を 1 回起動して閉じるまで
-- turn の単位: その session 内のやり取りごと
-- EvoPet の単位: PC 全体で 1 体
-
-例:
-
-- `C:\work\app-a` で `claude` を起動すると、記録は `C:\work\app-a\.evo\...`
-- `C:\work\app-b` で `claude` を起動すると、記録は `C:\work\app-b\.evo\...`
-
-## 軽量モード
-
-ホーム直下や、複数プロジェクトが並ぶ親フォルダで起動すると、通常のフル追跡は重くなります。  
-そのため Evo は自動で軽量モードに切り替えます。
-
-軽量モードでは次のような重い処理を抑えます。
-
-- 起動前後の大規模スナップショット
-- 広すぎる範囲へのファイル監視
-
-これで `Documents` や `PythonScripts` のような親フォルダでも起動待ちが長引きにくくなります。
-
-## よく使うコマンド
-
-普段の利用では、下のコマンドを毎回使う必要はありません。  
-以下は「設定を変えたい」「履歴を見たい」「あとで研究したい」時だけ使うものです。
-
-```powershell
-evo stats --cwd <project>
-```
-
-- 記録済み episode の一覧と現在の傾向を見る
-
-```powershell
-evo explain <episodeId> --cwd <project>
-```
-
-- その episode がどう採点されたかを見る
-
-```powershell
-evo storage --cwd <project>
-```
-
-- `.evo` の保存サイズと保持状態を見る
-
-```powershell
-evo compact --cwd <project>
-```
-
-- 古い raw episode を圧縮し、学習結果を残したまま軽くする
-
-```powershell
-evo shell off
-```
-
-```powershell
-evo shell on
-```
-
-- 一時的に自動中継を切る / 戻す
-
-```powershell
-evo pause
-```
-
-```powershell
-evo resume
-```
-
-- 自動中継を止める / 戻すための短い別名
-
-```powershell
-evo mode auto --cwd <project>
-```
-
-```powershell
-evo mode active --cwd <project>
-```
-
-```powershell
-evo mode quiet --cwd <project>
-```
-
-- 提案表示の出し方を切り替える
-
-## 保持と圧縮
-
-既定の `.evo/config.json` では次のポリシーを使います。
-
-- `keepRecentRawEpisodes = 200`
-- `maxDatabaseBytes = 67108864`
-- `compactOnRun = true`
-- `vacuumOnCompact = true`
-
-保存は 2 層に分かれています。
-
-- Raw layer: recent episodes, events, changed-file snapshots, symbol diffs
-- Knowledge layer: `stats_buckets`, `archived_episodes`
-
-そのため、古い raw episode を削っても、学習済みのローカルルールは残ります。
-
-## 他 PC へ移す
-
-いちばん簡単なのは、フォルダごと持っていく方法です。
-
-1. このリポジトリを clone
-2. 必要なら元 PC の `.evo` をコピー
-3. 新しい PC で `npm install`
-4. `npm run setup`
-
-学習状態だけ軽く持っていくなら次も使えます。
-
-```powershell
-evo export-knowledge --cwd <project> --output evo-knowledge.json
-evo import-knowledge --cwd <project> --input evo-knowledge.json
-```
-
-## 現在の前提と制限
-
-- 自動プロキシは Windows PowerShell 向け
-- 主対象 CLI は `codex` と `claude`
-- TS / JS / Python は symbol-level tracking、その他は file-level fallback
-- CLI 出力からのイベント抽出はヒューリスティックで、完全ではない
-
-## こんな時は
-
-### 起動時に重い
-
-親フォルダで起動している可能性があります。`Evo tracking ON ... | light` なら軽量モードです。  
-普段の開発では、できるだけ対象プロジェクトのルートで起動するのがおすすめです。
-
-### 動いているか分かりづらい
-
-起動直後に `Evo tracking ON | ...` が出ていれば、その session は Evo 経由です。
-
-### README や日本語表示が文字化けする
-
-README 自体は UTF-8 で保存しています。  
-PowerShell の既定表示で文字化けして見えても、GitHub 上の表示や UTF-8 前提のエディタでは正常です。
-
-### 一時的に素の CLI を使いたい
-
-```powershell
-evo shell off
-```
-
-戻す時:
-
-```powershell
-evo shell on
-```
-
-短い名前ならこちらでも同じです。
-
-```powershell
-evo pause
-evo resume
-```
-
-### もう履歴を消したい
-
-```powershell
-evo forget --cwd <project>
-```
-
-- そのプロジェクトの `.evo` を削除します
-
-### もう Evo 自体を外したい
-
-```powershell
-evo uninstall --cwd <evolutionary-cli-wrapper のフォルダ>
-```
-
-- shell integration を外し、ローカル shims も消します
-- グローバルの EvoPet も含めて消したい時は `--purge-data` を使います
-
-履歴も一緒に消す場合:
-
-```powershell
-evo uninstall --cwd <evolutionary-cli-wrapper のフォルダ> --purge-data
-```
-
-## 🔧 Install / Uninstall
-
-statusLine は手動設定不要です。以下のスクリプトで自動登録・削除できます。両方とも何度実行しても安全（冪等）です。
-
-```bash
-# インストール（または再インストール）
-bash install/evopet-install.sh
-
-# アンインストール
-bash install/evopet-uninstall.sh
-```
-
-`evopet-install.sh` がやること:
-
-- `~/.claude/local/optional-projects.sh` に EvoPet shim を作成（`bin/` を `PATH` 前置）
-- `~/.bash_profile` に shim の `source` 行を追記（既にあれば skip）
-- `~/.claude/settings.json` の `statusLine.command` を merge（他のキーは保持）
-
-`evopet-uninstall.sh` は上記を逆に巻き戻します。statusLine 行も自動的に外れます。
-
-## 🌱 Environment variables
-
-| 変数名 | 既定値 | 役割 |
-|--------|--------|------|
-| `EVOPET_ENABLED` | `1` (install 後) | `0` で EvoPet shim を無効化（PATH 前置を skip） |
-| `DISABLE_OPTIONAL_PROJECTS` | `0` | `1` で `optional-projects.sh` 全体を skip。EvoPet を含む全 optional add-on のマスター kill-switch |
-| `EVO_LOG_LEVEL` | `INFO` | ログ出力レベル。`ERROR` / `WARN` / `INFO` / `DEBUG` |
-| `EVO_LOG_DIR` | `<cwd>/.evo/logs` | ログ保存先ディレクトリ |
-| `EVO_LOG_DISABLE` | `0` | `1` で全ログ出力を no-op 化 |
-| `EVO_HOME` | リポジトリの `~/.evo` | mascot 等のグローバル状態の保存先 |
-
-## 📜 Logging & Diagnostics
-
-Evo は `<対象フォルダ>/.evo/logs/session-YYYYMMDD.log` に構造化ログを書き出します。プロジェクト単位で分かれるので、どのプロジェクトで何が起きたかを後追いできます。
-
-- **レベル**: `ERROR` / `WARN` / `INFO` / `DEBUG`（既定は `INFO`）
-- **ローテーション**: 1 日 1 ファイル、30 日後に自動削除
-- **分岐の可視化**: `EVO_LOG_LEVEL=DEBUG` を設定すると、CLI 検出・shim 解決・エピソードライフサイクル・spawn 等の判断分岐や、抑制された silent error の中身まで見えます
-
-ログを覗く:
-
-```powershell
-evo logs --tail 50            # 直近 50 行
-evo logs --since 30m          # 直近 30 分
-evo logs --since 2h           # 直近 2 時間
-evo logs --since 1d           # 直近 1 日
-```
-
-statusline がおかしい・proxy が無言で死んだ気がする等のときは、まずこのログを見れば原因の大部分を絞り込めます。
-
-## 補足
-
-`npm install` と `npm run setup` 自体は、LLM の消費 token を増やしません。  
-増えるのは `codex` や `claude` を実際に起動して使った時だけです。
+ISC. See [LICENSE](./LICENSE).
