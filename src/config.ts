@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getLogger } from "./logger";
+import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import { EvoConfig } from "./types";
 
 const log = getLogger().child("config");
@@ -79,6 +80,23 @@ export function getDefaultPwshProfilePath(): string {
 }
 
 export function ensureEvoConfig(cwd: string): EvoConfig {
+  // Short-circuit: lightweight tracking mode (e.g., aggregate parent dirs
+  // with many subprojects) must NOT create a .evo/ directory on disk.
+  // Return an in-memory DEFAULT_CONFIG instead. Without this guard, any
+  // proxy invocation from such a directory leaks `.evo/` into the cwd.
+  if (shouldUseLightweightTracking(cwd)) {
+    log.debug("ensureEvoConfig short-circuit (lightweight)", { cwd });
+    return {
+      ...DEFAULT_CONFIG,
+      shellIntegration: {
+        ...DEFAULT_CONFIG.shellIntegration,
+        binDir: getBinDir(cwd),
+        profilePath: getDefaultPowerShellProfilePath(),
+        cmdAutoRunScriptPath: getCmdAutoRunScriptPath(cwd),
+      },
+    };
+  }
+
   const evoDir = getEvoDir(cwd);
   fs.mkdirSync(evoDir, { recursive: true });
   const configPath = getConfigPath(cwd);

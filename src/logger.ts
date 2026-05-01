@@ -88,9 +88,66 @@ function pruneOldLogs(logDir: string): void {
   }
 }
 
+// Lightweight tracking detection. We cannot import `./proxy/sessionMode`
+// directly because sessionMode imports logger -> circular dependency.
+// Instead we re-implement the minimum check here, gated by EVO_LOG_DIR
+// override and EVO_LOG_DISABLE escape. Behaviour mirrors
+// `shouldUseLightweightTracking` but is deliberately conservative: when
+// in doubt, assume lightweight (i.e. do NOT create `.evo/logs/`) to avoid
+// disk artefacts in aggregate parent dirs / home dir.
+function isLightweightCwdForLogger(baseDir: string): boolean {
+  // If user has explicitly set EVO_LOG_DIR, respect it (logger always emits).
+  if (process.env.EVO_LOG_DIR) return false;
+  let resolved: string;
+  try {
+    resolved = path.resolve(baseDir);
+  } catch {
+    return true;
+  }
+  let homedir: string;
+  try {
+    homedir = path.resolve(require("node:os").homedir());
+  } catch {
+    homedir = "";
+  }
+  if (homedir && resolved === homedir) return true;
+  const markers = [
+    ".git",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "turbo.json",
+    "nx.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "Cargo.toml",
+    "go.mod",
+  ];
+  for (const marker of markers) {
+    try {
+      if (fs.existsSync(path.join(resolved, marker))) return false;
+    } catch {
+      // ignore
+    }
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(resolved, { withFileTypes: true });
+  } catch {
+    return true;
+  }
+  const visible = entries.filter((e) => !e.name.startsWith("."));
+  const dirCount = visible.filter((e) => e.isDirectory()).length;
+  const fileCount = visible.filter((e) => e.isFile()).length;
+  if (dirCount >= 8) return true;
+  if (dirCount >= 5 && visible.length >= 15 && fileCount <= 6) return true;
+  return false;
+}
+
 function ensureState(): LoggerState {
   if (state) return state;
-  const disabled = process.env.EVO_LOG_DISABLE === "1";
+  const disabled =
+    process.env.EVO_LOG_DISABLE === "1" || isLightweightCwdForLogger(process.env.EVO_LOG_DIR || process.cwd());
   const baseDir = process.env.EVO_LOG_DIR || process.cwd();
   const logDir = path.join(baseDir, ".evo", "logs");
   const logFile = path.join(logDir, `session-${todayUtcStamp()}.log`);
