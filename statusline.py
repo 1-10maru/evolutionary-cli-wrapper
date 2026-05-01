@@ -459,149 +459,149 @@ _TIPS = [
     },
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30d9\u30b9\u30c8\u30d7\u30e9\u30af\u30c6\u30a3\u30b9 (auto-synced from code.claude.com) \u2500\u2500
     # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=2026-05-01
-    {'headline': 'Claude Code on the web', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Claude Code on desktop', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**Reference files with `@`** instead of describing where code lives. Claude reads the file before responding.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Paste images directly**. Copy/paste or drag and drop images into the prompt.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Give URLs** for documentation and API references. Use `/permissions` to allowlist frequently-used domains.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Pipe in data** by running `cat error.log | claude` to send file contents directly.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**Let Claude fetch what it needs**. Tell Claude to pull context itself using Bash commands, MCP tools, or by reading files.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Use ES modules (import/export) syntax, not CommonJS (require)', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Destructure imports when possible (eg. import { foo } from \'bar\')', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Be sure to typecheck when you\'re done making a series of code changes', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Prefer running single tests, and not the whole test suite, for performance', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Git workflow: @docs/git-instructions.md', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Personal overrides: @~/.claude/my-project-instructions.md', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Home folder (`~/.claude/CLAUDE.md`)**: applies to all Claude sessions', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Project root (`./CLAUDE.md`)**: check into git to share with your team', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Project root (`./CLAUDE.local.md`)**: personal project-specific notes; add this file to your `.gitignore` so it isn’t shared with your team', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Parent directories**: useful for monorepos where both `root/CLAUDE.md` and `root/foo/CLAUDE.md` are pulled in automatically', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Child directories**: Claude pulls in child CLAUDE.md files on demand when working with files in those directories', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Auto mode**: a separate classifier model reviews commands and blocks only what looks risky: scope escalation, unknown infrastructure, or hostile-content-driven actions. Best when you trust the general direction of a task but don’t want to click through every step', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**Permission allowlists**: permit specific tools you know are safe, like `npm run lint` or `git commit`', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Sandboxing**: enable OS-level isolation that restricts filesystem and network access, allowing Claude to work more freely within defined boundaries', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Use kebab-case for URL paths', 'tier': 3, 'before': None, 'after': None},
-    {'headline': 'Use camelCase for JSON properties', 'tier': 3, 'before': None, 'after': None},
-    {'headline': 'Always include pagination for list endpoints', 'tier': 3, 'before': None, 'after': None},
-    {'headline': 'Version APIs in the URL path (/v1/, /v2/)', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Injection vulnerabilities (SQL, XSS, command injection)', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Authentication and authorization flaws', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Secrets or credentials in code', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Insecure data handling', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'How does logging work?', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'How do I make a new API endpoint?', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'What does `async move { ... }` do on line 134 of `foo.rs`?', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'What edge cases does `CustomerOnboardingFlowImpl` handle?', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'Why does this code call `foo()` instead of `bar()` on line 333?', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**`Esc`**: stop Claude mid-action with the `Esc` key. Context is preserved, so you can redirect.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**`Esc + Esc` or `/rewind`**: press `Esc` twice or run `/rewind` to open the rewind menu and restore previous conversation and code state, or summarize from a selected message.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**`"Undo that"`**: have Claude revert its changes.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**`/clear`**: reset context between unrelated tasks. Long sessions with irrelevant context can reduce performance.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Use `/clear` frequently between tasks to reset the context window entirely', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'When auto compaction triggers, Claude summarizes what matters most, including code patterns, file states, and key decisions', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'For more control, run `/compact <instructions>`, like `/compact Focus on the API changes`', 'tier': 2, 'before': None, 'after': None},
-    {'headline': 'To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here**. This condenses messages from that point forward while keeping earlier context intact.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'Customize compaction behavior in CLAUDE.md with instructions like `"When compacting, always preserve the full list of modified files and any test commands"` to ensure critical context survives summarization', 'tier': 1, 'before': None, 'after': None},
-    {'headline': 'For quick questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '[Claude Code desktop app](/docs/en/desktop#work-in-parallel-with-sessions): Manage multiple local sessions visually. Each session gets its own isolated worktree.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '[Claude Code on the web](/docs/en/claude-code-on-the-web): Run on Anthropic’s secure cloud infrastructure in isolated VMs.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '[Agent teams](/docs/en/agent-teams): Automated coordination of multiple sessions with shared tasks, messaging, and a team lead.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '**The kitchen sink session.** You start with one task, then ask Claude something unrelated, then go back to the first task. Context is full of irrelevant information.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**Correcting over and over.** Claude does something wrong, you correct it, it’s still wrong, you correct again. Context is polluted with failed approaches.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**The over-specified CLAUDE.md.** If your CLAUDE.md is too long, Claude ignores half of it because important rules get lost in the noise.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**The trust-then-verify gap.** Claude produces a plausible-looking implementation that doesn’t handle edge cases.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '**The infinite exploration.** You ask Claude to “investigate” something without scoping it. Claude reads hundreds of files, filling the context.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '[How Claude Code works](/docs/en/how-claude-code-works): the agentic loop, tools, and context management', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '[Extend Claude Code](/docs/en/features-overview): skills, hooks, MCP, subagents, and plugins', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '[Common workflows](/docs/en/common-workflows): step-by-step recipes for debugging, testing, PRs, and more', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '[CLAUDE.md](/docs/en/memory): store project conventions and persistent context', 'tier': 1, 'before': None, 'after': None},
+    {'headline': 'Claude Code on the web', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Claude Code on desktop', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Reference files with `@`** instead of describing where code lives. Claude reads the file before responding.', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
+    {'headline': '**Paste images directly**. Copy/paste or drag and drop images into the prompt.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Give URLs** for documentation and API references. Use `/permissions` to allowlist frequently-used domains.', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
+    {'headline': '**Pipe in data** by running `cat error.log | claude` to send file contents directly.', 'tier': 2, 'category': 'recovery', 'before': None, 'after': None},
+    {'headline': '**Let Claude fetch what it needs**. Tell Claude to pull context itself using Bash commands, MCP tools, or by reading files.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': 'Use ES modules (import/export) syntax, not CommonJS (require)', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Destructure imports when possible (eg. import { foo } from \'bar\')', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Be sure to typecheck when you\'re done making a series of code changes', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': 'Prefer running single tests, and not the whole test suite, for performance', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': 'Git workflow: @docs/git-instructions.md', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
+    {'headline': 'Personal overrides: @~/.claude/my-project-instructions.md', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
+    {'headline': '**Home folder (`~/.claude/CLAUDE.md`)**: applies to all Claude sessions', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Project root (`./CLAUDE.md`)**: check into git to share with your team', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '**Project root (`./CLAUDE.local.md`)**: personal project-specific notes; add this file to your `.gitignore` so it isn’t shared with your team', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
+    {'headline': '**Parent directories**: useful for monorepos where both `root/CLAUDE.md` and `root/foo/CLAUDE.md` are pulled in automatically', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Child directories**: Claude pulls in child CLAUDE.md files on demand when working with files in those directories', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Auto mode**: a separate classifier model reviews commands and blocks only what looks risky: scope escalation, unknown infrastructure, or hostile-content-driven actions. Best when you trust the general direction of a task but don’t want to click through every step', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**Permission allowlists**: permit specific tools you know are safe, like `npm run lint` or `git commit`', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
+    {'headline': '**Sandboxing**: enable OS-level isolation that restricts filesystem and network access, allowing Claude to work more freely within defined boundaries', 'tier': 2, 'category': 'permissions', 'before': None, 'after': None},
+    {'headline': 'Use kebab-case for URL paths', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Use camelCase for JSON properties', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Always include pagination for list endpoints', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Version APIs in the URL path (/v1/, /v2/)', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Injection vulnerabilities (SQL, XSS, command injection)', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Authentication and authorization flaws', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Secrets or credentials in code', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Insecure data handling', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'How does logging work?', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'How do I make a new API endpoint?', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'What does `async move { ... }` do on line 134 of `foo.rs`?', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'What edge cases does `CustomerOnboardingFlowImpl` handle?', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': 'Why does this code call `foo()` instead of `bar()` on line 333?', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**`Esc`**: stop Claude mid-action with the `Esc` key. Context is preserved, so you can redirect.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '**`Esc + Esc` or `/rewind`**: press `Esc` twice or run `/rewind` to open the rewind menu and restore previous conversation and code state, or summarize from a selected message.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**`"Undo that"`**: have Claude revert its changes.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**`/clear`**: reset context between unrelated tasks. Long sessions with irrelevant context can reduce performance.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': 'Use `/clear` frequently between tasks to reset the context window entirely', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': 'When auto compaction triggers, Claude summarizes what matters most, including code patterns, file states, and key decisions', 'tier': 2, 'category': 'context', 'before': None, 'after': None},
+    {'headline': 'For more control, run `/compact <instructions>`, like `/compact Focus on the API changes`', 'tier': 2, 'category': 'context', 'before': None, 'after': None},
+    {'headline': 'To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here**. This condenses messages from that point forward while keeping earlier context intact.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': 'Customize compaction behavior in CLAUDE.md with instructions like `"When compacting, always preserve the full list of modified files and any test commands"` to ensure critical context survives summarization', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': 'For quick questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '[Claude Code desktop app](/docs/en/desktop#work-in-parallel-with-sessions): Manage multiple local sessions visually. Each session gets its own isolated worktree.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '[Claude Code on the web](/docs/en/claude-code-on-the-web): Run on Anthropic’s secure cloud infrastructure in isolated VMs.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '[Agent teams](/docs/en/agent-teams): Automated coordination of multiple sessions with shared tasks, messaging, and a team lead.', 'tier': 2, 'category': 'exploration', 'before': None, 'after': None},
+    {'headline': '**The kitchen sink session.** You start with one task, then ask Claude something unrelated, then go back to the first task. Context is full of irrelevant information.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '**Correcting over and over.** Claude does something wrong, you correct it, it’s still wrong, you correct again. Context is polluted with failed approaches.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '**The over-specified CLAUDE.md.** If your CLAUDE.md is too long, Claude ignores half of it because important rules get lost in the noise.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '**The trust-then-verify gap.** Claude produces a plausible-looking implementation that doesn’t handle edge cases.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '**The infinite exploration.** You ask Claude to “investigate” something without scoping it. Claude reads hundreds of files, filling the context.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '[How Claude Code works](/docs/en/how-claude-code-works): the agentic loop, tools, and context management', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '[Extend Claude Code](/docs/en/features-overview): skills, hooks, MCP, subagents, and plugins', 'tier': 1, 'category': 'exploration', 'before': None, 'after': None},
+    {'headline': '[Common workflows](/docs/en/common-workflows): step-by-step recipes for debugging, testing, PRs, and more', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '[CLAUDE.md](/docs/en/memory): store project conventions and persistent context', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
     # AUTO-GENERATED:END
 
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30b9\u30e9\u30c3\u30b7\u30e5\u30b3\u30de\u30f3\u30c9 (auto-synced from docs.claude.com) \u2500\u2500
     # AUTO-GENERATED:START source=https://code.claude.com/docs/en/commands fetched=2026-05-01
-    {'headline': '/add-dir — Add a working directory for file access during the current session.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/agents — Manage agent configurations', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/autofix-pr — Spawn a Claude Code on the web session that watches the current branch’s PR and pushes fixes when CI fails or reviewers leave comments.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/batch — Orchestrate large-scale changes across a codebase in parallel.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/branch — Create a branch of the current conversation at this point.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/btw — Ask a quick side question without adding to the conversation', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/chrome — Configure Claude in Chrome settings', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/claude-api — Load Claude API reference material for your project’s language (Python, TypeScript, Java, Go, Ruby, C#, PHP, or cURL) and Managed Agents reference.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/clear — Start a new conversation with empty context.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/color — Set the prompt bar color for the current session.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/compact — Free up context by summarizing the conversation so far.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/config — Open the Settings interface to adjust theme, model, output style, and other preferences.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/context — Visualize current context usage as a colored grid.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/copy — Copy the last assistant response to clipboard.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/cost — Alias for /usage', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/debug — Enable debug logging for the current session and troubleshoot issues by reading the session debug log.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/desktop — Continue the current session in the Claude Code Desktop app.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/diff — Open an interactive diff viewer showing uncommitted changes and per-turn diffs.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/doctor — Diagnose and verify your Claude Code installation and settings.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/effort — Set the model effort level.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/exit — Exit the CLI.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/export — Export the current conversation as plain text.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/extra-usage — Configure extra usage to keep working when rate limits are hit', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/fast — Toggle fast mode on or off', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/feedback — Submit feedback about Claude Code.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/fewer-permission-prompts — Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/focus — Toggle the focus view, which shows only your last prompt, a one-line tool-call summary with edit diffstats, and the final response.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/heapdump — Write a JavaScript heap snapshot and a memory breakdown to ~/Desktop, or your home directory on Linux without a Desktop folder, for diagnosing high memory usage.', 'tier': 3, 'before': None, 'after': None},
-    {'headline': '/help — Show help and available commands', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/hooks — View hook configurations for tool events', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/ide — Manage IDE integrations and show status', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/init — Initialize project with a CLAUDE.md guide.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/insights — Generate a report analyzing your Claude Code sessions, including project areas, interaction patterns, and friction points', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/install-github-app — Set up the Claude GitHub Actions app for a repository.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/install-slack-app — Install the Claude Slack app.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/keybindings — Open or create your keybindings configuration file', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/login — Sign in to your Anthropic account', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/logout — Sign out from your Anthropic account', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/loop — Run a prompt repeatedly while the session stays open.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/mcp — Manage MCP server connections and OAuth authentication', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/memory — Edit CLAUDE.md memory files, enable or disable auto-memory, and view auto-memory entries', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/mobile — Show QR code to download the Claude mobile app.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/model — Select or change the AI model.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/passes — Share a free week of Claude Code with friends.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/permissions — Manage allow, ask, and deny rules for tool permissions.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/plan — Enter plan mode directly from the prompt.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/plugin — Manage Claude Code plugins', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/powerup — Discover Claude Code features through quick interactive lessons with animated demos', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/pr-comments — Removed in v2.1.91.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/privacy-settings — View and update your privacy settings.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/recap — Generate a one-line summary of the current session on demand.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/release-notes — View the changelog in an interactive version picker.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/reload-plugins — Reload all active plugins to apply pending changes without restarting.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/remote-control — Make this session available for remote control from claude.ai.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/remote-env — Configure the default remote environment for web sessions started with --remote', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/rename — Rename the current session and show the name on the prompt bar.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/resume — Resume a conversation by ID or name, or open the session picker.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/review — Review a pull request locally in your current session.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/rewind — Rewind the conversation and/or code to a previous point, or summarize from a selected message.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/sandbox — Toggle sandbox mode.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/schedule — Create, update, list, or run routines.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/security-review — Analyze pending changes on the current branch for security vulnerabilities.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/setup-bedrock — Configure Amazon Bedrock authentication, region, and model pins through an interactive wizard.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/setup-vertex — Configure Google Vertex AI authentication, project, region, and model pins through an interactive wizard.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/simplify — Review your recently changed files for code reuse, quality, and efficiency issues, then fix them.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/skills — List available skills.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/stats — Alias for /usage.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/status — Open the Settings interface (Status tab) showing version, model, account, and connectivity.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/statusline — Configure Claude Code’s status line.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/stickers — Order Claude Code stickers', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/tasks — List and manage background tasks.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/team-onboarding — Generate a team onboarding guide from your Claude Code usage history.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/teleport — Pull a Claude Code on the web session into this terminal: opens a picker, then fetches the branch and conversation.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/terminal-setup — Configure terminal keybindings for Shift+Enter and other shortcuts.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/theme — Change the color theme.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/tui — Set the terminal UI renderer and relaunch into it with your conversation intact.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/ultraplan — Draft a plan in an ultraplan session, review it in your browser, then execute remotely or send it back to your terminal', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/ultrareview — Run a deep, multi-agent code review in a cloud sandbox with ultrareview.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/upgrade — Open the upgrade page to switch to a higher plan tier', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/usage — Show session cost, plan usage limits, and activity stats.', 'tier': 1, 'before': None, 'after': None},
-    {'headline': '/vim — Removed in v2.1.92.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/voice — Toggle voice dictation, or enable it in a specific mode.', 'tier': 2, 'before': None, 'after': None},
-    {'headline': '/web-setup — Connect your GitHub account to Claude Code on the web using your local gh CLI credentials.', 'tier': 2, 'before': None, 'after': None},
+    {'headline': '/add-dir — Add a working directory for file access during the current session.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/agents — Manage agent configurations', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
+    {'headline': '/autofix-pr — Spawn a Claude Code on the web session that watches the current branch’s PR and pushes fixes when CI fails or reviewers leave comments.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/batch — Orchestrate large-scale changes across a codebase in parallel.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/branch — Create a branch of the current conversation at this point.', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '/btw — Ask a quick side question without adding to the conversation', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/chrome — Configure Claude in Chrome settings', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/claude-api — Load Claude API reference material for your project’s language (Python, TypeScript, Java, Go, Ruby, C#, PHP, or cURL) and Managed Agents reference.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/clear — Start a new conversation with empty context.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '/color — Set the prompt bar color for the current session.', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/compact — Free up context by summarizing the conversation so far.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '/config — Open the Settings interface to adjust theme, model, output style, and other preferences.', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/context — Visualize current context usage as a colored grid.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '/copy — Copy the last assistant response to clipboard.', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/cost — Alias for /usage', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/debug — Enable debug logging for the current session and troubleshoot issues by reading the session debug log.', 'tier': 3, 'category': 'recovery', 'before': None, 'after': None},
+    {'headline': '/desktop — Continue the current session in the Claude Code Desktop app.', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/diff — Open an interactive diff viewer showing uncommitted changes and per-turn diffs.', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '/doctor — Diagnose and verify your Claude Code installation and settings.', 'tier': 3, 'category': 'recovery', 'before': None, 'after': None},
+    {'headline': '/effort — Set the model effort level.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/exit — Exit the CLI.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/export — Export the current conversation as plain text.', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/extra-usage — Configure extra usage to keep working when rate limits are hit', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/fast — Toggle fast mode on or off', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/feedback — Submit feedback about Claude Code.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/fewer-permission-prompts — Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/focus — Toggle the focus view, which shows only your last prompt, a one-line tool-call summary with edit diffstats, and the final response.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/heapdump — Write a JavaScript heap snapshot and a memory breakdown to ~/Desktop, or your home directory on Linux without a Desktop folder, for diagnosing high memory usage.', 'tier': 3, 'category': 'recovery', 'before': None, 'after': None},
+    {'headline': '/help — Show help and available commands', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/hooks — View hook configurations for tool events', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
+    {'headline': '/ide — Manage IDE integrations and show status', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/init — Initialize project with a CLAUDE.md guide.', 'tier': 1, 'category': 'exploration', 'before': None, 'after': None},
+    {'headline': '/insights — Generate a report analyzing your Claude Code sessions, including project areas, interaction patterns, and friction points', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/install-github-app — Set up the Claude GitHub Actions app for a repository.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/install-slack-app — Install the Claude Slack app.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/keybindings — Open or create your keybindings configuration file', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/login — Sign in to your Anthropic account', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/logout — Sign out from your Anthropic account', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/loop — Run a prompt repeatedly while the session stays open.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/mcp — Manage MCP server connections and OAuth authentication', 'tier': 1, 'category': 'exploration', 'before': None, 'after': None},
+    {'headline': '/memory — Edit CLAUDE.md memory files, enable or disable auto-memory, and view auto-memory entries', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
+    {'headline': '/mobile — Show QR code to download the Claude mobile app.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/model — Select or change the AI model.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/passes — Share a free week of Claude Code with friends.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/permissions — Manage allow, ask, and deny rules for tool permissions.', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
+    {'headline': '/plan — Enter plan mode directly from the prompt.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/plugin — Manage Claude Code plugins', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/powerup — Discover Claude Code features through quick interactive lessons with animated demos', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/pr-comments — Removed in v2.1.91.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/privacy-settings — View and update your privacy settings.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/recap — Generate a one-line summary of the current session on demand.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/release-notes — View the changelog in an interactive version picker.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/reload-plugins — Reload all active plugins to apply pending changes without restarting.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/remote-control — Make this session available for remote control from claude.ai.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/remote-env — Configure the default remote environment for web sessions started with --remote', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/rename — Rename the current session and show the name on the prompt bar.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/resume — Resume a conversation by ID or name, or open the session picker.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/review — Review a pull request locally in your current session.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '/rewind — Rewind the conversation and/or code to a previous point, or summarize from a selected message.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/sandbox — Toggle sandbox mode.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/schedule — Create, update, list, or run routines.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/security-review — Analyze pending changes on the current branch for security vulnerabilities.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/setup-bedrock — Configure Amazon Bedrock authentication, region, and model pins through an interactive wizard.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/setup-vertex — Configure Google Vertex AI authentication, project, region, and model pins through an interactive wizard.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/simplify — Review your recently changed files for code reuse, quality, and efficiency issues, then fix them.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/skills — List available skills.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/stats — Alias for /usage.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/status — Open the Settings interface (Status tab) showing version, model, account, and connectivity.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/statusline — Configure Claude Code’s status line.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/stickers — Order Claude Code stickers', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/tasks — List and manage background tasks.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/team-onboarding — Generate a team onboarding guide from your Claude Code usage history.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/teleport — Pull a Claude Code on the web session into this terminal: opens a picker, then fetches the branch and conversation.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/terminal-setup — Configure terminal keybindings for Shift+Enter and other shortcuts.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/theme — Change the color theme.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/tui — Set the terminal UI renderer and relaunch into it with your conversation intact.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/ultraplan — Draft a plan in an ultraplan session, review it in your browser, then execute remotely or send it back to your terminal', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/ultrareview — Run a deep, multi-agent code review in a cloud sandbox with ultrareview.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/upgrade — Open the upgrade page to switch to a higher plan tier', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/usage — Show session cost, plan usage limits, and activity stats.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/vim — Removed in v2.1.92.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/voice — Toggle voice dictation, or enable it in a specific mode.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/web-setup — Connect your GitHub account to Claude Code on the web using your local gh CLI credentials.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     # AUTO-GENERATED:END
 ]
 
@@ -621,6 +621,46 @@ def _build_rotation(tips):
 
 
 _TIPS_ROTATION = _build_rotation(_TIPS)
+
+# v3.1: Signal-to-category mapping. When proxy emits a known signalKind, we
+# filter the tip rotation down to entries with the matching category so the
+# advice the user sees is contextually relevant instead of randomly rotated.
+_SIGNAL_TO_CATEGORY = {
+    'prompt_too_vague': 'specificity',
+    'no_success_criteria': 'verification',
+    'same_file_revisit': 'exploration',
+    'same_function_revisit': 'exploration',
+    'error_spiral': 'recovery',
+    'retry_loop': 'recovery',
+    'scope_creep': 'specificity',
+    'approval_fatigue': 'permissions',
+    'high_tool_ratio': 'exploration',
+}
+
+
+def _band(ctx_pct):
+    """v3.1: 5-band ctx mood selector used in both proxy-active and fallback paths."""
+    if ctx_pct >= 80:
+        return 'critical'
+    if ctx_pct >= 60:
+        return 'busy'
+    if ctx_pct >= 30:
+        return 'working'
+    if ctx_pct >= 10:
+        return 'early'
+    return 'start'
+
+
+def _pick_tip(tips_rotation, calls, signal):
+    """v3.1: filter tips by signal->category when possible; fall back to full
+    rotation when no entries match (legacy hand-written tips have no category)."""
+    target_cat = _SIGNAL_TO_CATEGORY.get(signal) if signal else None
+    if target_cat:
+        filtered = [t for t in tips_rotation if t.get('category') == target_cat]
+        pool = filtered if filtered else tips_rotation
+    else:
+        pool = tips_rotation
+    return pool[calls % len(pool)] if pool else None
 
 # ══════════════════════════════════════════════════════════════
 # Data source resolution: proxy > home fallback > self-tracking
@@ -669,12 +709,18 @@ _self = _load_self()
 _now_s = time.time()
 _curr_ctx = ctx if ctx is not None else 0
 _prev_ctx = _self.get('ctx_pct', 0)
-_session_reset = (_prev_ctx > 30 and _curr_ctx < 5) or _self.get('cwd') != cwd
+# v3.1: dropped the `_prev_ctx > 30 and _curr_ctx < 5` heuristic — it fires on
+# benign auto-compact context drops and was resetting the conversation counter
+# mid-session. Reset now triggers only on cwd change.
+_session_reset = _self.get('cwd') != cwd
 if not _self or _session_reset:
     _self = {'start': _now_s, 'calls': 0, 'tip_idx': _self.get('tip_idx', 0), 'cwd': cwd}
 _self['calls'] = _self.get('calls', 0) + 1
 _self['last'] = _now_s
 _self['ctx_pct'] = _curr_ctx
+# v3.1: signal persistence is updated below after we read _evo (proxy may
+# overwrite it). Last-known signal lets the fallback path keep filtering
+# tips by the most recent category for a few cycles.
 _save_self(_self)
 
 # ── Build evo display ──
@@ -763,6 +809,21 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
     elif _advice:
         _line2 = f"\U0001f4a1 {BOLD}{_EVO_INFO}{_advice}{R}"
 
+    # v3.1: 5-band mood comment now appears in the proxy-active path too,
+    # but only when no advice line is present (avoids info overload). Dim
+    # color keeps it subordinate to the grade / 回目 emphasis.
+    if not _line2:
+        _calls = _self.get('calls', 1)
+        _mood_pool = _COMMENTS[_band(_curr_ctx)]
+        _mood = _mood_pool[_calls % len(_mood_pool)]
+        _line1_bits.append(f"{DIM}{_mood}{R}")
+
+    # v3.1: persist most recent signal so the lightweight fallback can
+    # prefer the same category for a few cycles after the proxy goes idle.
+    if _signal:
+        _self['last_signal'] = _signal
+        _save_self(_self)
+
 else:
     # ═══ No proxy — self-tracked fallback ═══
     _avatar = '\U0001f98a'
@@ -770,17 +831,8 @@ else:
     _calls = _self.get('calls', 1)
     _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
 
-    # Pick comment based on ctx bracket + call count rotation
-    if _curr_ctx >= 80:
-        _pool = _COMMENTS['critical']
-    elif _curr_ctx >= 60:
-        _pool = _COMMENTS['busy']
-    elif _curr_ctx >= 30:
-        _pool = _COMMENTS['working']
-    elif _curr_ctx >= 10:
-        _pool = _COMMENTS['early']
-    else:
-        _pool = _COMMENTS['start']
+    # Pick comment based on 5-band ctx bracket + call count rotation
+    _pool = _COMMENTS[_band(_curr_ctx)]
 
     _comment = _pool[_calls % len(_pool)]
 
@@ -793,8 +845,11 @@ else:
 
     _line1_bits.append(f"{DIM}{_calls}\u56de\u76ee{R}")
 
-    # Tip rotation (tier-weighted: 5:2:1 for tier 1/2/3)
-    _tip = _TIPS_ROTATION[_calls % len(_TIPS_ROTATION)]
+    # v3.1: Tip rotation prefers entries matching the most recently observed
+    # signal category (persisted across cycles). Falls back to the full
+    # tier-weighted rotation when no category match exists.
+    _last_signal = _self.get('last_signal', '')
+    _tip = _pick_tip(_TIPS_ROTATION, _calls, _last_signal)
     _th = _tip['headline']
     _tb = _tip.get('before')
     _ta = _tip.get('after')

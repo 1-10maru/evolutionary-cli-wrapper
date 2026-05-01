@@ -57,6 +57,35 @@ const BP_TIER3_KEYWORDS = [
   'kebab-case', 'camelcase', 'json properties', 'url paths', 'pagination'
 ];
 
+// v3.1: Category tagging — lets statusline.py filter tips by detected signal
+// (e.g., `prompt_too_vague` -> `specificity` tips). Categories mirror the
+// adviceMessage categories used elsewhere in the codebase.
+function inferCategory(headline, kind) {
+  const lower = headline.toLowerCase();
+  if (kind === 'slash-commands') {
+    const m = headline.match(/^(\/[a-z][a-z0-9_-]*)/i);
+    if (m) {
+      const cmd = m[1].toLowerCase();
+      if (['/clear', '/compact', '/context', '/memory'].includes(cmd)) return 'context';
+      if (['/permissions', '/hooks', '/agents'].includes(cmd)) return 'permissions';
+      if (['/debug', '/doctor', '/heapdump'].includes(cmd)) return 'recovery';
+      if (['/review', '/diff', '/branch'].includes(cmd)) return 'verification';
+      if (['/skill', '/init', '/mcp'].includes(cmd)) return 'exploration';
+    }
+    return 'general';
+  }
+  if (kind === 'best-practices') {
+    if (lower.includes('@') || lower.includes('reference file') || lower.includes('specific') || lower.includes('explicit')) return 'specificity';
+    if (lower.includes('verify') || lower.includes(' test') || lower.includes('check') || lower.includes('success criteria')) return 'verification';
+    if (lower.includes('permission') || lower.includes('allowlist') || lower.includes('sandbox')) return 'permissions';
+    if (lower.includes('context') || lower.includes('compact') || lower.includes('memory') || lower.includes('token')) return 'context';
+    if (lower.includes('fix ') || lower.includes('debug') || lower.includes('error')) return 'recovery';
+    if (lower.includes('search') || lower.includes('agent') || lower.includes('subagent') || lower.includes('batch')) return 'exploration';
+    return 'general';
+  }
+  return 'general';
+}
+
 function assignTier(headline, kind) {
   if (kind === 'slash-commands') {
     const m = headline.match(/^(\/[a-z][a-z0-9_-]*)/i);
@@ -325,7 +354,7 @@ function buildBlockBody(indent, entries) {
   if (entries.length === 0) {
     return (
       indent +
-      "{'headline': '(同期失敗: 次回 cron で再試行されます)', 'tier': 2, 'before': None, 'after': None},"
+      "{'headline': '(同期失敗: 次回 cron で再試行されます)', 'tier': 2, 'category': 'general', 'before': None, 'after': None},"
     );
   }
   return entries
@@ -336,7 +365,9 @@ function buildBlockBody(indent, entries) {
         pyEscape(e.headline) +
         "', 'tier': " +
         e.tier +
-        ", 'before': None, 'after': None},"
+        ", 'category': '" +
+        pyEscape(e.category || 'general') +
+        "', 'before': None, 'after': None},"
     )
     .join('\n');
 }
@@ -428,6 +459,7 @@ async function main() {
       entries = rawHeadlines.map((h) => ({
         headline: h,
         tier: assignTier(h, src.kind),
+        category: inferCategory(h, src.kind),
       }));
     } catch (e) {
       failCount += 1;
