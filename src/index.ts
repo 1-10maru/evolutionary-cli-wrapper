@@ -15,6 +15,7 @@ import { runLogsCommand } from "./cli/logs";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
 import { runInstallStatusline } from "./cli/installStatusline";
+import { maybeRunFirstRunPrompt } from "./firstRunPrompt";
 import {
   getShellStatus,
   resolveOriginalCommand,
@@ -86,6 +87,17 @@ program
   .name("evo")
   .description("Evolutionary CLI Wrapper")
   .version("0.1.0");
+
+// First-run statusline prompt: fires once before any subcommand action.
+// Internally bails out for install-statusline / --version / non-TTY / sentinel
+// already present / settings.json already configured / EVO_NO_INSTALL_PROMPT=1.
+program.hook("preAction", async (_thisCommand, actionCommand) => {
+  try {
+    await maybeRunFirstRunPrompt(actionCommand.name());
+  } catch {
+    // never let the first-run prompt block the real subcommand
+  }
+});
 
 program
   .command("init")
