@@ -217,7 +217,17 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     });
   };
 
+  // v3.3.0: heartbeat ticker re-flushes live-state.json every 10 s regardless
+  // of JSONL activity. Without this, long tool executions or idle pauses let
+  // the file's `updatedAt` go stale, causing statusline.py to fall through to
+  // the dim/fallback path mid-session. Set EVO_DISABLE_HEARTBEAT=1 to disable.
+  let heartbeatHandle: NodeJS.Timeout | null = null;
+
   const teardownLiveTracking = (): void => {
+    if (heartbeatHandle) {
+      clearInterval(heartbeatHandle);
+      heartbeatHandle = null;
+    }
     if (jsonlWatcherHandle) {
       try {
         jsonlWatcherHandle.close();
@@ -251,6 +261,16 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     });
     // Write initial state immediately
     writeLiveState();
+
+    // v3.3.0: 10 s heartbeat keeps live-state.json fresh during long tool
+    // executions. .unref() prevents the timer from holding the event loop
+    // open after the wrapped CLI exits.
+    if (process.env.EVO_DISABLE_HEARTBEAT !== "1") {
+      heartbeatHandle = setInterval(() => {
+        writeLiveState();
+      }, 10_000);
+      heartbeatHandle.unref?.();
+    }
   }
 
   // Graceful shutdown: ensure live-state cleanup on SIGINT/SIGTERM/SIGHUP and

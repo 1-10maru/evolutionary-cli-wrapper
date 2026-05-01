@@ -669,10 +669,12 @@ _evo = None
 _evo_source = None
 _now_ms = time.time() * 1000
 
-# Staleness window: 60s. Fresh data renders normally; stale-but-recent (<=60s)
-# renders in dim/gray with a marker so the user still sees last-known state
-# instead of EvoPet silently disappearing.
-_FRESH_WINDOW_MS = 60000
+# Staleness window: 5 minutes (v3.3.0). Proxy now heartbeats every 10s so this
+# is mainly belt-and-suspenders for very long tool calls (the proxy could be
+# blocked on subprocess I/O even with heartbeat). Fresh data renders normally;
+# stale-but-recent (<=5min) renders in dim/gray with the full layout preserved
+# so the user still sees last-known state instead of EvoPet collapsing.
+_FRESH_WINDOW_MS = 300000  # 5 minutes
 for _try_path in [
     os.path.join(cwd, '.evo', 'live-state.json'),
     os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'),
@@ -746,41 +748,49 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
     _after = _evo.get('afterExample', '')
 
     _gc = _grade_color(_grade)
-    if _is_stale:
-        # Stale fallback: render last-known state in dim/gray with a marker so
-        # the user knows it's lagging, instead of EvoPet vanishing entirely.
-        _line1_bits = [f"{DIM}{_avatar} {_nick} (待機中){R}"]
-    else:
-        _line1_bits = [f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}"]
+
+    # v3.3.0: stale path now preserves the FULL layout (grade / 回目 / 指示の質
+    # / 育成度 / mood / line2) and only dims the colors via a DIM SGR wrapper.
+    # Previously the stale branch collapsed line1 to avatar-only, which made
+    # the user feel "EvoPet disappeared during long tool execution".
+    def _dim_if_stale(s: str) -> str:
+        return f"{DIM}{s}{R}" if _is_stale else s
+
+    _line1_bits = [_dim_if_stale(f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}")]
 
     if _grade:
-        _line1_bits.append(f"{_gc}{BOLD}{_grade_label(_grade)}{R}")
+        _line1_bits.append(_dim_if_stale(f"{_gc}{BOLD}{_grade_label(_grade)}{R}"))
     # Counter source: userMessages (real human-sent count) when proxy provides the field,
     # else fall back to turns (legacy total-events count) for old proxy builds.
     _conv_count = _user_msgs if 'userMessages' in _evo else _turns
     if _conv_count > 0:
-        _line1_bits.append(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}")
+        _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}"))
     if _ps > 0:
         if _ps >= 80:
-            _line1_bits.append(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}")
+            _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}"))
         elif _ps >= 60:
-            _line1_bits.append(f"\U0001f4dd {_EVO_INFO}{BOLD}\u6307\u793a\u306e\u8cea: \u826f\u597d{R}")
+            _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_INFO}{BOLD}\u6307\u793a\u306e\u8cea: \u826f\u597d{R}"))
         elif _ps >= 40:
-            _line1_bits.append(f"\U0001f4dd {_EVO_WARN}{BOLD}\u6307\u793a\u306e\u8cea: \u3082\u3046\u5c11\u3057\u5177\u4f53\u7684\u306b{R}")
+            _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_WARN}{BOLD}\u6307\u793a\u306e\u8cea: \u3082\u3046\u5c11\u3057\u5177\u4f53\u7684\u306b{R}"))
         else:
-            _line1_bits.append(f"\U0001f4dd {_EVO_RED}{BOLD}\u6307\u793a\u306e\u8cea: \u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}")
+            _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_RED}{BOLD}\u6307\u793a\u306e\u8cea: \u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}"))
     if _combo >= 3:
         _cc = _EVO_GOLD if _combo >= 10 else _EVO_ACCENT if _combo >= 5 else _EVO_GREEN
-        _line1_bits.append(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}")
+        _line1_bits.append(_dim_if_stale(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}"))
     # \u80b2\u6210\u5ea6: prefer Ideal State Gauge (quality-based) when available; -1 = no data yet.
     # Falls back to legacy stage-EXP bond only when ISG hasn't been emitted yet.
     if _isg >= 0:
-        _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_isg}%{R}")
+        _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_isg}%{R}"))
     elif _isg == -1:
         # No ISG data yet \u2014 render "-" per design (instead of fake 100).
         _line1_bits.append(f"{DIM}\u80b2\u6210\u5ea6 -{R}")
     elif _bond < 100:
-        _line1_bits.append(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_bond}%{R}")
+        _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_bond}%{R}"))
+
+    # v3.3.0: append "(\u5f85\u6a5f\u4e2d)" suffix as the LAST chip on line 1 when stale,
+    # so the user sees "lagging" indicator without losing any of the data.
+    if _is_stale:
+        _line1_bits.append(f"{DIM}(\u5f85\u6a5f\u4e2d){R}")
 
     if _signal and _signal in ('prompt_too_vague', 'same_file_revisit', 'same_function_revisit',
                                 'scope_creep', 'no_success_criteria', 'approval_fatigue',
@@ -863,6 +873,12 @@ else:
 if _line1_bits:
     parts.append('\n' + SEP.join(_line1_bits))
 if _line2:
-    parts.append('\n' + _line2)
+    # v3.3.0: dim line2 too when proxy is stale, so the entire EvoPet block
+    # consistently looks subdued rather than mixing fresh-bright advice with
+    # dim-stale stats.
+    if _evo_source == 'proxy_stale':
+        parts.append('\n' + DIM + _line2 + R)
+    else:
+        parts.append('\n' + _line2)
 
 print(SEP.join(parts), end='')

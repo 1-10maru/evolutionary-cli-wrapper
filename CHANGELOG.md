@@ -2,6 +2,17 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.3.0 (2026-05-02)
+
+### Fixed
+- EvoPet statusline lines no longer disappear during long tool executions:
+  - Proxy now heartbeats `live-state.json` every 10 seconds (idle or active) so the file's `updatedAt` doesn't go stale during multi-minute tool calls.
+  - Statusline freshness window extended from 60 seconds to 5 minutes.
+  - Stale path preserves the full layout (grade / 回目 / 指示の質 / 育成度) and only dims the colors, so the user always sees the full EvoPet state instead of a collapsed avatar-only line.
+
+### Added
+- `EVO_DISABLE_HEARTBEAT=1` environment variable to disable proxy heartbeat (escape hatch for diagnostics).
+
 ## v3.2.0 (2026-05-02)
 
 ### Fixed
