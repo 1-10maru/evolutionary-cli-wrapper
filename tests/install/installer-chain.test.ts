@@ -74,16 +74,21 @@ afterEach(() => {
 });
 
 describe("evopet-install.sh", () => {
-  it("creates optional-projects.sh shim with EVO_BIN PATH-prepend and EVOPET_ENABLED guard", () => {
+  it("creates optional-projects.sh shim with dynamic resolver, PATH-prepend, and EVOPET_ENABLED guard", () => {
     const home = makeTempHome();
     runInstaller(home);
     const shimPath = path.join(home, ".claude", "local", "optional-projects.sh");
     expect(fs.existsSync(shimPath)).toBe(true);
     const content = fs.readFileSync(shimPath, "utf8");
-    // EVO_BIN must point to the repo's bin/ — not an unsubstituted placeholder.
+    // Placeholder must never leak into the generated shim.
     expect(content).not.toContain("<EVO_ROOT_PLACEHOLDER>");
-    expect(content).toMatch(/EVO_BIN=.*\/bin/);
-    expect(content).toContain('export PATH="$EVO_BIN:$PATH"');
+    // Dynamic resolver: no hardcoded absolute path; resolves evo location at
+    // shell-init time so the same shim works across PCs and npm-only installs.
+    expect(content).toMatch(/_evo_candidate/);
+    // PATH must be prepended with the resolved candidate (not a static EVO_BIN).
+    expect(content).toContain('export PATH="$_evo_candidate:$PATH"');
+    // Resolver must short-circuit when evo is already on PATH.
+    expect(content).toMatch(/command -v evo/);
     // Master kill-switch and EvoPet-specific guard both present.
     expect(content).toContain("DISABLE_OPTIONAL_PROJECTS");
     expect(content).toMatch(/EVOPET_ENABLED/);
