@@ -25,6 +25,7 @@ import {
   gradeLabel,
   pickMoodPool,
 } from "./statusline-data";
+import { getUpdateNotice } from "../updateCheck";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -402,6 +403,18 @@ export async function runStatuslineCommand(): Promise<void> {
   if (line2) {
     out.push(line2);
   }
+
+  // Append (last line) an update-available notice when npm has a newer
+  // version. Stale-while-revalidate via updateCheck — never blocks.
+  try {
+    const notice = getUpdateNotice();
+    if (notice) {
+      out.push(`${DIM}${notice}${R}`);
+    }
+  } catch {
+    // updateCheck must never break statusline rendering.
+  }
+
   if (out.length > 0) {
     process.stdout.write(out.join("\n"));
   }
