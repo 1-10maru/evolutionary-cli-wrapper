@@ -52,3 +52,35 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          # Try to extract that version's section from CHANGELOG.md
+          NOTES=$(awk "/^## v${VERSION}/{flag=1; print; next} /^## v[0-9]/{flag=0} flag" CHANGELOG.md || true)
+          if [ -z "${NOTES}" ]; then
+            # Fallback: previous minor's notes (auto-bump case)
+            PREV_MINOR=$(echo "${VERSION}" | awk -F. '{print $1"."$2".0"}')
+            NOTES=$(awk "/^## v${PREV_MINOR}/{flag=1; print; next} /^## v[0-9]/{flag=0} flag" CHANGELOG.md || true)
+            if [ -n "${NOTES}" ]; then
+              NOTES="${NOTES}
+
+(Note: v${VERSION} is an auto-patch bump from v${PREV_MINOR} by publish-on-merge.)"
+            fi
+          fi
+          if [ -z "${NOTES}" ]; then
+            NOTES="Release v${VERSION}. See CHANGELOG.md for details."
+          fi
+          # Create release if not already exists
+          if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists, skipping."
+          else
+            gh release create "v${VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "v${VERSION}" \
+              --notes "${NOTES}" \
+              --latest
+            echo "Created GitHub Release v${VERSION}"
+          fi
