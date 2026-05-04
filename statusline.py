@@ -458,7 +458,7 @@ _TIPS = [
         'after': '/batch "React\u304b\u3089Vue\u306b\u79fb\u884c" \u3067\u5bfe\u8c61\u30d5\u30a1\u30a4\u30eb\u3092\u4e26\u5217\u5909\u63db',
     },
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30d9\u30b9\u30c8\u30d7\u30e9\u30af\u30c6\u30a3\u30b9 (auto-synced from code.claude.com) \u2500\u2500
-    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=2026-05-01
+    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=2026-05-04
     {'headline': 'Claude Code on the web', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': 'Claude Code on desktop', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '**Reference files with `@`** instead of describing where code lives. Claude reads the file before responding.', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
@@ -503,9 +503,10 @@ _TIPS = [
     {'headline': 'To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here**. This condenses messages from that point forward while keeping earlier context intact.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
     {'headline': 'Customize compaction behavior in CLAUDE.md with instructions like `"When compacting, always preserve the full list of modified files and any test commands"` to ensure critical context survives summarization', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
     {'headline': 'For quick questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
-    {'headline': '[Claude Code desktop app](/docs/en/desktop#work-in-parallel-with-sessions): Manage multiple local sessions visually. Each session gets its own isolated worktree.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
-    {'headline': '[Claude Code on the web](/docs/en/claude-code-on-the-web): Run on Anthropic’s secure cloud infrastructure in isolated VMs.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
-    {'headline': '[Agent teams](/docs/en/agent-teams): Automated coordination of multiple sessions with shared tasks, messaging, and a team lead.', 'tier': 2, 'category': 'exploration', 'before': None, 'after': None},
+    {'headline': '[Worktrees](/docs/en/worktrees): run separate CLI sessions in isolated git checkouts so edits don’t collide', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': '[Desktop app](/docs/en/desktop#work-in-parallel-with-sessions): manage multiple local sessions visually, each in its own worktree', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '[Claude Code on the web](/docs/en/claude-code-on-the-web): run sessions on Anthropic-managed cloud infrastructure in isolated VMs', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '[Agent teams](/docs/en/agent-teams): automated coordination of multiple sessions with shared tasks, messaging, and a team lead', 'tier': 2, 'category': 'exploration', 'before': None, 'after': None},
     {'headline': '**The kitchen sink session.** You start with one task, then ask Claude something unrelated, then go back to the first task. Context is full of irrelevant information.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
     {'headline': '**Correcting over and over.** Claude does something wrong, you correct it, it’s still wrong, you correct again. Context is polluted with failed approaches.', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
     {'headline': '**The over-specified CLAUDE.md.** If your CLAUDE.md is too long, Claude ignores half of it because important rules get lost in the noise.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
@@ -518,7 +519,7 @@ _TIPS = [
     # AUTO-GENERATED:END
 
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30b9\u30e9\u30c3\u30b7\u30e5\u30b3\u30de\u30f3\u30c9 (auto-synced from docs.claude.com) \u2500\u2500
-    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/commands fetched=2026-05-01
+    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/commands fetched=2026-05-04
     {'headline': '/add-dir — Add a working directory for file access during the current session.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/agents — Manage agent configurations', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
     {'headline': '/autofix-pr — Spawn a Claude Code on the web session that watches the current branch’s PR and pushes fixes when CI fails or reviewers leave comments.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
