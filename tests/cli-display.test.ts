@@ -74,10 +74,10 @@ afterEach(() => {
 });
 
 describe("cli/display", () => {
-  it("defaults to minimum when the mode file is absent", async () => {
+  it("defaults to expansion when the mode file is absent", async () => {
     const dir = makeTempDir();
     process.env.EVO_DISPLAY_MODE_FILE = path.join(dir, "missing-file");
-    expect(readCurrentMode()).toBe("minimum");
+    expect(readCurrentMode()).toBe("expansion");
 
     const io = captureStdio();
     try {
@@ -85,7 +85,7 @@ describe("cli/display", () => {
     } finally {
       io.restore();
     }
-    expect(io.stdout).toContain("EvoPet display: minimum");
+    expect(io.stdout).toContain("EvoPet display: expansion");
     expect(io.stdout).toContain("Usage: evo display");
     expect(process.exitCode).not.toBe(1);
   });
@@ -126,19 +126,7 @@ describe("cli/display", () => {
     const file = path.join(dir, ".evo-display-mode");
     process.env.EVO_DISPLAY_MODE_FILE = file;
 
-    // No file yet → defaults to minimum, so first toggle should produce expansion.
-    {
-      const io = captureStdio();
-      try {
-        await runDisplayCommand("toggle");
-      } finally {
-        io.restore();
-      }
-      expect(io.stdout).toContain("EvoPet display: expansion");
-    }
-    expect(readCurrentMode()).toBe("expansion");
-
-    // Second toggle → back to minimum.
+    // No file yet → defaults to expansion, so first toggle should produce minimum.
     {
       const io = captureStdio();
       try {
@@ -149,6 +137,18 @@ describe("cli/display", () => {
       expect(io.stdout).toContain("EvoPet display: minimum");
     }
     expect(readCurrentMode()).toBe("minimum");
+
+    // Second toggle → back to expansion.
+    {
+      const io = captureStdio();
+      try {
+        await runDisplayCommand("toggle");
+      } finally {
+        io.restore();
+      }
+      expect(io.stdout).toContain("EvoPet display: expansion");
+    }
+    expect(readCurrentMode()).toBe("expansion");
   });
 
   it("rejects an invalid mode arg with a non-zero exit code", async () => {

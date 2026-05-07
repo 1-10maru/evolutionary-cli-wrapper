@@ -4,8 +4,8 @@ import * as path from "node:path";
 
 /**
  * Persisted EvoPet statusline display modes.
- * - "minimum"   : compact single-line (default)
- * - "expansion" : verbose multi-line with advice/grade/etc.
+ * - "expansion" : verbose multi-line with advice/grade/etc. (default)
+ * - "minimum"   : compact single-line (no output — use `evo display expansion` to re-enable)
  *
  * The mode file lives at ~/.claude/.evo-display-mode (single text token, no
  * trailing newline required). Tests can override the location via the
@@ -14,7 +14,7 @@ import * as path from "node:path";
 export type DisplayMode = "minimum" | "expansion";
 
 const VALID_MODES: DisplayMode[] = ["minimum", "expansion"];
-const DEFAULT_MODE: DisplayMode = "minimum";
+const DEFAULT_MODE: DisplayMode = "expansion";
 
 /** Resolve the mode file path, honoring EVO_DISPLAY_MODE_FILE for test isolation. */
 export function getDisplayModeFile(): string {
