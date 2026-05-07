@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { getDisplayModeFile } from "./display";
 
 export interface InstallStatuslineOptions {
   yes?: boolean;
@@ -190,6 +191,20 @@ export async function runInstallStatusline(
   parsed.statusLine = desired;
   fs.writeFileSync(paths.settingsPath, JSON.stringify(parsed, null, 2) + "\n");
   log(`Updated ${paths.settingsPath}`);
+
+  // Initialise display mode to "expansion" for first-time installs so EvoPet
+  // is visible immediately. Existing users who already wrote a mode file keep
+  // their preference unchanged.
+  const modeFile = getDisplayModeFile();
+  if (!fs.existsSync(modeFile)) {
+    try {
+      fs.mkdirSync(path.dirname(modeFile), { recursive: true });
+      fs.writeFileSync(modeFile, "expansion");
+      log(`Set EvoPet display mode: expansion (run "evo display minimum" to compact)`);
+    } catch {
+      // Best-effort; failure here should not abort a successful install.
+    }
+  }
 
   log(``);
   log(`Files written:`);

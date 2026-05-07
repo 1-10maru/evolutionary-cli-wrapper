@@ -2,6 +2,12 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## v3.5.0 (2026-05-07)
+
+### Fixed
+- First-time install UX: `evo statusline` was silently producing no output because the default display mode was `"minimum"` (which intentionally emits nothing). The default is now `"expansion"` so EvoPet is visible immediately after `npm install -g evolutionary-cli-wrapper` without any extra configuration step.
+- `evo install-statusline` now writes `expansion` to the display-mode file when no file exists yet, as a belt-and-suspenders guarantee for the install flow.
+
 ## v3.4.0 (2026-05-02)
 
 ### Fixed
