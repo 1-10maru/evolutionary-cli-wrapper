@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
+  createProxyShims,
   getShellStatus,
   resolveOriginalCommand,
   setupShellIntegration,
@@ -185,5 +186,91 @@ describe("shell integration", () => {
 
     expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
     expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(legacyShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createProxyShims — shim writer path injection guard (PowerShell + cmd.exe)
+// ---------------------------------------------------------------------------
+describe("createProxyShims path injection guard", () => {
+  // PowerShell-context dangerous chars
+  it("throws when the cwd contains a semicolon (PowerShell statement terminator)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test;injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a single-quote (PowerShell quote terminator)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test'injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a backtick (PowerShell escape)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test`injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a dollar sign (PowerShell variable expansion)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test$injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  // cmd.exe-context dangerous chars
+  it("throws when the cwd contains a double-quote (cmd.exe set quote terminator)", () => {
+    const badPath = path.join(os.tmpdir(), 'evo-test"injection');
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a percent sign (cmd.exe variable expansion)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test%PATH%injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains an ampersand (cmd.exe command separator)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test&injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a pipe (cmd.exe pipe)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test|injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a less-than (cmd.exe input redirect)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test<injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a greater-than (cmd.exe output redirect)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test>injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a caret (cmd.exe escape)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test^injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  // Cross-context
+  it("throws when the cwd contains a newline", () => {
+    const badPath = `${os.tmpdir()}/evo-test\ninjection`;
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("does NOT throw for a normal project path (spaces allowed)", () => {
+    // We use a non-existent path so mkdirSync inside createProxyShims would
+    // fail — but the guard must throw BEFORE fs operations. We rely on the
+    // error message content to distinguish a guard rejection from an fs error.
+    const normalPath = path.join(os.tmpdir(), "evo-normal project path");
+    try {
+      createProxyShims(normalPath);
+      // If it didn't throw at all (i.e., the directory happened to get created),
+      // clean up and let the test pass.
+      fs.rmSync(normalPath, { recursive: true, force: true });
+    } catch (err: unknown) {
+      // The guard should NOT have fired; any other error (e.g., ENOENT from fs)
+      // is acceptable since we didn't actually create the directory.
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).not.toContain("shell metacharacters");
+    }
   });
 });

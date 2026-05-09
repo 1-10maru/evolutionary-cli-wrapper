@@ -532,7 +532,44 @@ function restoreCommandWrappers(_cwd: string): void {
   // Kept for backward compat — undoShellIntegration still calls this.
 }
 
+/**
+ * Characters that are forbidden in paths being interpolated into the shim
+ * scripts written by `createProxyShims`.  This is the UNION of the dangerous
+ * sets for both shim contexts:
+ *
+ *   PowerShell (.ps1, single-quoted string context):
+ *     '   — closes single-quoted string
+ *     `   — PowerShell escape
+ *     $   — variable expansion
+ *     ;   — statement terminator
+ *
+ *   cmd.exe (.cmd, double-quoted `set "VAR=..."` context):
+ *     "   — closes the double-quoted set value
+ *     %   — variable expansion (e.g. %PATH%)
+ *     &   — command separator
+ *     |   — pipe
+ *     <   — input redirect
+ *     >   — output redirect
+ *     ^   — escape character
+ *
+ *   Always:
+ *     \n \r — newlines, allow arbitrary command injection in either context
+ *
+ * Refusing on the union means we will reject paths that might be unsafe in
+ * either generated shim, regardless of which one is being written at the
+ * moment.
+ */
+const SHIM_PATH_FORBIDDEN = /['"`$;%&|<>^\n\r]/;
+
 export function createProxyShims(cwd: string): string[] {
+  if (SHIM_PATH_FORBIDDEN.test(cwd)) {
+    throw new Error(
+      `Cannot install shim into a path containing shell metacharacters ` +
+        `(single-quote, double-quote, backtick, $, ;, %, &, |, <, >, ^, or newline): ` +
+        `${JSON.stringify(cwd)}. ` +
+        `Move the project to a path without these characters and re-run 'evo install-statusline'.`,
+    );
+  }
   const binDir = getBinDir(cwd);
   fs.mkdirSync(binDir, { recursive: true });
   const configPath = path.join(cwd, ".evo", "config.json");
