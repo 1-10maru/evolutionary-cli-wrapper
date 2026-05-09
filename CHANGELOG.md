@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+## v3.5.1 (2026-05-09)
+
+### Fixed
+- Tips and advice text in the statusline are no longer truncated with `...`. Previously, `before` examples were cut at 30 chars, `after` examples at 55 chars, and detail/advice text at 70-80 chars, which made path-bearing tips unreadable (e.g. `src/Login.tsx のフォーム送信で、空パスワードでもsubm...`). Long tips now render in full so the user can actually read what is being suggested.
+- `formatBeforeAfter` (used by `evo issue` output) likewise no longer applies a 30/60-char truncation.
+
+## v3.5.0 (2026-05-07)
+
+### Fixed
+- First-time install UX: `evo statusline` was silently producing no output because the default display mode was `"minimum"` (which intentionally emits nothing). The default is now `"expansion"` so EvoPet is visible immediately after `npm install -g evolutionary-cli-wrapper` without any extra configuration step.
+- `evo install-statusline` now writes `expansion` to the display-mode file when no file exists yet, as a belt-and-suspenders guarantee for the install flow.
+
 ## v3.4.4 (2026-05-09)
 
 ### Security
@@ -11,12 +23,6 @@
 - Per-arg cmd.exe-aware quoting (`quoteArgForCmd`) applied to args before spawn so that whitespace-containing args (e.g. `"hello world"`) reach the child process as a single token rather than being split by cmd.exe tokenization.
 - Shim writer refuses to install into paths containing characters that are dangerous in either the PowerShell shim context (`'`, backtick, `$`, `;`) or the cmd.exe shim context (`"`, `%`, `&`, `|`, `<`, `>`, `^`), plus newline in either.
 - `.ps1` execution prefers `pwsh` (PowerShell 7) and falls back to `powershell.exe`; adds `-ExecutionPolicy Bypass`. `resolvePowershellBinary` now gracefully falls back to `powershell` if the locate command itself throws.
-
-## v3.5.0 (2026-05-07)
-
-### Fixed
-- First-time install UX: `evo statusline` was silently producing no output because the default display mode was `"minimum"` (which intentionally emits nothing). The default is now `"expansion"` so EvoPet is visible immediately after `npm install -g evolutionary-cli-wrapper` without any extra configuration step.
-- `evo install-statusline` now writes `expansion` to the display-mode file when no file exists yet, as a belt-and-suspenders guarantee for the install flow.
 
 ## v3.4.0 (2026-05-02)
 
