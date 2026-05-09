@@ -190,29 +190,67 @@ describe("shell integration", () => {
 });
 
 // ---------------------------------------------------------------------------
-// createProxyShims — PowerShell path injection guard
+// createProxyShims — shim writer path injection guard (PowerShell + cmd.exe)
 // ---------------------------------------------------------------------------
 describe("createProxyShims path injection guard", () => {
-  it("throws when the cwd contains a semicolon", () => {
+  // PowerShell-context dangerous chars
+  it("throws when the cwd contains a semicolon (PowerShell statement terminator)", () => {
     const badPath = path.join(os.tmpdir(), "evo-test;injection");
     expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
   });
 
-  it("throws when the cwd contains a single-quote", () => {
+  it("throws when the cwd contains a single-quote (PowerShell quote terminator)", () => {
     const badPath = path.join(os.tmpdir(), "evo-test'injection");
     expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
   });
 
-  it("throws when the cwd contains a backtick", () => {
+  it("throws when the cwd contains a backtick (PowerShell escape)", () => {
     const badPath = path.join(os.tmpdir(), "evo-test`injection");
     expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
   });
 
-  it("throws when the cwd contains a dollar sign", () => {
+  it("throws when the cwd contains a dollar sign (PowerShell variable expansion)", () => {
     const badPath = path.join(os.tmpdir(), "evo-test$injection");
     expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
   });
 
+  // cmd.exe-context dangerous chars
+  it("throws when the cwd contains a double-quote (cmd.exe set quote terminator)", () => {
+    const badPath = path.join(os.tmpdir(), 'evo-test"injection');
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a percent sign (cmd.exe variable expansion)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test%PATH%injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains an ampersand (cmd.exe command separator)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test&injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a pipe (cmd.exe pipe)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test|injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a less-than (cmd.exe input redirect)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test<injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a greater-than (cmd.exe output redirect)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test>injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a caret (cmd.exe escape)", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test^injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  // Cross-context
   it("throws when the cwd contains a newline", () => {
     const badPath = `${os.tmpdir()}/evo-test\ninjection`;
     expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");

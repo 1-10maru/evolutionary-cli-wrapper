@@ -5,9 +5,10 @@
 ## Unreleased
 
 ### Security
-- Hardened spawn pipeline. `.cmd`/`.bat` now use array form with `windowsVerbatimArguments: true` instead of shell-string interpolation; paths containing shell metacharacters (`<>|&^"` backtick, newline) are rejected at the boundary.
-- PowerShell shim writer refuses to install into paths containing `'`, backtick, `$`, `;`, or newline.
-- `.ps1` execution prefers `pwsh` (PowerShell 7) and falls back to `powershell.exe`; adds `-ExecutionPolicy Bypass`.
+- Hardened spawn pipeline. `.cmd`/`.bat` now use array form with `windowsVerbatimArguments: true` instead of shell-string interpolation; paths containing shell metacharacters (`<>|&^"` backtick, newline, `%`, tab, NUL byte) are rejected at the boundary. `%` is included to block cmd.exe variable expansion (e.g. `%PATH%`).
+- Per-arg cmd.exe-aware quoting (`quoteArgForCmd`) applied to args before spawn so that whitespace-containing args (e.g. `"hello world"`) reach the child process as a single token rather than being split by cmd.exe tokenization.
+- Shim writer refuses to install into paths containing characters that are dangerous in either the PowerShell shim context (`'`, backtick, `$`, `;`) or the cmd.exe shim context (`"`, `%`, `&`, `|`, `<`, `>`, `^`), plus newline in either.
+- `.ps1` execution prefers `pwsh` (PowerShell 7) and falls back to `powershell.exe`; adds `-ExecutionPolicy Bypass`. `resolvePowershellBinary` now gracefully falls back to `powershell` if the locate command itself throws.
 
 ## v3.5.0 (2026-05-07)
 

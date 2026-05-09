@@ -533,17 +533,40 @@ function restoreCommandWrappers(_cwd: string): void {
 }
 
 /**
- * Characters that are forbidden in paths being interpolated into PowerShell
- * single-quoted strings.  A single quote breaks the quoting; backtick is PS
- * escape; `$` starts variable expansion; `;` terminates a statement; newlines
- * allow arbitrary command injection.
+ * Characters that are forbidden in paths being interpolated into the shim
+ * scripts written by `createProxyShims`.  This is the UNION of the dangerous
+ * sets for both shim contexts:
+ *
+ *   PowerShell (.ps1, single-quoted string context):
+ *     '   — closes single-quoted string
+ *     `   — PowerShell escape
+ *     $   — variable expansion
+ *     ;   — statement terminator
+ *
+ *   cmd.exe (.cmd, double-quoted `set "VAR=..."` context):
+ *     "   — closes the double-quoted set value
+ *     %   — variable expansion (e.g. %PATH%)
+ *     &   — command separator
+ *     |   — pipe
+ *     <   — input redirect
+ *     >   — output redirect
+ *     ^   — escape character
+ *
+ *   Always:
+ *     \n \r — newlines, allow arbitrary command injection in either context
+ *
+ * Refusing on the union means we will reject paths that might be unsafe in
+ * either generated shim, regardless of which one is being written at the
+ * moment.
  */
-const PROFILE_PATH_FORBIDDEN = /['`$;\n\r]/;
+const SHIM_PATH_FORBIDDEN = /['"`$;%&|<>^\n\r]/;
 
 export function createProxyShims(cwd: string): string[] {
-  if (PROFILE_PATH_FORBIDDEN.test(cwd)) {
+  if (SHIM_PATH_FORBIDDEN.test(cwd)) {
     throw new Error(
-      `Cannot install PowerShell shim into a path containing shell metacharacters: ${JSON.stringify(cwd)}. ` +
+      `Cannot install shim into a path containing shell metacharacters ` +
+        `(single-quote, double-quote, backtick, $, ;, %, &, |, <, >, ^, or newline): ` +
+        `${JSON.stringify(cwd)}. ` +
         `Move the project to a path without these characters and re-run 'evo install-statusline'.`,
     );
   }
