@@ -532,7 +532,21 @@ function restoreCommandWrappers(_cwd: string): void {
   // Kept for backward compat — undoShellIntegration still calls this.
 }
 
+/**
+ * Characters that are forbidden in paths being interpolated into PowerShell
+ * single-quoted strings.  A single quote breaks the quoting; backtick is PS
+ * escape; `$` starts variable expansion; `;` terminates a statement; newlines
+ * allow arbitrary command injection.
+ */
+const PROFILE_PATH_FORBIDDEN = /['`$;\n\r]/;
+
 export function createProxyShims(cwd: string): string[] {
+  if (PROFILE_PATH_FORBIDDEN.test(cwd)) {
+    throw new Error(
+      `Cannot install PowerShell shim into a path containing shell metacharacters: ${JSON.stringify(cwd)}. ` +
+        `Move the project to a path without these characters and re-run 'evo install-statusline'.`,
+    );
+  }
   const binDir = getBinDir(cwd);
   fs.mkdirSync(binDir, { recursive: true });
   const configPath = path.join(cwd, ".evo", "config.json");

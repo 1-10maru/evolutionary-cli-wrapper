@@ -2,6 +2,13 @@
 
 このプロジェクトは Semantic Versioning に沿って管理します。
 
+## Unreleased
+
+### Security
+- Hardened spawn pipeline. `.cmd`/`.bat` now use array form with `windowsVerbatimArguments: true` instead of shell-string interpolation; paths containing shell metacharacters (`<>|&^"` backtick, newline) are rejected at the boundary.
+- PowerShell shim writer refuses to install into paths containing `'`, backtick, `$`, `;`, or newline.
+- `.ps1` execution prefers `pwsh` (PowerShell 7) and falls back to `powershell.exe`; adds `-ExecutionPolicy Bypass`.
+
 ## v3.5.0 (2026-05-07)
 
 ### Fixed

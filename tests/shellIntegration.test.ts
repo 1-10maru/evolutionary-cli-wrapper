@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
+  createProxyShims,
   getShellStatus,
   resolveOriginalCommand,
   setupShellIntegration,
@@ -185,5 +186,53 @@ describe("shell integration", () => {
 
     expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
     expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(legacyShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createProxyShims — PowerShell path injection guard
+// ---------------------------------------------------------------------------
+describe("createProxyShims path injection guard", () => {
+  it("throws when the cwd contains a semicolon", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test;injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a single-quote", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test'injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a backtick", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test`injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a dollar sign", () => {
+    const badPath = path.join(os.tmpdir(), "evo-test$injection");
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("throws when the cwd contains a newline", () => {
+    const badPath = `${os.tmpdir()}/evo-test\ninjection`;
+    expect(() => createProxyShims(badPath)).toThrow("shell metacharacters");
+  });
+
+  it("does NOT throw for a normal project path (spaces allowed)", () => {
+    // We use a non-existent path so mkdirSync inside createProxyShims would
+    // fail — but the guard must throw BEFORE fs operations. We rely on the
+    // error message content to distinguish a guard rejection from an fs error.
+    const normalPath = path.join(os.tmpdir(), "evo-normal project path");
+    try {
+      createProxyShims(normalPath);
+      // If it didn't throw at all (i.e., the directory happened to get created),
+      // clean up and let the test pass.
+      fs.rmSync(normalPath, { recursive: true, force: true });
+    } catch (err: unknown) {
+      // The guard should NOT have fired; any other error (e.g., ENOENT from fs)
+      // is acceptable since we didn't actually create the directory.
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).not.toContain("shell metacharacters");
+    }
   });
 });
