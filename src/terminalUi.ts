@@ -58,9 +58,7 @@ export function formatGrade(grade: string): string {
 
 export function formatBeforeAfter(before: string, after: string): string {
   if (!before || !after) return "";
-  const truncBefore = before.length > 30 ? before.slice(0, 27) + "..." : before;
-  const truncAfter = after.length > 60 ? after.slice(0, 57) + "..." : after;
-  return `${colorize(`❌ "${truncBefore}"`, "danger")} → ${colorize(`✅ "${truncAfter}"`, "success")}`;
+  return `${colorize(`❌ "${before}"`, "danger")} → ${colorize(`✅ "${after}"`, "success")}`;
 }
 
 export function formatPanel(input: {

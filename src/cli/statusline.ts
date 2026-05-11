@@ -120,8 +120,8 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function clip(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + "..." : s;
+function clip(s: string, _n: number): string {
+  return s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,13 +331,13 @@ export async function runStatuslineCommand(): Promise<void> {
       } else if (advice) {
         line2 = `⚠️ ${EVO_WARN}${BOLD}${advice}${R}`;
         if (detail) {
-          line2 += `\n   ${BOLD}${detail.slice(0, 70)}${R}`;
+          line2 += `\n   ${BOLD}${detail}${R}`;
         }
       }
     } else if (POS_SET.has(signal)) {
       line2 = `✨ ${EVO_GREEN}${BOLD}${advice}${R}`;
       if (detail) {
-        line2 += `\n   ${BOLD}${detail.slice(0, 70)}${R}`;
+        line2 += `\n   ${BOLD}${detail}${R}`;
       }
     } else if (signal === "tip" && advice) {
       if (before && after) {
@@ -347,7 +347,7 @@ export async function runStatuslineCommand(): Promise<void> {
       } else {
         line2 = `💡 ${EVO_INFO}${BOLD}${advice}${R}`;
         if (detail) {
-          line2 += `\n   ${BOLD}${detail.slice(0, 80)}${R}`;
+          line2 += `\n   ${BOLD}${detail}${R}`;
         }
       }
     } else if (advice) {
