@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## v3.4.4 (2026-05-09)
+
 ### Security
 - Hardened spawn pipeline. `.cmd`/`.bat` now use array form with `windowsVerbatimArguments: true` instead of shell-string interpolation; paths containing shell metacharacters (`<>|&^"` backtick, newline, `%`, tab, NUL byte) are rejected at the boundary. `%` is included to block cmd.exe variable expansion (e.g. `%PATH%`).
 - Per-arg cmd.exe-aware quoting (`quoteArgForCmd`) applied to args before spawn so that whitespace-containing args (e.g. `"hello world"`) reach the child process as a single token rather than being split by cmd.exe tokenization.
