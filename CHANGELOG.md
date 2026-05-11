@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## v3.5.0 (2026-05-12)
+
 ### Added
 - `evo doctor [--json]` command: one-page health report covering versions, env vars, file checks, recent errors, and live-state freshness. Machine-readable JSON output via `--json` is usable by tooling (including Claude reading the project state).
 - `evo logs --bundle [--out <path>]`: bundle the last 7 days of logs + redacted config + doctor output into a single zip for bug reports. Sensitive paths and tokens are masked before bundling.
