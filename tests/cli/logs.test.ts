@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runLogsCommand } from "../../src/cli/logs";
+import { runLogsCommand, redactSecrets } from "../../src/cli/logs";
 
 const tempDirs: string[] = [];
 
@@ -285,5 +285,108 @@ describe("--bundle skips log files older than 7 days", () => {
     const logNames = entries.filter((e) => e.name.startsWith("logs/")).map((e) => e.name);
     expect(logNames.some((n) => n.includes(todayStamp))).toBe(true);
     expect(logNames.some((n) => n.includes(oldStamp))).toBe(false);
+  });
+});
+
+// ── redactSecrets() unit tests ──────────────────────────────────────────────
+// These cover the three redaction patterns directly, separate from the bundle
+// integration tests above. Each pattern has at least one positive case (value
+// is fully masked) and one boundary case where the previous implementation
+// leaked content.
+
+describe("redactSecrets — JSON-quoted values (Gap 1)", () => {
+  it("redacts JSON-style \"KEY\":\"value\"", () => {
+    const input = `{"MY_TOKEN":"secret123","other":"keep"}`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain("secret123");
+    expect(out).toContain('"MY_TOKEN":"[REDACTED]"');
+    // unrelated keys are preserved
+    expect(out).toContain('"other":"keep"');
+  });
+
+  it("redacts JSON-style with whitespace around colon", () => {
+    const input = `"API_KEY" : "abc-123-def"`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain("abc-123-def");
+    expect(out).toMatch(/"API_KEY"\s*:\s*"\[REDACTED\]"/);
+  });
+
+  it("redacts multiple JSON-style secrets in one line", () => {
+    const input = `{"FOO_SECRET":"a","BAR_TOKEN":"b","baz":"keep"}`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain('"a"');
+    expect(out).not.toContain('"b"');
+    expect(out).toContain('"FOO_SECRET":"[REDACTED]"');
+    expect(out).toContain('"BAR_TOKEN":"[REDACTED]"');
+    expect(out).toContain('"baz":"keep"');
+  });
+
+  it("does not redact non-secret JSON keys", () => {
+    const input = `{"name":"johndoe","version":"1.0"}`;
+    const out = redactSecrets(input);
+    expect(out).toBe(input);
+  });
+});
+
+describe("redactSecrets — multi-word quoted values (Gap 2)", () => {
+  it("redacts the FULL quoted value even with spaces", () => {
+    const input = `MY_TOKEN="secret with spaces and lots more"`;
+    const out = redactSecrets(input);
+    // The whole quoted value is replaced, not just the first word
+    expect(out).toBe(`MY_TOKEN="[REDACTED]"`);
+    expect(out).not.toContain("with spaces");
+    expect(out).not.toContain("lots more");
+  });
+
+  it("redacts quoted KEY=\"value\" with mixed special chars", () => {
+    const input = `EVO_API_KEY="abc def $$$ &&& 123"`;
+    const out = redactSecrets(input);
+    expect(out).toBe(`EVO_API_KEY="[REDACTED]"`);
+  });
+
+  it("preserves text after the closing quote", () => {
+    const input = `prefix MY_PASSWORD="hello world" suffix=ok`;
+    const out = redactSecrets(input);
+    expect(out).toContain(`MY_PASSWORD="[REDACTED]"`);
+    expect(out).toContain("suffix=ok");
+    expect(out).not.toContain("hello world");
+  });
+});
+
+describe("redactSecrets — bare unquoted assignments", () => {
+  it("redacts KEY=value (no quotes)", () => {
+    const input = `env MY_TOKEN=supersecret123 ok`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain("supersecret123");
+    expect(out).toContain("MY_TOKEN=[REDACTED]");
+  });
+
+  it("redacts KEY: value (colon separator, no quotes)", () => {
+    const input = `MY_SECRET: deadbeef`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain("deadbeef");
+    expect(out).toContain("MY_SECRET: [REDACTED]");
+  });
+
+  it("stops at whitespace for unquoted values (does not eat following text)", () => {
+    const input = `MY_KEY=abc next word`;
+    const out = redactSecrets(input);
+    expect(out).toBe("MY_KEY=[REDACTED] next word");
+  });
+});
+
+describe("redactSecrets — ordering and idempotency", () => {
+  it("does not double-mask (idempotent)", () => {
+    const once = redactSecrets(`MY_TOKEN="value"`);
+    const twice = redactSecrets(once);
+    expect(twice).toBe(once);
+  });
+
+  it("JSON pattern wins over bare pattern (no double-mask)", () => {
+    // If the bare pattern ran first on `"value"` it would produce `"value`,
+    // breaking the JSON pattern. Verify the JSON pattern owns this case.
+    const input = `{"MY_TOKEN":"v1"}`;
+    const out = redactSecrets(input);
+    expect(out).toBe(`{"MY_TOKEN":"[REDACTED]"}`);
   });
 });

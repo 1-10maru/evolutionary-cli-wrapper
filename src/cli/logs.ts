@@ -16,19 +16,60 @@ export interface LogsCommandOptions {
 // ── Redaction helpers ──────────────────────────────────────────────────────
 
 const SENSITIVE_LINE_RE = /originalCmdAutoRun/i;
-const SENSITIVE_VALUE_RE = /(_TOKEN|_KEY|_SECRET|_PASSWORD)\s*[:=]\s*\S+/gi;
 // Match Windows-style user paths: C:/Users/<name>/... or C:\Users\<name>\...
 const WIN_USER_PATH_RE = /([Cc]:[/\\][Uu]sers[/\\])([^/\\]+)([/\\])/g;
+
+/**
+ * Pattern 1 — JSON-style: `"KEY":"value"` or `"KEY": "value"`.
+ * Captures the key (with surrounding quotes) and the value-opening quote so
+ * the replacement preserves the syntactic structure.
+ */
+const SECRET_JSON_RE = /("(?:\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*)"\s*:\s*)"([^"]*)"/gi;
+/**
+ * Pattern 2 — quoted bare assignment: `KEY="multi word value"`.
+ * Reads through to the closing quote so multi-word values are fully masked
+ * (the old `\S+` pattern stopped at the first whitespace and leaked the tail).
+ */
+const SECRET_QUOTED_RE = /(\b\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*\s*=\s*)"([^"]*)"/gi;
+/**
+ * Pattern 3 — unquoted assignment: `KEY=value` or `KEY: value` (no quotes).
+ * Value is a non-whitespace, non-quote run. The leading `(?!["'])` lookahead
+ * prevents this pattern from eating quoted values (those belong to Pattern 1
+ * or Pattern 2). Without it, `KEY="abc def"` would be matched as
+ * `KEY=` + `"abc` and leak the rest.
+ */
+const SECRET_BARE_RE = /(\b\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*\s*[:=]\s*)(?!["'])([^\s"']+)/gi;
 
 function hashUsername(name: string): string {
   return crypto.createHash("sha1").update(name).digest("hex").slice(0, 10);
 }
 
+/**
+ * Redact secret values in a single log line. Applies three patterns in order
+ * from most-specific to least-specific so a single value is only masked once:
+ *   1. JSON-style `"KEY":"value"` → `"KEY":"[REDACTED]"`
+ *   2. quoted bare `KEY="value"` → `KEY="[REDACTED]"`
+ *   3. unquoted `KEY=value` / `KEY: value` → `KEY=[REDACTED]`
+ *
+ * Exported for unit testing.
+ */
+export function redactSecrets(line: string): string {
+  let out = line;
+  // Pattern 1: JSON-quoted (most specific) — must run first so the quoted
+  // value isn't matched by Pattern 3 as `"value"` (non-whitespace run).
+  out = out.replace(SECRET_JSON_RE, '$1"[REDACTED]"');
+  // Pattern 2: quoted bare assignment (KEY="value with spaces")
+  out = out.replace(SECRET_QUOTED_RE, '$1"[REDACTED]"');
+  // Pattern 3: unquoted (KEY=value, no surrounding quotes)
+  out = out.replace(SECRET_BARE_RE, '$1[REDACTED]');
+  return out;
+}
+
 function redactLine(line: string): string {
   // Drop lines with sensitive registry paths
   if (SENSITIVE_LINE_RE.test(line)) return "";
-  // Redact inline sensitive key=value pairs
-  let out = line.replace(SENSITIVE_VALUE_RE, (m, key) => `${key}=[REDACTED]`);
+  // Redact inline sensitive key=value pairs (three patterns)
+  let out = redactSecrets(line);
   // Hash usernames in Windows-style paths
   out = out.replace(WIN_USER_PATH_RE, (_, prefix, username, sep) => {
     return `${prefix}${hashUsername(username)}${sep}`;
@@ -55,8 +96,9 @@ function redactConfigObject(obj: unknown): unknown {
 }
 
 // ── Minimal ZIP writer (no external dependencies) ─────────────────────────
-// We implement a ZIP64-capable writer using Node's built-in zlib for deflate.
-// This is sufficient for log bundles (typically a few MB total).
+// We implement a ZIP 2.0 writer (no ZIP64; up to 4 GB per file, sufficient for
+// log bundles) using Node's built-in zlib for deflate. Log bundles are
+// typically a few MB total — well within the 32-bit size header limits.
 
 interface ZipEntry {
   name: string; // path inside the zip
@@ -69,8 +111,9 @@ interface ZipEntry {
  *
  * Design note: We chose Node built-ins over `archiver` to keep zero new runtime
  * dependencies. The implementation is a straightforward local-file-header +
- * data-descriptor + central-directory format (ZIP version 2.0). For bundles
- * up to a few hundred MB this is sufficient.
+ * central-directory format (ZIP version 2.0, no ZIP64). All size fields are
+ * 32-bit, so individual entries and the total archive are capped at 4 GB —
+ * sufficient for log bundles (typically a few MB).
  */
 function writeZip(outPath: string, entries: ZipEntry[]): void {
   const parts: Buffer[] = [];
