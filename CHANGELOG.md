@@ -12,6 +12,11 @@
 - `DEBUG=evopet:*` namespace filter convention (matches the npm `debug` ecosystem style).
 - `docs/observability.md`: full log format and diagnostics documentation.
 
+### Documentation
+- README: new "Privacy & Data Handling" section (English + 日本語) — single authoritative source documenting what EvoPet reads, stores, and explicitly does NOT do (no telemetry, no API tokens). Retention periods and user-control levers (`EVO_LOG_DISABLE`, manual `<cwd>/.evo/` removal, `EVO_NO_UPDATE_CHECK`) listed. The previous separate "Network behavior (no telemetry)" and "What gets stored locally" / 「通信動作」「ローカルに保存されるもの」 sections were removed; their content is now consolidated under Privacy & Data Handling.
+- README: new "Troubleshooting" section (English + 日本語) with link to the EvoPet-not-appearing runbook.
+- New `docs/runbooks/evopet-not-appearing.md`: step-by-step diagnostic runbook for "EvoPet missing from statusline" reports. Notes that it requires evopet ≥ v3.5.0 for the `evo doctor` and `evo logs --bundle` commands. Includes manual cleanup recipes for Unix and Windows PowerShell since `evo cleanup --stale` is planned for a future release.
+
 ### Internal
 - CI matrix expanded to `[ubuntu-22.04, windows-2022, macos-14] × Node [20, 22]` (6 cells). Node 18 was evaluated but dropped: vitest 4.x transitively imports `styleText` from `node:util`, which only exists from Node 20.12 onward, so Node 18 cells failed at test startup.
 - New `audit` job runs `npm audit --omit=dev --audit-level=high` as a blocking gate; moderate findings warn only.

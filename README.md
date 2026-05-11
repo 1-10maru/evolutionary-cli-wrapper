@@ -109,22 +109,48 @@ Environment variables that affect the npm-installed statusline:
 
 The remaining environment variables documented in the [For developers](#for-developers) section (`EVO_LOG_LEVEL`, `EVO_LOG_DIR`, `EVO_LOG_DISABLE`, `EVO_CONFIG`, `EVO_PROXY_ACTIVE`) only have effect when running the `evo` Node CLI itself, which the npm-shipped statusline does not invoke.
 
-### Network behavior (no telemetry)
+### Privacy & Data Handling
 
-- No Claude API calls. The statusline does not consume Claude tokens.
-- No telemetry. Nothing is uploaded.
-- One non-blocking HEAD-style fetch to `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` per 24 hours, behind a stale-while-revalidate cache, used only to render the optional update notice. Disable with `EVO_NO_UPDATE_CHECK=1`.
+EvoPet runs entirely on your local machine. No telemetry is sent. This section is the authoritative source for what EvoPet reads, writes, and sends over the network.
 
-### What gets stored locally
+#### What EvoPet reads
+- The current Claude Code JSONL transcript at `~/.claude/projects/<encoded-cwd>/*.jsonl` (this is the file Claude Code itself writes during your session)
+- Files under `<cwd>` for AST-level function diffs, respecting `.gitignore` and excluding `node_modules`, `.evo/`, `dist/`
 
-The npm package only ships `dist/`, `bin/`, `statusline.py`, `README.md`, and `LICENSE` (see `files` in `package.json`). When you run `evo install-statusline` plus normal Claude Code sessions, the following files appear under your home directory:
+#### What EvoPet stores locally
 
-- `~/.claude/base_statusline.py` — the deployed statusline script (a copy of the package's `statusline.py`).
-- `~/.claude/settings.json` — modified in place to add the `statusLine` entry. A `.bak.<timestamp>` sibling is written before each overwrite.
-- `~/.claude/.evo-self.json` — small JSON file the statusline uses to track call counts and last-seen session id when running standalone (no proxy).
-- `~/.evo/update-check.json` — registry update cache (24h TTL). Path overridable via `EVO_HOME`.
+The npm package only ships `dist/`, `bin/`, `statusline.py`, `README.md`, and `LICENSE` (see `files` in `package.json`). When you run `evo install-statusline` plus normal Claude Code sessions, the following files may appear:
 
-No files are written under your project directories by the npm-installed flow. SQLite databases, `.evo/` per-project state, and shell shims described in `CLAUDE.md` only appear if you run the developer-mode `npm run setup` from a clone of this repo (see below).
+- `~/.claude/base_statusline.py` — the deployed statusline script (a copy of the package's `statusline.py`)
+- `~/.claude/settings.json` — modified to add the `statusLine` entry. A `.bak.<timestamp>` sibling of the whole file is written before each overwrite
+- `~/.claude/.evo-self.json` — small JSON file the statusline uses to track call counts and last-seen session id when running standalone (no proxy)
+- `~/.evo/update-check.json` — registry update cache (24h TTL). Path overridable via `EVO_HOME`
+- `<cwd>/.evo/evolutionary.db` — SQLite, per-project episode history and scores (developer-mode / proxy path only)
+- `<cwd>/.evo/live-state.json` — latest live session state for statusline render (developer-mode / proxy path only)
+- `<cwd>/.evo/sessions/<sessionId>.json` — per-session state, v3.4.0+ (developer-mode / proxy path only)
+- `<EVO_HOME>/.evo/logs/session-<date>.log` (default) or `<EVO_LOG_DIR>/session-<date>.log` (when `EVO_LOG_DIR` is set) — daily log file (rotated, 30-day retention)
+- `~/.claude/.evo/mascot.json` — your EvoPet mascot state (PC-wide)
+
+No files are written under your project directories by the npm-installed flow. SQLite databases, `.evo/` per-project state, and shell shims only appear if you run the developer-mode `npm run setup` from a clone of this repo (see [For developers](#for-developers)).
+
+#### What EvoPet does NOT do
+- Does not send telemetry, metrics, or usage data to any server
+- Does not consume Claude API tokens (this is the whole point — local-only scoring)
+- The only outbound HTTP is an optional check against `registry.npmjs.org` for new-version notifications (disable with `EVO_NO_UPDATE_CHECK=1`)
+
+#### Retention
+- Logs: 30 days
+- Raw episode rows (in SQLite): 200 most recent (configurable via `retention.keepRecentRawEpisodes`)
+- Session JSON files: pruned after 7 days
+
+#### User controls
+- `EVO_LOG_DISABLE=1` — disable file logs entirely
+- Manually delete `<cwd>/.evo/` if you want to clear per-project tracking (the directory will be re-created on the next session)
+- `EVO_NO_UPDATE_CHECK=1` — suppress the update-check fetch to `registry.npmjs.org`
+
+### Troubleshooting
+
+- **EvoPet not appearing in the statusline?** See [`docs/runbooks/evopet-not-appearing.md`](./docs/runbooks/evopet-not-appearing.md).
 
 ### For developers
 
@@ -352,22 +378,48 @@ npm 版ステータスラインに影響する環境変数:
 
 その他の環境変数（`EVO_LOG_LEVEL`、`EVO_LOG_DIR`、`EVO_LOG_DISABLE`、`EVO_CONFIG`、`EVO_PROXY_ACTIVE`）は `evo` Node CLI を直接動かす時のみ効きます（[英語版 For developers](#for-developers) を参照）。
 
-### 通信動作
+### プライバシーとデータ取り扱い
 
-- Claude API は呼びません。トークンを消費しません。
-- テレメトリ送信は一切ありません。
-- `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` への 24 時間に 1 回の非ブロッキング fetch（更新通知用）のみ。`EVO_NO_UPDATE_CHECK=1` で無効化できます。
+EvoPet は完全にローカルマシン上で動作します。テレメトリは一切送信しません。本セクションが EvoPet の読み書き・通信に関する唯一の正本です。
 
-### ローカルに保存されるもの
+#### EvoPet が読み込むもの
+- `~/.claude/projects/<encoded-cwd>/*.jsonl` にある Claude Code の JSONL トランスクリプト（Claude Code 自身がセッション中に書き込むファイル）
+- AST レベルの関数差分を取るために `<cwd>` 配下のファイル（`.gitignore` を尊重し、`node_modules`・`.evo/`・`dist/` は除外）
 
-npm パッケージが配布するのは `dist/`、`bin/`、`statusline.py`、`README.md`、`LICENSE` のみ（`package.json` の `files` 参照）。`evo install-statusline` と通常の Claude Code セッションで生成されるのは:
+#### EvoPet がローカルに保存するもの
+
+npm パッケージが配布するのは `dist/`、`bin/`、`statusline.py`、`README.md`、`LICENSE` のみ（`package.json` の `files` 参照）。`evo install-statusline` と通常の Claude Code セッションで生成されるのは以下です:
 
 - `~/.claude/base_statusline.py` — デプロイされたステータスラインスクリプト
-- `~/.claude/settings.json` — `statusLine` エントリ追加。上書き前に `.bak.<timestamp>` を作成
+- `~/.claude/settings.json` — `statusLine` エントリ追加。上書き前に **ファイル全体** の `.bak.<timestamp>` を作成
 - `~/.claude/.evo-self.json` — proxy なし時の呼び出し回数・最終 session id
 - `~/.evo/update-check.json` — レジストリ更新キャッシュ（24h TTL、`EVO_HOME` で変更可）
+- `<cwd>/.evo/evolutionary.db` — SQLite、プロジェクトごとのエピソード履歴とスコア（開発者モード / proxy 経由のみ）
+- `<cwd>/.evo/live-state.json` — ステータスライン描画用の最新セッション状態（開発者モード / proxy 経由のみ）
+- `<cwd>/.evo/sessions/<sessionId>.json` — セッションごとの状態、v3.4.0 以降（開発者モード / proxy 経由のみ）
+- `<EVO_HOME>/.evo/logs/session-<日付>.log`（既定）または `<EVO_LOG_DIR>/session-<日付>.log`（`EVO_LOG_DIR` 設定時）— 日次ログファイル（ローテーション、30 日保持）
+- `~/.claude/.evo/mascot.json` — EvoPet マスコットの状態（PC 全体で共有）
 
 npm 経由の利用ではプロジェクトディレクトリ配下に何も書きません。SQLite DB、プロジェクトごとの `.evo/` 状態、shell shim は `npm run setup`（clone した repo から）を実行した場合にのみ作られます。
+
+#### EvoPet がしないこと
+- テレメトリ、メトリクス、使用データをサーバーに送信しない
+- Claude API トークンを消費しない（これがローカル完結スコアリングの意義）
+- 外部への HTTP 通信は、新バージョン通知のための `registry.npmjs.org` への任意チェックのみ（`EVO_NO_UPDATE_CHECK=1` で無効化可能）
+
+#### 保持期間
+- ログ: 30 日
+- SQLite の生エピソード行: 直近 200 件（`retention.keepRecentRawEpisodes` で変更可能）
+- セッション JSON ファイル: 7 日後に自動削除
+
+#### ユーザーコントロール
+- `EVO_LOG_DISABLE=1` — ファイルログを完全無効化
+- `<cwd>/.evo/` を手動削除すればプロジェクトごとのトラッキングを消去可能（次回セッション時に自動再生成）
+- `EVO_NO_UPDATE_CHECK=1` — `registry.npmjs.org` への更新チェック fetch を抑制
+
+### トラブルシューティング
+
+- **ステータスラインに EvoPet が表示されない？** [`docs/runbooks/evopet-not-appearing.md`](./docs/runbooks/evopet-not-appearing.md) を参照してください。
 
 ### 開発者向け
 
