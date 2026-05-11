@@ -45,12 +45,18 @@ Open a PR with the fix on a `fix/` or `hotfix/` branch. Land it. Then:
 
 ## 4. Update the GitHub Release for the bad version
 
-Edit the release notes to prepend a deprecation banner so users searching GitHub see the rationale:
+Edit the release notes to prepend a deprecation banner so users searching GitHub see the rationale.
+
+Set the shell variables for the bad and good versions, then run the commands:
 
 ```bash
-EXISTING_BODY=$(gh release view "v<bad-version>" --json body --jq .body)
-NEW_BODY="$(printf '> **DEPRECATED**: see v<good-version> for the fix.\n\n%s' "$EXISTING_BODY")"
-gh release edit "v<bad-version>" --notes "$NEW_BODY"
+# Substitute with the actual versions
+BAD=v3.5.7
+GOOD=v3.5.8
+
+EXISTING_BODY=$(gh release view "$BAD" --json body --jq .body)
+NEW_BODY="$(printf '> **DEPRECATED**: see %s for the fix.\n\n%s' "$GOOD" "$EXISTING_BODY")"
+gh release edit "$BAD" --notes "$NEW_BODY"
 ```
 
 ---

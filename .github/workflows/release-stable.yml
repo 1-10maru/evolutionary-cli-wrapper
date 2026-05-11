@@ -13,6 +13,10 @@ permissions:
   id-token: write
   packages: write
 
+concurrency:
+  group: release-stable-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Preflight (verify tag does not exist)
@@ -119,15 +123,22 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Extract notes from CHANGELOG
         run: |
-          awk -v ver="## v${{ inputs.version }}" '
-            $0 ~ ver { flag=1; next }
-            flag && /^## v/ { exit }
+          VER='${{ inputs.version }}'
+          # Match "## v<VER>" optionally followed by whitespace + anything (e.g. a date).
+          # Anchor with [[:space:]]|$ so v3.4.4 does NOT match v3.4.40.
+          # ([[:space:]] is POSIX — gawk does not honor \s; \s would silently
+          # collapse to plain "s" and break the match.)
+          # Exit on the next "## v" OR "## Unreleased" boundary.
+          # Hard-fail if no section is found — for the stable channel especially,
+          # we refuse to publish without proper notes.
+          awk -v ver_anchor="^## v${VER}([[:space:]]|$)" '
+            $0 ~ ver_anchor { flag=1; next }
+            flag && /^## (v|Unreleased)/ { exit }
             flag { print }
           ' CHANGELOG.md > /tmp/release-notes.md
           if [ ! -s /tmp/release-notes.md ]; then
-            echo "## v${{ inputs.version }}" > /tmp/release-notes.md
-            echo "" >> /tmp/release-notes.md
-            echo "_No CHANGELOG entry found for this version. Please update CHANGELOG.md._" >> /tmp/release-notes.md
+            echo "::error::No CHANGELOG section found for v${VER}. Update CHANGELOG.md before re-running the workflow."
+            exit 1
           fi
       - name: Create GitHub Release
         env:

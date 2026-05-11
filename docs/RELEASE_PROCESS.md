@@ -2,6 +2,8 @@
 
 evopet uses a two-channel release process: `next` (release-candidate) and `latest` (stable).
 
+> **Prerequisite**: the `evo doctor` command must exist in the published package for the smoke gate to pass. It was added in v3.5.0+ (see PR-1.2). Do not push a release tag (RC or stable) until at least v3.5.0 has been published to npm via the legacy `publish-on-merge.yml` flow, OR PR-1.2 has been merged and this RC workflow has produced its first release. Pushing a tag before then will fail the smoke step with `evo: command not found` or `unknown command 'doctor'`.
+
 ## RC (`next` channel)
 
 Push a tag matching `v<MAJOR>.<MINOR>.<PATCH>-rc.<N>`:

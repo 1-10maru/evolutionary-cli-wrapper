@@ -105,19 +105,21 @@ jobs:
         shell: bash
         run: |
           VER='${{ steps.ver.outputs.version }}'
-          # Extract section between "## v$VER" and the next "## " heading
-          awk -v ver="## v$VER" '
-            $0 == ver { flag=1; next }
-            flag && /^## v/ { exit }
+          # Match "## v<VER>" optionally followed by whitespace + anything (e.g. a date).
+          # Anchor with [[:space:]]|$ so v3.4.4 does NOT match v3.4.40.
+          # ([[:space:]] is POSIX — gawk does not honor \s; \s would silently
+          # collapse to plain "s" and break the match.)
+          # Exit on the next "## v" OR "## Unreleased" boundary.
+          # Hard-fail if no section is found — no silent fallback to Unreleased.
+          # The whole point of this workflow is to refuse releasing with wrong notes.
+          awk -v ver_anchor="^## v${VER}([[:space:]]|$)" '
+            $0 ~ ver_anchor { flag=1; next }
+            flag && /^## (v|Unreleased)/ { exit }
             flag { print }
           ' CHANGELOG.md > /tmp/release-notes.md
           if [ ! -s /tmp/release-notes.md ]; then
-            # Fall back to Unreleased if a specific section is not yet present
-            awk '
-              /^## Unreleased/ { flag=1; next }
-              flag && /^## / { exit }
-              flag { print }
-            ' CHANGELOG.md > /tmp/release-notes.md
+            echo "::error::No CHANGELOG section found for v${VER}. Update CHANGELOG.md (add '## v${VER} (YYYY-MM-DD)' heading) before pushing the RC tag."
+            exit 1
           fi
           echo "Notes file:" && head -20 /tmp/release-notes.md
       - name: Create release
