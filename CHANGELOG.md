@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+### Internal
+- CI matrix expanded to `[ubuntu-22.04, windows-2022, macos-14] × Node [20, 22]` (Node 18 dropped — vitest 4.1.2 transitively imports `styleText` from `node:util` which is Node 20.12+).
+- New `audit` job runs `npm audit --omit=dev --audit-level=high` as a blocking gate; moderate findings warn only.
+- Added `concurrency` block to cancel superseded CI runs on the same ref.
+- New `docs/PLATFORM_SUPPORT.md` documenting the official support matrix.
+- `install/evopet-uninstall.sh`: replaced GNU-only `sed -i '\|...|d'` with portable `perl -i -ne` for BSD/macOS compatibility (exposed by adding macOS to CI).
+
 ## v3.5.1 (2026-05-09)
 
 ### Fixed

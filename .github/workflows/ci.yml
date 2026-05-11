@@ -8,12 +8,20 @@ on:
       - codex/**
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        os: [ubuntu-22.04, windows-2022, macos-14]
+        node: [18, 20, 22]
+        exclude:
+          - os: macos-14
+            node: 18
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -25,7 +33,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install
@@ -36,3 +44,24 @@ jobs:
 
       - name: Test
         run: npm test
+
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit (high blocks)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit (moderate warns)
+        run: npm audit --omit=dev --audit-level=moderate || true
