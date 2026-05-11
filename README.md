@@ -79,6 +79,16 @@ The deployed `~/.claude/base_statusline.py` is a copy of the file from the packa
 
 The statusline itself also performs a lightweight update check: on render, if there is no fresh cache at `<EVO_HOME>/.evo/update-check.json` (default: `~/.evo/update-check.json`), it fires a non-blocking HTTP GET to `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` with a 24-hour stale-while-revalidate cache. When the cached `latest` is newer than the running version, an `⚠ update: <current> → <latest> (npm update -g evolutionary-cli-wrapper)` notice is included in the render. Set `EVO_NO_UPDATE_CHECK=1` to disable.
 
+### Diagnostics
+
+- `evo doctor` — print a one-page health report (versions, env vars, file checks, recent errors, live-state freshness). Add `--json` for machine-readable output.
+- `evo logs --bundle [--out <path>]` — bundle the last 7 days of logs + redacted config + doctor output into a zip for sharing in bug reports. Sensitive paths and tokens are masked.
+- `EVO_DEBUG=1` — temporarily raise log level to DEBUG.
+- `DEBUG=evopet:proxy,evopet:render` — DEBUG only specific namespaces.
+- `EVO_LOG_FORMAT=json` — emit structured JSON logs (one object per line).
+
+See [docs/observability.md](docs/observability.md) for full details.
+
 ### Uninstall
 
 ```bash

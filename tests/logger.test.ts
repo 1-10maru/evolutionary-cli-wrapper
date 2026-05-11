@@ -47,6 +47,9 @@ const ORIGINAL_ENV = {
   EVO_LOG_DIR: process.env.EVO_LOG_DIR,
   EVO_LOG_LEVEL: process.env.EVO_LOG_LEVEL,
   EVO_LOG_DISABLE: process.env.EVO_LOG_DISABLE,
+  EVO_DEBUG: process.env.EVO_DEBUG,
+  EVO_LOG_FORMAT: process.env.EVO_LOG_FORMAT,
+  DEBUG: process.env.DEBUG,
 };
 
 beforeEach(() => {
@@ -54,6 +57,9 @@ beforeEach(() => {
   delete process.env.EVO_LOG_DIR;
   delete process.env.EVO_LOG_LEVEL;
   delete process.env.EVO_LOG_DISABLE;
+  delete process.env.EVO_DEBUG;
+  delete process.env.EVO_LOG_FORMAT;
+  delete process.env.DEBUG;
 });
 
 afterEach(() => {
@@ -64,6 +70,12 @@ afterEach(() => {
   else process.env.EVO_LOG_LEVEL = ORIGINAL_ENV.EVO_LOG_LEVEL;
   if (ORIGINAL_ENV.EVO_LOG_DISABLE === undefined) delete process.env.EVO_LOG_DISABLE;
   else process.env.EVO_LOG_DISABLE = ORIGINAL_ENV.EVO_LOG_DISABLE;
+  if (ORIGINAL_ENV.EVO_DEBUG === undefined) delete process.env.EVO_DEBUG;
+  else process.env.EVO_DEBUG = ORIGINAL_ENV.EVO_DEBUG;
+  if (ORIGINAL_ENV.EVO_LOG_FORMAT === undefined) delete process.env.EVO_LOG_FORMAT;
+  else process.env.EVO_LOG_FORMAT = ORIGINAL_ENV.EVO_LOG_FORMAT;
+  if (ORIGINAL_ENV.DEBUG === undefined) delete process.env.DEBUG;
+  else process.env.DEBUG = ORIGINAL_ENV.DEBUG;
 
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -311,6 +323,138 @@ describe("logger lightweight short-circuit", () => {
     } finally {
       process.chdir(originalCwd);
     }
+  });
+});
+
+describe("EVO_DEBUG=1 convention", () => {
+  it("EVO_DEBUG=1 forces DEBUG level regardless of EVO_LOG_LEVEL", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.EVO_DEBUG = "1";
+    process.env.EVO_LOG_LEVEL = "ERROR"; // would suppress DEBUG without EVO_DEBUG
+    const log = getLogger();
+    log.debug("c", "debug-via-evo-debug");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("debug-via-evo-debug");
+  });
+
+  it("EVO_DEBUG=1 also allows INFO and WARN (not just DEBUG)", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.EVO_DEBUG = "1";
+    const log = getLogger();
+    log.info("c", "info-visible");
+    log.warn("c", "warn-visible");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("info-visible");
+    expect(content).toContain("warn-visible");
+  });
+});
+
+describe("DEBUG=evopet:* namespace filtering", () => {
+  it("DEBUG=evopet:* enables DEBUG level for all evopet: namespaces", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.DEBUG = "evopet:*";
+    const log = getLogger();
+    log.debug("evopet:proxy", "proxy-debug");
+    log.debug("evopet:render", "render-debug");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("proxy-debug");
+    expect(content).toContain("render-debug");
+  });
+
+  it("DEBUG=evopet:proxy enables only evopet:proxy, blocks evopet:render", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.DEBUG = "evopet:proxy";
+    const log = getLogger();
+    log.debug("evopet:proxy", "proxy-should-appear");
+    log.debug("evopet:render", "render-should-not");
+    log.debug("other:ns", "other-should-not");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("proxy-should-appear");
+    expect(content).not.toContain("render-should-not");
+    expect(content).not.toContain("other-should-not");
+  });
+
+  it("DEBUG=evopet:proxy,evopet:render enables both", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.DEBUG = "evopet:proxy,evopet:render";
+    const log = getLogger();
+    log.debug("evopet:proxy", "proxy-msg");
+    log.debug("evopet:render", "render-msg");
+    log.debug("evopet:other", "other-msg");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("proxy-msg");
+    expect(content).toContain("render-msg");
+    expect(content).not.toContain("other-msg");
+  });
+
+  it("non-DEBUG levels are never filtered by namespace matcher", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.DEBUG = "evopet:proxy"; // only proxy namespace
+    const log = getLogger();
+    // INFO from a non-matching namespace should still appear (INFO is not DEBUG)
+    log.info("evopet:render", "render-info");
+    log.warn("evopet:other", "other-warn");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    expect(content).toContain("render-info");
+    expect(content).toContain("other-warn");
+  });
+});
+
+describe("EVO_LOG_FORMAT=json structured output", () => {
+  it("emits one JSON object per line with ts/level/ns/msg fields", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.EVO_LOG_FORMAT = "json";
+    const log = getLogger();
+    log.info("mycomp", "hello json", { extra: 42 });
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    const lines = content.trim().split("\n").filter((l) => l.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(typeof parsed.ts).toBe("string");
+    expect(parsed.level).toBe("INFO");
+    expect(parsed.ns).toBe("mycomp");
+    expect(parsed.msg).toBe("hello json");
+    expect(parsed.extra).toBe(42);
+  });
+
+  it("JSON output does not include text-format padding", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    process.env.EVO_LOG_FORMAT = "json";
+    const log = getLogger();
+    log.warn("c", "warn msg");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    const parsed = JSON.parse(content.trim()) as Record<string, unknown>;
+    // level should be trimmed "WARN", not padded "WARN "
+    expect(parsed.level).toBe("WARN");
+  });
+
+  it("text format is still the default (no EVO_LOG_FORMAT)", () => {
+    const dir = makeTempDir();
+    process.env.EVO_LOG_DIR = dir;
+    const log = getLogger();
+    log.info("comp", "text-line");
+    log.flush();
+    const content = readLogContent(logFilePath(dir));
+    // Should be text format (not JSON)
+    expect(() => JSON.parse(content.trim())).toThrow();
+    expect(content).toContain("INFO");
+    expect(content).toContain("[comp]");
   });
 });
 

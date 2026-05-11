@@ -22,6 +22,33 @@ export interface BoundLogger {
   debug(message: string, ctx?: LogContext): void;
 }
 
+/**
+ * Parse `DEBUG=evopet:proxy,evopet:render` style env var into a namespace
+ * matcher function. Returns null if DEBUG is not set or has no `evopet:*`
+ * entries (meaning namespace-level debug filtering is inactive).
+ *
+ * When the matcher is active, a call to emit() with level DEBUG is passed only
+ * if the component matches at least one of the listed namespaces. Wildcard `*`
+ * (e.g. `evopet:*`) matches any component that starts with the prefix before
+ * the `*`.
+ */
+function buildDebugNamespaceMatcher(debugEnv: string | undefined): ((ns: string) => boolean) | null {
+  if (!debugEnv) return null;
+  const tokens = debugEnv.split(",").map((t) => t.trim()).filter((t) => t.startsWith("evopet:"));
+  if (tokens.length === 0) return null;
+  return (ns: string): boolean => {
+    for (const token of tokens) {
+      if (token.endsWith("*")) {
+        const prefix = token.slice(0, -1); // strip trailing *
+        if (ns.startsWith(prefix)) return true;
+      } else if (ns === token) {
+        return true;
+      }
+    }
+    return false;
+  };
+}
+
 const LEVEL_ORDER: Record<LogLevel, number> = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 };
 const LEVEL_PADDED: Record<LogLevel, string> = {
   ERROR: "ERROR",
@@ -33,6 +60,9 @@ const ROTATE_REGEX = /^session-(\d{8})\.log$/;
 const RETENTION_DAYS = 30;
 const QUEUE_HIGH_WATER = 32;
 
+/** Log output format — "text" (default) or "json" (structured JSON lines). */
+export type LogFormat = "text" | "json";
+
 interface LoggerState {
   level: LogLevel;
   disabled: boolean;
@@ -43,6 +73,10 @@ interface LoggerState {
   exitListener: (() => void) | null;
   beforeExitListener: (() => void) | null;
   initialized: boolean;
+  /** When non-null, enables debug for matching namespaces only (DEBUG=evopet:*). */
+  debugMatcher: ((ns: string) => boolean) | null;
+  /** Output format derived from EVO_LOG_FORMAT env var. */
+  format: LogFormat;
 }
 
 let state: LoggerState | null = null;
@@ -56,11 +90,19 @@ function todayUtcStamp(): string {
 }
 
 function readLevel(): LogLevel {
+  // EVO_DEBUG=1 forces DEBUG regardless of EVO_LOG_LEVEL.
+  if (process.env.EVO_DEBUG === "1") return "DEBUG";
+  // DEBUG=evopet:* also implies DEBUG level when present.
+  if (process.env.DEBUG && process.env.DEBUG.includes("evopet:")) return "DEBUG";
   const raw = (process.env.EVO_LOG_LEVEL || "INFO").toUpperCase();
   if (raw === "ERROR" || raw === "WARN" || raw === "INFO" || raw === "DEBUG") {
     return raw;
   }
   return "INFO";
+}
+
+function readFormat(): LogFormat {
+  return process.env.EVO_LOG_FORMAT === "json" ? "json" : "text";
 }
 
 function pruneOldLogs(logDir: string): void {
@@ -161,6 +203,8 @@ function ensureState(): LoggerState {
     exitListener: null,
     beforeExitListener: null,
     initialized: false,
+    debugMatcher: buildDebugNamespaceMatcher(process.env.DEBUG),
+    format: readFormat(),
   };
   return state;
 }
@@ -210,20 +254,44 @@ function flushQueue(s: LoggerState): void {
   }
 }
 
-function format(level: LogLevel, component: string, message: string, ctx?: LogContext): string {
+function formatText(level: LogLevel, component: string, message: string, ctx?: LogContext): string {
   const ts = new Date().toISOString();
   const padded = LEVEL_PADDED[level];
   const ctxPart = ctx === undefined ? "" : " " + JSON.stringify(ctx);
   return `${ts} ${padded} [${component}] ${message}${ctxPart}\n`;
 }
 
+function formatJson(level: LogLevel, component: string, message: string, ctx?: LogContext): string {
+  const entry: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    level: level.trim(),
+    ns: component,
+    msg: message,
+  };
+  if (ctx !== undefined) {
+    Object.assign(entry, ctx);
+  }
+  return JSON.stringify(entry) + "\n";
+}
+
+function formatLine(s: LoggerState, level: LogLevel, component: string, message: string, ctx?: LogContext): string {
+  return s.format === "json"
+    ? formatJson(level, component, message, ctx)
+    : formatText(level, component, message, ctx);
+}
+
 function emit(level: LogLevel, component: string, message: string, ctx?: LogContext): void {
   const s = ensureState();
   if (s.disabled) return;
+
+  // Namespace-level debug filter: if DEBUG=evopet:* is active and this is a
+  // DEBUG emit, only pass it if the component matches.
+  if (level === "DEBUG" && s.debugMatcher !== null && !s.debugMatcher(component)) return;
+
   if (LEVEL_ORDER[level] > LEVEL_ORDER[s.level]) return;
   initSink(s);
   if (s.disabled) return;
-  const line = format(level, component, message, ctx);
+  const line = formatLine(s, level, component, message, ctx);
   s.queue.push(line);
   if (s.queue.length >= QUEUE_HIGH_WATER) {
     flushQueue(s);
@@ -260,6 +328,16 @@ const logger: Logger = {
 export function getLogger(): Logger {
   ensureState();
   return logger;
+}
+
+/**
+ * Returns the resolved log directory for the current logger state.
+ * Useful for tooling (e.g. `evo doctor`, `evo logs --bundle`) that needs to
+ * locate log files without going through the logger itself.
+ */
+export function getLogDir(): string {
+  const s = ensureState();
+  return s.logDir;
 }
 
 export function __resetLoggerForTests(): void {
