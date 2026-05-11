@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+### Internal
+- CI matrix expanded to `[ubuntu-22.04, windows-2022, macos-14] × Node [20, 22]` (6 cells). Node 18 was evaluated but dropped: vitest 4.x transitively imports `styleText` from `node:util`, which only exists from Node 20.12 onward, so Node 18 cells failed at test startup.
+- New `audit` job runs `npm audit --omit=dev --audit-level=high` as a blocking gate; moderate findings warn only.
+- Added `concurrency` block to cancel superseded CI runs on the same ref.
+- New `docs/PLATFORM_SUPPORT.md` documenting the official support matrix.
+- Portability fix in `install/evopet-uninstall.sh`: replaced GNU-only `sed -i '\|pattern|d'` alternate-delimiter form (BSD sed on macOS errors `invalid command code f`) with a portable `perl -i -ne 'print unless m{...}'` one-liner. Pre-existing bug surfaced by adding macOS to CI.
+
 ## v3.5.1 (2026-05-09)
 
 ### Fixed
