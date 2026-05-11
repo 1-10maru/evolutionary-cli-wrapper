@@ -17,7 +17,8 @@ fi
 
 # Remove shim source line from .bash_profile (match by substring).
 if [ -f "$BASH_PROFILE" ] && grep -F ".claude/local/optional-projects.sh" "$BASH_PROFILE" > /dev/null 2>&1; then
-  sed -i '\|\.claude/local/optional-projects\.sh|d' "$BASH_PROFILE"
+  # Portable across GNU/BSD sed (macOS): use perl -i for the delete-line operation.
+  perl -i -ne 'print unless m{\.claude/local/optional-projects\.sh}' "$BASH_PROFILE"
   echo "[evopet-uninstall] cleaned .bash_profile"
 else
   echo "[evopet-uninstall] .bash_profile clean, skipping"
