@@ -18,6 +18,13 @@
 - Added `concurrency` block to cancel superseded CI runs on the same ref.
 - New `docs/PLATFORM_SUPPORT.md` documenting the official support matrix.
 - Portability fix in `install/evopet-uninstall.sh`: replaced GNU-only `sed -i '\|pattern|d'` alternate-delimiter form (BSD sed on macOS errors `invalid command code f`) with a portable `perl -i -ne 'print unless m{...}'` one-liner. Pre-existing bug surfaced by adding macOS to CI.
+- Replaced `publish-on-merge.yml` (auto-publish on every main push) with `release-rc.yml` (tag-triggered, `next` channel) and `release-stable.yml` (`workflow_dispatch`, `latest` channel).
+- Smoke job before publish: install the packed tarball globally and verify `evo doctor --json` exits 0 with parseable JSON containing a `versions` key.
+- `npm publish --provenance` enabled for both channels.
+- `docs/RELEASE_PROCESS.md` documents the new flow; `docs/runbooks/rollback-bad-release.md` documents the rollback procedure.
+
+### Breaking-flavored (release tooling)
+- `git push origin main` no longer publishes to npm. To release, push a `vX.Y.Z-rc.N` tag (RC channel) or run the `Release Stable` workflow (latest channel).
 
 ## v3.5.1 (2026-05-09)
 
