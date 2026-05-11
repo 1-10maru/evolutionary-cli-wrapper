@@ -12,6 +12,7 @@ import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from 
 import { runProxySession } from "./proxyRuntime";
 import { runEpisode } from "./runtime";
 import { runLogsCommand } from "./cli/logs";
+import { runDoctor } from "./cli/doctor";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
 import { runInstallStatusline } from "./cli/installStatusline";
@@ -464,12 +465,23 @@ program
 
 program
   .command("logs")
-  .description("Show recent Evo log lines")
+  .description("Show recent Evo log lines, or bundle them for a bug report")
   .option("--tail <n>", "Show last N lines (default 50)", (v) => parseInt(v, 10))
   .option("--since <dur>", "Show lines since duration ago (e.g. 30m, 2h, 1d)")
   .option("--cwd <dir>", "Working dir to resolve .evo/logs from", process.cwd())
-  .action(async (options: { tail?: number; since?: string; cwd: string }) => {
+  .option("--bundle", "Create a redacted zip bundle of the last 7 days of logs + doctor output")
+  .option("--out <path>", "Output path for the bundle (default: <cwd>/evo-bundle-<timestamp>.zip)")
+  .action(async (options: { tail?: number; since?: string; cwd: string; bundle?: boolean; out?: string }) => {
     await runLogsCommand(options);
+  });
+
+program
+  .command("doctor")
+  .description("Print a one-page health report (versions, env, file checks, recent errors, live-state freshness).")
+  .option("--json", "Emit machine-readable JSON output instead of formatted text")
+  .option("--cwd <dir>", "Working dir to resolve .evo/ state from", process.cwd())
+  .action(async (options: { json?: boolean; cwd?: string }) => {
+    await runDoctor(options);
   });
 
 program

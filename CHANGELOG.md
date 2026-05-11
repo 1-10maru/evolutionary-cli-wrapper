@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+### Added
+- `evo doctor [--json]` command: one-page health report covering versions, env vars, file checks, recent errors, and live-state freshness. Machine-readable JSON output via `--json` is usable by tooling (including Claude reading the project state).
+- `evo logs --bundle [--out <path>]`: bundle the last 7 days of logs + redacted config + doctor output into a single zip for bug reports. Sensitive paths and tokens are masked before bundling.
+- Structured JSON log output via `EVO_LOG_FORMAT=json` env var (one JSON object per line; useful for log aggregation pipelines).
+- `EVO_DEBUG=1` shortcut to raise log level to DEBUG without touching per-namespace flags.
+- `DEBUG=evopet:*` namespace filter convention (matches the npm `debug` ecosystem style).
+- `docs/observability.md`: full log format and diagnostics documentation.
+
 ### Internal
 - CI matrix expanded to `[ubuntu-22.04, windows-2022, macos-14] × Node [20, 22]` (6 cells). Node 18 was evaluated but dropped: vitest 4.x transitively imports `styleText` from `node:util`, which only exists from Node 20.12 onward, so Node 18 cells failed at test startup.
 - New `audit` job runs `npm audit --omit=dev --audit-level=high` as a blocking gate; moderate findings warn only.
