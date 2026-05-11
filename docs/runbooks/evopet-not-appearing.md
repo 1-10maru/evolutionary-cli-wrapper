@@ -1,5 +1,7 @@
 # Runbook: EvoPet not appearing in the statusline
 
+> **Requires evopet ≥ v3.5.0** (the version that introduces `evo doctor` and `evo logs --bundle`). If you are on an earlier version, run `npm install -g evolutionary-cli-wrapper@latest` first.
+
 If EvoPet is not showing in your Claude Code statusline after install, work through these steps in order.
 
 ## Step 0 — Re-run install if you haven't yet
@@ -30,7 +32,7 @@ If `evo doctor` exits non-zero, attach the output of `evo doctor --json` to a bu
 
 Open `~/.claude/settings.json` and confirm the `statusLine.command` entry points to the evopet `statusline.py` or `evo-statusline` (depending on version).
 
-If it points somewhere else (or is missing), re-run `evo install-statusline`. This writes the correct config; existing custom statusline configurations are preserved with a `.bak` file.
+If it points somewhere else (or is missing), re-run `evo install-statusline`. This will back up your existing `~/.claude/settings.json` to a `.bak.<timestamp>` file before writing the new `statusLine` configuration. To revert later, use `evo install-statusline --uninstall`, which restores the most recent backup.
 
 ## Step 3 — Verify the proxy is intercepting `claude`
 
@@ -41,7 +43,7 @@ where.exe claude   # Windows
 
 The first hit should be the evo shim:
 
-- `~/.evo/bin/claude` or
+- `<cwd>/bin/claude` (per-project, Unix) or
 - `%APPDATA%\npm\claude.cmd` (Windows)
 
 If the first hit is the original Claude binary, the PATH order is wrong. Re-run:
@@ -58,20 +60,28 @@ evo install-statusline   # also fixes PATH shims as a side effect
 cat <cwd>/.evo/live-state.json | node -e "let d=''; process.stdin.on('data', c=>d+=c); process.stdin.on('end', ()=>{ const j=JSON.parse(d); console.log('age (sec):', (Date.now()-new Date(j.updatedAt))/1000); })"
 ```
 
-If age > 60 seconds and you've just sent a Claude prompt:
+If age > 5 minutes and you've just sent a Claude prompt:
 
-- The proxy may have stopped tracking. Check `<EVO_LOG_DIR>/session-<today>.log` for `proxy.livestate` warnings or any `ERROR` lines.
+- The proxy may have stopped tracking. Check the log file for `proxy.livestate` warnings or any `ERROR` lines. The log file is at `$EVO_LOG_DIR/session-<today>.log` if `EVO_LOG_DIR` is set, otherwise at `<EVO_HOME>/.evo/logs/session-<today>.log`.
 - Restart Claude Code.
 
-## Step 5 — Stale session files
+(The freshness window matches `statusline.py`'s `_FRESH_WINDOW_MS` constant of 300,000 ms.)
 
-If you switched projects often or have leftover session files:
+## Step 5 — Manual cleanup if needed
+
+If you've switched projects often or have leftover session files, you can manually remove them:
 
 ```bash
-evo cleanup --stale
+# Remove session files older than 24 hours (Unix)
+find <cwd>/.evo/sessions -name '*.json' -mtime +1 -delete
 ```
 
-This removes session JSON files older than 24 hours and orphaned tmp files.
+```powershell
+# Or on Windows PowerShell:
+Get-ChildItem <cwd>/.evo/sessions -Filter *.json | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item
+```
+
+(`evo cleanup --stale` is planned for a future release; until then this manual fallback works.)
 
 ## Step 6 — Bundle and report
 
