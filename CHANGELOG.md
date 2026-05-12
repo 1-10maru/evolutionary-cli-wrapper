@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## v3.5.1 (2026-05-12)
+
+### Fixed
+- `evo --version` now reports the actual package version (was hardcoded to `0.1.0` in `src/index.ts`). Now reads from `package.json` at runtime.
+
+### Changed
+- Statusline expansion mode: the four essentials row (`評価 / 回目 / 指示の質 / 育成度`) is now always rendered each tick, with dim-color placeholders when data hasn't been computed yet (e.g. early in a session). Previously the row would "thin out" if a metric wasn't yet available, making EvoPet feel inert. The advice/tip line below still rotates to keep things alive.
+
 ## v3.5.0 (2026-05-12)
 
 ### Added

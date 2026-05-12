@@ -813,13 +813,21 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
 
     _line1_bits = [_dim_if_stale(f"{_avatar} {BOLD}{_EVO_ACCENT}{_nick}{R}")]
 
+    # v3.5.1: in expansion mode the four essentials (grade / \u56de\u76ee / \u6307\u793a\u306e\u8cea / \u80b2\u6210\u5ea6)
+    # are rendered EVERY tick, with placeholders when data isn't computed yet.
+    # Rationale: users reported that the row "thinning out" early in a session
+    # makes EvoPet feel inert. Always-on chips communicate that tracking is alive.
     if _grade:
         _line1_bits.append(_dim_if_stale(f"{_gc}{BOLD}{_grade_label(_grade)}{R}"))
+    else:
+        _line1_bits.append(f"{DIM}\u8a55\u4fa1 \u2014{R}")
     # Counter source: userMessages (real human-sent count) when proxy provides the field,
     # else fall back to turns (legacy total-events count) for old proxy builds.
     _conv_count = _user_msgs if 'userMessages' in _evo else _turns
     if _conv_count > 0:
         _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}"))
+    else:
+        _line1_bits.append(f"{DIM}0\u56de\u76ee\u306e\u4f1a\u8a71{R}")
     if _ps > 0:
         if _ps >= 80:
             _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}"))
@@ -829,6 +837,8 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
             _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_WARN}{BOLD}\u6307\u793a\u306e\u8cea: \u3082\u3046\u5c11\u3057\u5177\u4f53\u7684\u306b{R}"))
         else:
             _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_RED}{BOLD}\u6307\u793a\u306e\u8cea: \u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}"))
+    else:
+        _line1_bits.append(f"{DIM}\U0001f4dd \u6307\u793a\u306e\u8cea: \u8a08\u6e2c\u4e2d{R}")
     if _combo >= 3:
         _cc = _EVO_GOLD if _combo >= 10 else _EVO_ACCENT if _combo >= 5 else _EVO_GREEN
         _line1_bits.append(_dim_if_stale(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}"))
@@ -841,6 +851,10 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
         _line1_bits.append(f"{DIM}\u80b2\u6210\u5ea6 -{R}")
     elif _bond < 100:
         _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_GREEN}\u80b2\u6210\u5ea6 {_bond}%{R}"))
+    else:
+        # Residual fallback (e.g. bond >= 100 with no ISG): still show placeholder
+        # so the always-on essentials row is never thinned out.
+        _line1_bits.append(f"{DIM}\u80b2\u6210\u5ea6 -{R}")
 
     # v3.3.0: append "(\u5f85\u6a5f\u4e2d)" suffix as the LAST chip on line 1 when stale,
     # so the user sees "lagging" indicator without losing any of the data.

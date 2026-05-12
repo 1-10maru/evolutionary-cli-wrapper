@@ -84,10 +84,13 @@ function patchLiveStateOnPassthroughExit(
 const program = new Command();
 program.enablePositionalOptions();
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const pkgVersion: string = require("../package.json").version;
+
 program
   .name("evo")
   .description("Evolutionary CLI Wrapper")
-  .version("0.1.0");
+  .version(pkgVersion);
 
 // First-run statusline prompt: fires once before any subcommand action.
 // Internally bails out for install-statusline / --version / non-TTY / sentinel
