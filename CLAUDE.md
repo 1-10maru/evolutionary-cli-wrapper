@@ -33,7 +33,43 @@ npm run setup          # shim デプロイ + PATH 設定
 
 ## バージョニング
 Semantic Versioning。詳細は [docs/VERSIONING.md](docs/VERSIONING.md)。
-現行: v2.x 系。リリース前は必ず `npm run release:check`。
+現行: v3.x 系。リリース前は必ず `npm run release:check`。
+
+## 開発機セットアップ（重要・必読）
+
+**この repo を触る開発機では `npm install -g evolutionary-cli-wrapper` を絶対に使わない**。代わりにソースから直接リンクする:
+
+```bash
+cd <path-to-this-repo>
+npm install
+npm run build
+npm link
+```
+
+これで「ソースを編集 → `npm run build` → 即座に `evo` コマンドに反映」というサイクルになる。`npm install -g` は npm レジストリの公開版で開発版を上書きしてしまうので絶対に避ける。
+
+すでに `npm install -g` してしまった場合の戻し方:
+```bash
+npm uninstall -g evolutionary-cli-wrapper
+cd <path-to-this-repo>
+npm install
+npm run build
+npm link
+```
+
+PATH 上に複数の `evo` がある場合の確認:
+```bash
+where evo   # Windows
+which -a evo  # Unix
+```
+
+ソース側 (`<repo>/bin/evo`) が npm グローバル側より先に来ているか確認する。
+
+## リリース手順
+- **RC channel**: `git tag v3.6.0-rc.1 && git push origin v3.6.0-rc.1` → `release-rc.yml` が走り `@next` で公開
+- **Stable channel**: GitHub Actions UI から「Release Stable」を手動実行(version 入力)→ `release-stable.yml` が走り `@latest` で公開
+- 詳細: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)
+- ロールバック: [docs/runbooks/rollback-bad-release.md](docs/runbooks/rollback-bad-release.md)
 
 ## 既知の問題
 - **Miniconda Prompt フリーズ**: cmd.exe AutoRun 統合で conda_hook.bat と干渉。Evo 起因ではない可能性が高いが、cmd.exe AutoRun 統合は当面無効化済み
