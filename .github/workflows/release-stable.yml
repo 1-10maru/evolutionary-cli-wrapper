@@ -24,7 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.s.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - id: s
@@ -53,7 +53,7 @@ jobs:
         os: [ubuntu-22.04, windows-2022, macos-14]
         node: [22]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -71,7 +71,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2022, macos-14]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -101,7 +101,7 @@ jobs:
     needs: smoke
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
