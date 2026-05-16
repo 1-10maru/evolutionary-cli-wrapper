@@ -6,6 +6,7 @@ import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
   createProxyShims,
   getShellStatus,
+  isCommandCandidateNameValid,
   resolveOriginalCommand,
   setupShellIntegration,
   undoShellIntegration,
@@ -16,6 +17,7 @@ const tempDirs: string[] = [];
 afterEach(() => {
   delete process.env.EVO_TEST_MODE;
   delete process.env.EVO_TEST_WHERE_STDOUT;
+  delete process.env.EVO_TEST_ALLOW_INTERPRETER;
   delete process.env.EVO_HOME;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -161,6 +163,67 @@ describe("shell integration", () => {
     expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdShim);
   });
 
+  it("rejects an interpreter binary returned by `where` for cli=claude (e.g. node.exe)", () => {
+    process.env.EVO_TEST_MODE = "1";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-where-poison-"));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+
+    const npmDir = path.join(cwd, "npm");
+    const nodeDir = path.join(cwd, "nodejs");
+    // Simulate a poisoned `where claude` result whose first hit is node.exe
+    // (basename does NOT match cli=claude). The legitimate claude.cmd
+    // appears second.
+    const fakeNodeExe = path.join(nodeDir, "node.exe");
+    writeFile(fakeNodeExe, "binary");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    process.env.EVO_TEST_WHERE_STDOUT = `${fakeNodeExe}\r\n${cmdShim}\r\n`;
+
+    const resolved = resolveOriginalCommand(cwd, "claude");
+
+    expect(resolved).toBe(cmdShim);
+    expect(resolved).not.toBe(fakeNodeExe);
+    expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdShim);
+  });
+
+  it("self-heals a poisoned originalCommandMap.claude entry pointing to node.exe", () => {
+    process.env.EVO_TEST_MODE = "1";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-config-poison-"));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+
+    const npmDir = path.join(cwd, "npm");
+    const nodeDir = path.join(cwd, "nodejs");
+    const fakeNodeExe = path.join(nodeDir, "node.exe");
+    writeFile(fakeNodeExe, "binary");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    // `where` only returns the legitimate shim. The poison comes from
+    // pre-existing config state, mirroring the production bug where
+    // `originalCommandMap.claude = "C:\\Program Files\\nodejs\\node.exe"`.
+    process.env.EVO_TEST_WHERE_STDOUT = `${cmdShim}\r\n`;
+
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: {
+          ...config.shellIntegration.originalCommandMap,
+          claude: fakeNodeExe,
+        },
+      },
+    });
+
+    const resolved = resolveOriginalCommand(cwd, "claude");
+    const updatedConfig = ensureEvoConfig(cwd);
+
+    expect(resolved).toBe(cmdShim);
+    expect(updatedConfig.shellIntegration.originalCommandMap.claude).toBe(cmdShim);
+    expect(updatedConfig.shellIntegration.originalCommandMap.claude).not.toBe(fakeNodeExe);
+  });
+
   it("rejects broken shims whose packaged target no longer exists", () => {
     process.env.EVO_TEST_MODE = "1";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-broken-"));
@@ -272,5 +335,56 @@ describe("createProxyShims path injection guard", () => {
       const msg = err instanceof Error ? err.message : String(err);
       expect(msg).not.toContain("shell metacharacters");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isCommandCandidateNameValid — basename-vs-cli validation
+// ---------------------------------------------------------------------------
+describe("isCommandCandidateNameValid", () => {
+  it("accepts the canonical Windows-native shim forms for cli=claude", () => {
+    expect(isCommandCandidateNameValid("C:/npm/claude.cmd", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/claude.exe", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/claude.bat", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/claude.ps1", "claude")).toBe(true);
+  });
+
+  it("accepts the extensionless POSIX shim and .sh / .bash forms", () => {
+    expect(isCommandCandidateNameValid("/usr/local/bin/claude", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("/usr/local/bin/claude.sh", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("/usr/local/bin/claude.bash", "claude")).toBe(true);
+  });
+
+  it("accepts the legacy `.evo-original` backup forms", () => {
+    expect(isCommandCandidateNameValid("C:/npm/claude.evo-original", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/claude.evo-original.cmd", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/claude.evo-original.ps1", "claude")).toBe(true);
+  });
+
+  it("is case-insensitive on the cli stem (Windows)", () => {
+    expect(isCommandCandidateNameValid("C:/npm/Claude.CMD", "claude")).toBe(true);
+    expect(isCommandCandidateNameValid("C:/npm/CLAUDE.exe", "claude")).toBe(true);
+  });
+
+  it("REJECTS interpreter binaries that share neither stem nor extension", () => {
+    expect(isCommandCandidateNameValid("C:/Program Files/nodejs/node.exe", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("/usr/bin/node", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("C:/Python311/python.exe", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("/usr/bin/python", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("C:/Program Files/PowerShell/7/pwsh.exe", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("/bin/bash", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("/bin/sh", "claude")).toBe(false);
+  });
+
+  it("REJECTS unknown extensions even if the stem matches", () => {
+    // We only allow the explicit shim extension allowlist — a `.dll` or
+    // `.py` named `claude.*` is suspicious and should not be selected.
+    expect(isCommandCandidateNameValid("C:/lib/claude.dll", "claude")).toBe(false);
+    expect(isCommandCandidateNameValid("/lib/claude.py", "claude")).toBe(false);
+  });
+
+  it("REJECTS empty / falsy inputs defensively", () => {
+    expect(isCommandCandidateNameValid("", "claude")).toBe(false);
   });
 });

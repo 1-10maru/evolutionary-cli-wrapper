@@ -54,6 +54,65 @@ function isLegacyEvoBackupCommand(commandPath: string): boolean {
   return /\.evo-original(\.(cmd|ps1))?$/i.test(path.basename(commandPath));
 }
 
+// Extensions we consider valid CLI shim suffixes. Anything else
+// (.exe shims with a different basename, raw interpreter binaries, etc.)
+// is rejected by isCommandCandidateNameValid below.
+const VALID_CLI_SHIM_EXTENSIONS = new Set([
+  "",
+  ".cmd",
+  ".bat",
+  ".exe",
+  ".ps1",
+  ".sh",
+  ".bash",
+]);
+
+/**
+ * Returns true when `commandPath`'s basename is plausibly the CLI we are
+ * trying to wrap. We require the basename (after stripping a single shim
+ * extension) to equal `cli`, OR to be the `<cli>.evo-original*` legacy
+ * backup form that older versions of evo wrote.
+ *
+ * This guards against `where <cli>` or stored config returning an
+ * interpreter binary (node.exe, python.exe, pwsh.exe, ...) at the same
+ * lookup name -- in production we observed
+ * `originalCommandMap.claude = "C:\\Program Files\\nodejs\\node.exe"`
+ * which caused the evo proxy to spawn the Node.js REPL whenever the user
+ * ran `claude`. See PR fix/claude-resolution-reject-interpreter-fallback.
+ */
+export function isCommandCandidateNameValid(commandPath: string, cli: SupportedCli): boolean {
+  if (!commandPath) return false;
+
+  // Test-only escape hatch: integration tests deliberately mock the wrapped
+  // CLI by mapping `claude -> process.execPath` (i.e. node.exe) and feeding
+  // a script as argv[0]. We allow this only when BOTH EVO_TEST_MODE=1 AND
+  // EVO_TEST_ALLOW_INTERPRETER=1 are set, so production code paths cannot
+  // accidentally trip it.
+  if (
+    process.env.EVO_TEST_MODE === "1" &&
+    process.env.EVO_TEST_ALLOW_INTERPRETER === "1"
+  ) {
+    return true;
+  }
+
+  const base = path.basename(commandPath);
+  if (!base) return false;
+
+  // Legacy evo backup form: e.g. `claude.evo-original`, `claude.evo-original.cmd`.
+  // We always allow these for the cli they shadow.
+  const legacyMatch = /^(.+)\.evo-original(?:\.(?:cmd|ps1))?$/i.exec(base);
+  if (legacyMatch && legacyMatch[1].toLowerCase() === cli.toLowerCase()) {
+    return true;
+  }
+
+  const ext = path.extname(base).toLowerCase();
+  // Reject anything with an extension we don't recognize as a shim form.
+  if (!VALID_CLI_SHIM_EXTENSIONS.has(ext)) return false;
+
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  return stem.toLowerCase() === cli.toLowerCase();
+}
+
 function rankResolvedCommandCandidate(commandPath: string): number {
   // Ranking is deterministic across platforms: Evo wraps Windows-native CLI shims
   // (claude.cmd / claude.exe), and tests must verify the same preference order on
@@ -295,8 +354,18 @@ function extractShimTargetPath(commandPath: string): string | null {
   return null;
 }
 
-function isUsableCommandCandidate(commandPath: string): boolean {
+function isUsableCommandCandidate(commandPath: string, cli?: SupportedCli): boolean {
   if (!commandPath || !fs.existsSync(commandPath)) return false;
+  // Reject candidates whose basename is not the cli we're wrapping. This
+  // prevents an interpreter binary (node.exe, python.exe, ...) from
+  // sneaking through if `where <cli>` or stored config returns one.
+  if (cli && !isCommandCandidateNameValid(commandPath, cli)) {
+    shellResolveLog.warn("rejected command candidate with mismatched basename", {
+      cli,
+      candidate: commandPath,
+    });
+    return false;
+  }
   const shimTarget = extractShimTargetPath(commandPath);
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }
@@ -323,6 +392,17 @@ function getSiblingCommandCandidates(commandPath: string, cli: SupportedCli): st
 }
 
 function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCli, resolved: string): void {
+  // Defensive: never persist a poisoned candidate. If callers somehow get
+  // here with one (they shouldn't, because resolveOriginalCommand filters
+  // through isUsableCommandCandidate), bail loudly rather than write it.
+  if (!isCommandCandidateNameValid(resolved, cli)) {
+    shellResolveLog.warn("refusing to persist poisoned command candidate", {
+      cli,
+      resolved,
+    });
+    return;
+  }
+
   const persistFor = (targetCwd: string): void => {
     const config = ensureEvoConfig(targetCwd);
     if (config.shellIntegration.originalCommandMap[cli] === resolved) return;
@@ -342,6 +422,38 @@ function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCl
   if (normalize(shellHome) !== normalize(cwd)) {
     persistFor(shellHome);
   }
+}
+
+/**
+ * Self-heal: if the stored `originalCommandMap[cli]` is not a plausible
+ * shim for `cli` (e.g. it's `node.exe`, `python.exe`, or anything whose
+ * basename does not match the cli name), strip it from the on-disk
+ * config so the discovery path runs cleanly.
+ *
+ * Returns true if a value was cleaned, false otherwise.
+ */
+function cleanPoisonedConfigEntry(targetCwd: string, cli: SupportedCli): boolean {
+  const config = ensureEvoConfig(targetCwd);
+  const stored = config.shellIntegration.originalCommandMap[cli];
+  if (!stored) return false;
+  if (isCommandCandidateNameValid(stored, cli)) return false;
+
+  shellResolveLog.warn("self-heal: removing poisoned originalCommandMap entry", {
+    cli,
+    stored,
+    targetCwd,
+  });
+
+  const nextMap = { ...config.shellIntegration.originalCommandMap };
+  delete nextMap[cli];
+  updateEvoConfig(targetCwd, {
+    ...config,
+    shellIntegration: {
+      ...config.shellIntegration,
+      originalCommandMap: nextMap,
+    },
+  });
+  return true;
 }
 
 function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli: SupportedCli): string[] {
@@ -371,6 +483,14 @@ function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli
     .filter(Boolean)
     .filter((item) => normalize(path.dirname(item)) !== normalize(binDir))
     .filter((item) => !isLegacyEvoBackupCommand(item))
+    .filter((item) => {
+      if (isCommandCandidateNameValid(item, cli)) return true;
+      shellPathLog.warn("dropping path candidate with mismatched basename", {
+        candidate: item,
+        cli,
+      });
+      return false;
+    })
     .sort((a, b) => rankResolvedCommandCandidate(a) - rankResolvedCommandCandidate(b)),
   );
   for (const candidate of candidates) {
@@ -381,6 +501,17 @@ function discoverOriginalCommandsFromPath(shellHome: string, binDir: string, cli
 
 export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string | null {
   const shellHome = getShellHome(cwd);
+
+  // Self-heal: scrub poisoned originalCommandMap entries (e.g. a stored
+  // `node.exe` for cli=claude) BEFORE we read them. Without this, a
+  // pre-existing bad config would short-circuit resolution by being the
+  // first candidate considered. We do this for both cwd and shellHome
+  // so per-project and global state are both cleaned.
+  cleanPoisonedConfigEntry(cwd, cli);
+  if (normalize(shellHome) !== normalize(cwd)) {
+    cleanPoisonedConfigEntry(shellHome, cli);
+  }
+
   const localConfig = ensureEvoConfig(cwd);
   const shellConfig = shellHome === cwd ? localConfig : ensureEvoConfig(shellHome);
   const localKnown = localConfig.shellIntegration.originalCommandMap[cli];
@@ -397,7 +528,7 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
     ...liveConfiguredCandidates,
     ...discoveredCandidates,
     ...fallbackCandidates,
-  ]).find((candidate) => isUsableCommandCandidate(candidate)) ?? null;
+  ]).find((candidate) => isUsableCommandCandidate(candidate, cli)) ?? null;
 
   if (resolved && !isLegacyEvoBackupCommand(resolved)) {
     persistResolvedCommand(cwd, shellHome, cli, resolved);

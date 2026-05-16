@@ -44,6 +44,7 @@ const ORIGINAL_ENV = {
   EVO_HOME: process.env.EVO_HOME,
   EVO_TEST_MODE: process.env.EVO_TEST_MODE,
   EVO_TEST_WHERE_STDOUT: process.env.EVO_TEST_WHERE_STDOUT,
+  EVO_TEST_ALLOW_INTERPRETER: process.env.EVO_TEST_ALLOW_INTERPRETER,
 };
 
 const tempDirs: string[] = [];
@@ -104,6 +105,7 @@ afterEach(() => {
     "EVO_HOME",
     "EVO_TEST_MODE",
     "EVO_TEST_WHERE_STDOUT",
+    "EVO_TEST_ALLOW_INTERPRETER",
   ] as const) {
     const orig = ORIGINAL_ENV[k];
     if (orig === undefined) delete process.env[k];
@@ -143,6 +145,12 @@ async function runProxyWithMock(opts: {
   // developer's actual evo install.
   process.env.EVO_TEST_MODE = "1";
   process.env.EVO_TEST_WHERE_STDOUT = "";
+  // Opt this integration test in to the resolver's interpreter-name escape
+  // hatch so that mapping `claude -> process.execPath` (node.exe) below is
+  // accepted. Without this, the basename validation added in
+  // src/shellIntegration.ts (fix/claude-resolution-reject-interpreter-fallback)
+  // rejects the mock and resolveOriginalCommand returns null.
+  process.env.EVO_TEST_ALLOW_INTERPRETER = "1";
   process.env.EVO_HOME = opts.cwd;
   const config = ensureEvoConfig(opts.cwd);
   updateEvoConfig(opts.cwd, {
