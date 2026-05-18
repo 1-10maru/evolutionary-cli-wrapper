@@ -458,7 +458,7 @@ _TIPS = [
         'after': '/batch "React\u304b\u3089Vue\u306b\u79fb\u884c" \u3067\u5bfe\u8c61\u30d5\u30a1\u30a4\u30eb\u3092\u4e26\u5217\u5909\u63db',
     },
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30d9\u30b9\u30c8\u30d7\u30e9\u30af\u30c6\u30a3\u30b9 (auto-synced from code.claude.com) \u2500\u2500
-    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=2026-05-11
+    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/best-practices fetched=2026-05-18
     {'headline': 'Claude Code on the web', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': 'Claude Code on desktop', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '**Reference files with `@`** instead of describing where code lives. Claude reads the file before responding.', 'tier': 1, 'category': 'specificity', 'before': None, 'after': None},
@@ -500,7 +500,7 @@ _TIPS = [
     {'headline': 'Use `/clear` frequently between tasks to reset the context window entirely', 'tier': 1, 'category': 'context', 'before': None, 'after': None},
     {'headline': 'When auto compaction triggers, Claude summarizes what matters most, including code patterns, file states, and key decisions', 'tier': 2, 'category': 'context', 'before': None, 'after': None},
     {'headline': 'For more control, run `/compact <instructions>`, like `/compact Focus on the API changes`', 'tier': 2, 'category': 'context', 'before': None, 'after': None},
-    {'headline': 'To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here**. This condenses messages from that point forward while keeping earlier context intact.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
+    {'headline': 'To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [Restore vs. summarize](/docs/en/checkpointing#restore-vs-summarize).', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
     {'headline': 'Customize compaction behavior in CLAUDE.md with instructions like `"When compacting, always preserve the full list of modified files and any test commands"` to ensure critical context survives summarization', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
     {'headline': 'For quick questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.', 'tier': 1, 'category': 'verification', 'before': None, 'after': None},
     {'headline': '[Worktrees](/docs/en/worktrees): run separate CLI sessions in isolated git checkouts so edits don’t collide', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
@@ -519,10 +519,11 @@ _TIPS = [
     # AUTO-GENERATED:END
 
     # \u2500\u2500 Claude Code \u516c\u5f0f\u30b9\u30e9\u30c3\u30b7\u30e5\u30b3\u30de\u30f3\u30c9 (auto-synced from docs.claude.com) \u2500\u2500
-    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/commands fetched=2026-05-11
+    # AUTO-GENERATED:START source=https://code.claude.com/docs/en/commands fetched=2026-05-18
     {'headline': '/add-dir — Add a working directory for file access during the current session.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/agents — Manage agent configurations', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
     {'headline': '/autofix-pr — Spawn a Claude Code on the web session that watches the current branch’s PR and pushes fixes when CI fails or reviewers leave comments.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/background — Detach the current session to run as a background agent and free this terminal.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/batch — Orchestrate large-scale changes across a codebase in parallel.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/branch — Create a branch of the current conversation at this point.', 'tier': 2, 'category': 'verification', 'before': None, 'after': None},
     {'headline': '/btw — Ask a quick side question without adding to the conversation', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
@@ -547,6 +548,7 @@ _TIPS = [
     {'headline': '/feedback — Submit feedback about Claude Code.', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/fewer-permission-prompts — Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts', 'tier': 3, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/focus — Toggle the focus view, which shows only your last prompt, a one-line tool-call summary with edit diffstats, and the final response.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/goal — Set a goal: Claude keeps working across turns until the condition is met.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/heapdump — Write a JavaScript heap snapshot and a memory breakdown to ~/Desktop, or your home directory on Linux without a Desktop folder, for diagnosing high memory usage.', 'tier': 3, 'category': 'recovery', 'before': None, 'after': None},
     {'headline': '/help — Show help and available commands', 'tier': 1, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/hooks — View hook configurations for tool events', 'tier': 1, 'category': 'permissions', 'before': None, 'after': None},
@@ -582,6 +584,7 @@ _TIPS = [
     {'headline': '/rewind — Rewind the conversation and/or code to a previous point, or summarize from a selected message.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/sandbox — Toggle sandbox mode.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/schedule — Create, update, list, or run routines, which execute on Anthropic-managed cloud infrastructure.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/scroll-speed — Adjust mouse wheel scroll speed interactively, with a ruler you can scroll while the dialog is open to preview the change.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/security-review — Analyze pending changes on the current branch for security vulnerabilities.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/setup-bedrock — Configure Amazon Bedrock authentication, region, and model pins through an interactive wizard.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/setup-vertex — Configure Google Vertex AI authentication, project, region, and model pins through an interactive wizard.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
@@ -591,6 +594,7 @@ _TIPS = [
     {'headline': '/status — Open the Settings interface (Status tab) showing version, model, account, and connectivity.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/statusline — Configure Claude Code’s status line.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/stickers — Order Claude Code stickers', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
+    {'headline': '/stop — Stop the current background session.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/tasks — List and manage background tasks.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/team-onboarding — Generate a team onboarding guide from your Claude Code usage history.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
     {'headline': '/teleport — Pull a Claude Code on the web session into this terminal: opens a picker, then fetches the branch and conversation.', 'tier': 2, 'category': 'general', 'before': None, 'after': None},
