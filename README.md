@@ -32,7 +32,7 @@
 
 **EvoPet** lives in your [Claude Code](https://claude.com/claude-code) statusline. On every render it shows three things: a context / rate-limit gauge, a mood line from a little pixel pet, and a short, actionable prompt-engineering tip — sometimes with a `❌ before / ✅ after` example. Write sharper prompts and the pet levels up; drift into vague requests or fix-loops and it notices and nudges you back.
 
-It runs **entirely locally**. No Claude API calls, no token consumption, no telemetry, and nothing about your sessions is ever uploaded. The only network call is one throttled npm-registry check per day for the "update available" notice — and you can turn that off.
+It runs **entirely locally**. No Claude API calls, no token consumption, no telemetry, and nothing about your sessions is ever uploaded. The statusline that `evo install-statusline` deploys makes no network calls of its own; the only optional network access is a once-a-day npm-registry check for an "update available" notice, performed by the `evo` CLI's own renderer and disabled with `EVO_NO_UPDATE_CHECK=1`.
 
 There are two ways to use this repository:
 
@@ -69,7 +69,7 @@ npx evolutionary-cli-wrapper install-statusline
 | Statusline is blank after install | Restart the Claude Code session. The default display mode has been `expansion` since v3.5.0; if you're on an older deploy, run `evo display expansion` then `evo install-statusline --yes`. |
 | `python: command not found` on render | The statusline is a Python script. Install Python 3 and make sure `python` resolves on your `PATH`. |
 | Tips didn't change after `npm update -g` | The deployed `~/.claude/base_statusline.py` is a *copy* of the package file — re-run `evo install-statusline --yes` to redeploy the refreshed tips. |
-| The `⚠ update:` notice is noisy / you're offline | Set `EVO_NO_UPDATE_CHECK=1` to suppress the registry check and the notice. |
+| The `⚠ update:` notice is noisy / you're offline | The notice comes from the `evo` CLI's own renderer (not the deployed statusline). Set `EVO_NO_UPDATE_CHECK=1` to suppress the registry check and the notice. |
 | You want your old statusline back | `evo install-statusline --uninstall` removes the script and restores the most recent `settings.json` backup. |
 
 ## Getting started
@@ -101,7 +101,8 @@ Commands most users touch:
 | `evo pet list` | List the available EvoPet species. |
 | `evo pet choose <id>` | Set your pet species (e.g. `evo pet choose cat`). |
 | `evo display [mode]` | Toggle the statusline layout: `minimum`, `expansion`, or `toggle`. No arg prints the current mode. |
-| `evo logs [--tail N] [--since 30m]` | Tail recent Evo log lines. |
+| `evo doctor` | Print a one-page health report — versions, environment, file checks, recent errors, and live-state freshness (`--json` for machine-readable output). |
+| `evo logs [--tail N] [--since 30m] [--bundle]` | Tail recent Evo log lines, or `--bundle` a redacted zip of the last 7 days of logs + doctor output for a bug report. |
 
 Developer / power-user commands (mostly relevant after `npm run setup` from a clone):
 
@@ -130,7 +131,7 @@ Developer / power-user commands (mostly relevant after `npm run setup` from a cl
 The Python statusline script is invoked by Claude Code on every render — no polling, no background process. It reads the JSON Claude Code passes on stdin plus, when a developer is running through the in-repo proxy, an optional `~/.claude/.evo-live.json` live-state file.
 
 - **When the proxy is active**, EvoPet reflects real session signals: a per-session turn counter, detected loops, prompt-quality scores, and the current mood.
-- **When it isn't** (the default npm path), the statusline self-tracks call counts in `~/.claude/.evo-self.json` and rotates through the whole tip library — a curated set plus every tip auto-synced from Anthropic's public Claude Code docs — using a tier-weighted round-robin (core / default / niche, weighted 5 : 2 : 1).
+- **When it isn't** (the default npm path), the statusline self-tracks call counts in `~/.claude/.evo-self-state.json` and rotates through the whole tip library — a curated set plus every tip auto-synced from Anthropic's public Claude Code docs — using a tier-weighted round-robin (core / default / niche, weighted 5 : 2 : 1).
 
 The turn counter is scoped to the current Claude Code session ID, so sub-agent dispatches and parallel sessions in the same directory don't inflate or clobber each other's numbers. Since v3.4.0, per-session state lives in `<cwd>/.evo/sessions/<sessionId>.json` and files older than 7 days are pruned automatically.
 
@@ -148,14 +149,14 @@ A full map of everything under `docs/` lives in **[docs/README.md](./docs/README
 
 ## Configuration
 
-Environment variables that affect the **npm-installed statusline**:
+The deployed statusline (`base_statusline.py`) needs no configuration and reads no environment variables of its own. These variables affect the **`evo` CLI** — specifically its built-in `evo statusline` renderer and its update check:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses both the daily npm-registry fetch and the update notice. |
+| `EVO_NO_UPDATE_CHECK` | unset | When `1`, disables the `evo` CLI's npm-registry update check and its `⚠ update:` notice. |
 | `EVO_HOME` | `~` | Overrides where the update-check cache lives (`<EVO_HOME>/.evo/update-check.json`). |
 
-The statusline itself performs a lightweight update check: on render, with no fresh cache it fires one non-blocking GET to `registry.npmjs.org` (24-hour stale-while-revalidate). When a newer version is published, it renders an `⚠ update: <current> → <latest>` notice.
+When the statusline is rendered through the `evo` CLI (`evo statusline`), it performs a lightweight update check: with no fresh cache it fires one non-blocking GET to `registry.npmjs.org` (stale-while-revalidate) and, when a newer version is published, appends an `⚠ update: <current> → <latest>` notice. The Python statusline that `evo install-statusline` deploys does not do this.
 
 <details>
 <summary><b>Developer-mode environment variables</b> (only apply when running the <code>evo</code> Node CLI itself)</summary>

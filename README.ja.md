@@ -32,7 +32,7 @@
 
 **EvoPet** は [Claude Code](https://claude.com/claude-code) のステータスラインに常駐します。描画のたびに 3 つを表示します: コンテキスト / レート制限のゲージ、ドット絵ペットのムード行、そして短く実践的なプロンプトエンジニアリングのヒント（ときに `❌ before / ✅ after` の例つき）。指示が鋭くなればペットは成長し、曖昧な依頼や修正ループに陥るとそれを検知してそっと軌道修正します。
 
-動作は**完全にローカル**です。Claude API を呼ばず、トークンを消費せず、テレメトリも送らず、セッションの内容は一切アップロードされません。唯一の通信は「更新あり」通知のための 1 日 1 回に絞った npm レジストリ確認だけで、それもオフにできます。
+動作は**完全にローカル**です。Claude API を呼ばず、トークンを消費せず、テレメトリも送らず、セッションの内容は一切アップロードされません。`evo install-statusline` がデプロイするステータスライン自体はネットワーク通信を一切行いません。唯一の任意通信は「更新あり」通知のための 1 日 1 回の npm レジストリ確認だけで、これは `evo` CLI 自身のレンダラーが行い、`EVO_NO_UPDATE_CHECK=1` で無効化できます。
 
 このリポジトリの使い方は 2 通りあります。
 
@@ -69,7 +69,7 @@ npx evolutionary-cli-wrapper install-statusline
 | インストール後にステータスラインが空 | Claude Code セッションを再起動。既定の表示モードは v3.5.0 以降 `expansion` です。古いデプロイの場合は `evo display expansion` の後 `evo install-statusline --yes` を実行。 |
 | 描画時に `python: command not found` | ステータスラインは Python スクリプトです。Python 3 をインストールし、`python` が `PATH` で解決できることを確認してください。 |
 | `npm update -g` してもヒントが変わらない | デプロイ済みの `~/.claude/base_statusline.py` はパッケージファイルの*コピー*です。`evo install-statusline --yes` で再デプロイしてください。 |
-| `⚠ update:` 通知がうるさい / オフライン | `EVO_NO_UPDATE_CHECK=1` でレジストリ確認と通知を抑制できます。 |
+| `⚠ update:` 通知がうるさい / オフライン | この通知はデプロイ済みステータスラインではなく `evo` CLI 自身のレンダラーが出します。`EVO_NO_UPDATE_CHECK=1` でレジストリ確認と通知を抑制できます。 |
 | 元のステータスラインに戻したい | `evo install-statusline --uninstall` でスクリプトを削除し、直近の `settings.json` バックアップを復元します。 |
 
 ## はじめに
@@ -101,7 +101,8 @@ npm uninstall -g evolutionary-cli-wrapper
 | `evo pet list` | 利用可能な EvoPet の種類を一覧。 |
 | `evo pet choose <id>` | ペットの種類を設定（例: `evo pet choose cat`）。 |
 | `evo display [mode]` | ステータスラインのレイアウトを切り替え: `minimum` / `expansion` / `toggle`。引数なしで現在のモードを表示。 |
-| `evo logs [--tail N] [--since 30m]` | 直近の Evo ログ行を表示。 |
+| `evo doctor` | 1 ページのヘルスレポートを表示 — バージョン・環境・ファイル確認・直近のエラー・ライブステートの鮮度（`--json` で機械可読出力）。 |
+| `evo logs [--tail N] [--since 30m] [--bundle]` | 直近の Evo ログ行を表示、または `--bundle` で直近 7 日のログ + doctor 出力を秘匿処理した zip にまとめる（バグ報告用）。 |
 
 開発者・パワーユーザー向けコマンド（多くは clone して `npm run setup` した後に有効）:
 
@@ -130,7 +131,7 @@ npm uninstall -g evolutionary-cli-wrapper
 Python ステータスラインスクリプトは Claude Code が描画ごとに呼び出します（ポーリングなし、バックグラウンドプロセスなし）。Claude Code が stdin で渡す JSON と、開発者が in-repo proxy 経由で動かしている時に書き込まれるオプションの `~/.claude/.evo-live.json` ライブステートを読みます。
 
 - **proxy が有効なとき**、EvoPet は実際のセッションシグナルを反映します: セッション単位のターンカウンタ、検出したループ、プロンプト品質スコア、現在のムード。
-- **無効なとき**（既定の npm パス）、ステータスラインは `~/.claude/.evo-self.json` に呼び出し回数を記録し、ヒントライブラリ全体（手書きの厳選リスト + Anthropic 公式 Claude Code ドキュメントから自動同期された全件）を、Tier 重み付き（core / default / niche を 5 : 2 : 1）のラウンドロビンでローテーションします。
+- **無効なとき**（既定の npm パス）、ステータスラインは `~/.claude/.evo-self-state.json` に呼び出し回数を記録し、ヒントライブラリ全体（手書きの厳選リスト + Anthropic 公式 Claude Code ドキュメントから自動同期された全件）を、Tier 重み付き（core / default / niche を 5 : 2 : 1）のラウンドロビンでローテーションします。
 
 ターンカウンタは現在の Claude Code セッション ID にスコープされるため、サブエージェントへの委譲や同一ディレクトリの並列セッションが互いの数値を膨らませたり上書きしたりしません。v3.4.0 以降、セッション単位の状態は `<cwd>/.evo/sessions/<sessionId>.json` に保存され、7 日より古いファイルは自動的に削除されます。
 
@@ -148,14 +149,14 @@ Python ステータスラインスクリプトは Claude Code が描画ごとに
 
 ## 設定
 
-**npm 版ステータスライン**に影響する環境変数:
+デプロイされるステータスライン（`base_statusline.py`）は設定不要で、環境変数も読みません。以下の変数は **`evo` CLI**（特に組み込みの `evo statusline` レンダラーと更新チェック）に影響します:
 
 | 変数 | 既定 | 効果 |
 |---|---|---|
-| `EVO_NO_UPDATE_CHECK` | 未設定 | `1` で毎日の npm レジストリ fetch と更新通知の両方を抑制。 |
+| `EVO_NO_UPDATE_CHECK` | 未設定 | `1` で `evo` CLI の npm レジストリ更新チェックと `⚠ update:` 通知を無効化。 |
 | `EVO_HOME` | `~` | update-check キャッシュの保存先（`<EVO_HOME>/.evo/update-check.json`）を上書き。 |
 
-ステータスライン自体も軽量な更新チェックを行います。描画時に新鮮なキャッシュがなければ `registry.npmjs.org` へ非ブロッキングの GET を 1 回投げ（24 時間 stale-while-revalidate）、新しいバージョンが公開されていれば `⚠ update: <current> → <latest>` を表示します。
+`evo` CLI 経由で（`evo statusline`）ステータスラインを描画した場合、軽量な更新チェックを行います。新鮮なキャッシュがなければ `registry.npmjs.org` へ非ブロッキングの GET を 1 回投げ（stale-while-revalidate）、新しいバージョンが公開されていれば `⚠ update: <current> → <latest>` を付加します。`evo install-statusline` がデプロイする Python ステータスラインはこれを行いません。
 
 <details>
 <summary><b>開発者モードの環境変数</b>（<code>evo</code> Node CLI を直接動かす時のみ有効）</summary>
