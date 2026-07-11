@@ -17,6 +17,30 @@
 ### Internal
 - Declared `engines.node >= 20`.
 
+## v3.6.0-rc.1 (2026-07-11)
+
+_Release candidate for v3.6.0 — the changes below are exactly what the stable v3.6.0 will ship._
+
+### Added
+- Model-aware prompting tips: the statusline and the proxy's end-of-episode comments now layer model-tuned guidance on top of the base best-practices — Claude Fable / Mythos map to the Fable prompting doc, Opus to the Opus doc, and every other model falls back to the base tips. Backed by a new bundled `src/data/prompting-guidance.json` and `src/promptingGuidance.ts`.
+- Weekly rule-based (zero-LLM) sync of Anthropic's Japanese prompt-engineering docs into the bundled guidance, via `scripts/sync-claude-docs.mjs` and the `sync-claude-docs.yml` workflow, with `scripts/validate-guidance.mjs` guarding the data shape.
+
+### Fixed
+- Wrapper no longer hangs after the wrapped CLI exits (the `/exit` hang). The `proxy` action now propagates the wrapped CLI's exit code and force-exits, instead of always exiting `0` and lingering on open handles. `runProxySession` returns the child's exit code.
+- Interactive (TTY) stdin forwarding is now paused and unref'd on teardown, so a resumed stdin can no longer keep the event loop alive after the child has exited.
+- `SIGINT` / `SIGTERM` / `SIGHUP` are forwarded to the wrapped CLI instead of exiting the wrapper with `0` and orphaning the child. The wrapper now exits with the child's status (or `128 + signal`), and on Windows tears down the whole `cmd.exe`/`pwsh` process tree so nothing is left orphaned. During interactive passthrough the first Ctrl+C is left for the child to handle; a second signal (or a console-close `SIGHUP`) escalates to a forced tree-kill.
+- The background update-check timeout and the log-flush listener no longer keep the process alive: the fetch timer is `unref`'d and the log file descriptor is closed on exit.
+- On Windows, original-command resolution rejects candidates that cannot actually be launched on the platform (e.g. an extensionless POSIX stub), preventing a broken command mapping from being cached.
+
+### Documentation
+- Hero-branded README overhaul (English `README.md` + new `README.ja.md`) with new banner and icon assets under `assets/`, a `docs/` index, and refreshed `package.json` `keywords` and `homepage`.
+
+### Removed
+- Deleted the committed `bin/claude` and `bin/codex` shim scripts (they embedded a hardcoded developer path) and dropped `bin/` from the published `files` list. The real `evo` bin entry (`dist/index.js`) is unaffected.
+
+### Internal
+- Declared `engines.node >= 20`.
+
 ## v3.5.1 (2026-05-12)
 
 ### Fixed
