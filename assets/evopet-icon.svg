@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Evopet">
+
+
+<rect width="256" height="256" rx="52" fill="#1A1512"/>
+<rect x="44.0" y="36.0" width="168" height="168" rx="40.32" fill="none" stroke="#D97757" stroke-width="12.6"/>
+<path d="M 80.96 39.36 l 18.48 -26.88 l 18.48 26.88" fill="none" stroke="#D97757" stroke-width="10.08" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 138.08 39.36 l 18.48 -26.88 l 18.48 26.88" fill="none" stroke="#D97757" stroke-width="10.08" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="84.32" y="93.12" width="25.2" height="25.2" rx="5.04" fill="#D97757"/>
+<rect x="146.48" y="93.12" width="25.2" height="25.2" rx="5.04" fill="#D97757"/>
+<path d="M 101.12 140.16 l 26.88 20.16 l 26.88 -20.16" fill="none" stroke="#EDA084" stroke-width="10.08" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="98" y="212" width="60" height="14" fill="#D97757"/>
+</svg>

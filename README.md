@@ -1,432 +1,223 @@
-# Evolutionary CLI Wrapper
+<div align="center">
+  <a href="https://www.npmjs.com/package/evolutionary-cli-wrapper">
+    <img src="https://raw.githubusercontent.com/1-10maru/evolutionary-cli-wrapper/main/assets/evopet-banner.png" alt="EvoPet — a pet that evolves in your terminal" width="100%">
+  </a>
+</div>
 
-[![CI](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml/badge.svg)](https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml)
+<p align="center">
+  <b>English</b> · <a href="./README.ja.md">日本語</a>
+</p>
 
-[English](#english) | [日本語](#日本語)
+<p align="center">
+  A local <a href="https://claude.com/claude-code">Claude Code</a> statusline companion that raises a pixel-art pet while it coaches your prompts — <b>zero tokens, zero telemetry, entirely on your machine.</b>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/evolutionary-cli-wrapper"><img src="https://img.shields.io/npm/v/evolutionary-cli-wrapper?logo=npm&label=npm&color=CB4B16" alt="npm version"></a>
+  <a href="https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml"><img src="https://github.com/1-10maru/evolutionary-cli-wrapper/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A5%2020-5FA04E?logo=node.js&logoColor=white" alt="Node 20 or newer">
+  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/evolutionary-cli-wrapper?color=4C9A2A" alt="License: ISC"></a>
+  <a href="https://claude.com/claude-code"><img src="https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=anthropic&logoColor=white" alt="Built with Claude Code"></a>
+</p>
+
+<!--
+  DEMO PLACEHOLDER — a follow-up task records the statusline demo GIF and drops it here, e.g.:
+  <div align="center">
+    <img src="https://raw.githubusercontent.com/1-10maru/evolutionary-cli-wrapper/main/assets/evopet-demo.gif" alt="EvoPet statusline demo" width="100%">
+  </div>
+  Do not embed placeholder or mock media in the meantime.
+-->
 
 ---
 
-## English
+**EvoPet** lives in your [Claude Code](https://claude.com/claude-code) statusline. On every render it shows three things: a context / rate-limit gauge, a mood line from a little pixel pet, and a short, actionable prompt-engineering tip — sometimes with a `❌ before / ✅ after` example. Write sharper prompts and the pet levels up; drift into vague requests or fix-loops and it notices and nudges you back.
 
-EvoPet is a local statusline companion for [Claude Code](https://claude.com/claude-code) that surfaces short prompt-engineering tips, session mood comments, and a one-line context/rate-limit gauge directly inside the Claude Code statusline. Tips are sourced from a curated list plus an auto-synced subset of Anthropic's public Claude Code docs. The tool runs entirely locally — it does not consume Claude API tokens, send telemetry, or upload session content.
+It runs **entirely locally**. No Claude API calls, no token consumption, no telemetry, and nothing about your sessions is ever uploaded. The statusline that `evo install-statusline` deploys makes no network calls of its own; the only optional network access is a once-a-day npm-registry check for an "update available" notice, performed by the `evo` CLI's own renderer and disabled with `EVO_NO_UPDATE_CHECK=1`.
 
-#### v3.1 highlights
+There are two ways to use this repository:
 
-- **Stage progression is now ISG-based** (Ideal State Gauge — sustained prompt quality), not cumulative EXP. Stages map to ISG bands: egg <25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+. Existing users may see their stage drop until prompt quality catches up.
-- **Mascot is PC-global**: `EVO_HOME` defaults to `~/.claude` instead of `<cwd>`. A one-time migration copies any existing per-cwd `.evo/mascot.json` into `~/.claude/.evo/` on first launch.
-- **Tips are now category-aware**: when the proxy detects a signal (e.g., `prompt_too_vague`), the statusline filters tips to the matching category (`specificity`, `verification`, `permissions`, `context`, `recovery`, `exploration`).
-- **Mood comments work in proxy mode too**: the 5-band mood comment (start / early / working / busy / critical) appears in the proxy-active path when no advice line is present, not just the no-proxy fallback.
+- **As an npm user** — install the package and wire only the statusline into Claude Code. This is the supported path for most people.
+- **As a developer** — clone the repo to hack on the code, run the test suite, or use the in-repo proxy machinery that records and scores whole sessions (not shipped to npm).
 
-There are two distinct ways to use this repository:
+## Quick install
 
-- **As an npm consumer** — install the package globally and wire only the statusline into Claude Code. This is the supported path for most users.
-- **As a developer** — clone the repo to work on the codebase, run the test suite, or use the in-repo shell-integration / proxy machinery (which is not shipped to npm).
-
-### Quick install (users)
+> **Prerequisites:** [Node.js](https://nodejs.org) 20 or newer (for the `evo` CLI) and Python 3 on your `PATH` (the deployed statusline is a Python script Claude Code invokes on each render).
 
 ```bash
 npm install -g evolutionary-cli-wrapper
 evo install-statusline
 ```
 
-`evo install-statusline` is interactive by default. It performs exactly two actions:
+`evo install-statusline` is interactive by default and does exactly two things:
 
-1. Copies `<package>/statusline.py` to `~/.claude/base_statusline.py`.
-2. Sets `statusLine` in `~/.claude/settings.json` to:
-   ```json
-   { "type": "command", "command": "python \"<HOME>/.claude/base_statusline.py\"" }
-   ```
-   Other keys in `settings.json` are preserved. If `settings.json` already exists, a timestamped backup is created at `~/.claude/settings.json.bak.<ISO-timestamp>` before the file is overwritten. If the existing `statusLine.command` is non-evopet, you are prompted before it is replaced.
+1. Copies the package's `statusline.py` to `~/.claude/base_statusline.py`.
+2. Sets `statusLine` in `~/.claude/settings.json` to
+   `{ "type": "command", "command": "python \"<HOME>/.claude/base_statusline.py\"" }`, preserving every other key. Your existing `settings.json` is backed up to `~/.claude/settings.json.bak.<timestamp>` first, and if the current `statusLine` points at a non-EvoPet command you're prompted before it's replaced.
 
-Flags:
+Then **restart your Claude Code session** to pick up the new statusline. Prefer a no-prompt run for CI or provisioning? Add `--yes`.
 
-- `--yes` — skip all prompts (use in CI / automated provisioning).
-- `--uninstall` — delete `~/.claude/base_statusline.py` and restore the most recent `settings.json.bak.*`. If no backup exists but the current `statusLine.command` points at `base_statusline.py`, the key is deleted.
-
-After install, restart your Claude Code session to pick up the new statusline.
-
-### What it does
-
-After installing, your Claude Code statusline shows three things:
-
-1. The model name, the cwd, and (when Claude Code provides them) `ctx`, `5h`, and `7d` usage gauges as colored dots with percentages.
-2. An EvoPet mood line that rotates a session-start boost message or a cwd/turn-aware comment.
-3. A short prompt-engineering tip with an optional `❌ before / ✅ after` example pair.
-
-### How it works
-
-The Python statusline script is invoked by Claude Code on each render (no polling, no background process). It reads the JSON Claude Code passes on stdin, plus an optional `~/.claude/.evo-live.json` file that the in-repo proxy writes when a developer is running through it. When `~/.claude/.evo-live.json` is absent, the statusline self-tracks call counts in `~/.claude/.evo-self.json` and rotates through every tip — both the curated list and all entries auto-synced from the official Claude Code docs — using a tier-weighted round-robin (Tier 1 core / Tier 2 default / Tier 3 niche, weighted 5 : 2 : 1; see [Updating](#updating) below).
-
-EvoPet's "X回目" counter reflects only user-typed messages within the current Claude Code session (identified by session ID). Sub-agent dispatches are tracked separately in the sub-agent's own JSONL and do not inflate the parent count. Switching directories or starting a new session resets the counter.
-
-Starting in v3.4.0, EvoPet's state is written per-session to `<cwd>/.evo/sessions/<sessionId>.json` (alongside the legacy `<cwd>/.evo/live-state.json` kept for back-compat). The statusline reads the file matching Claude Code's current `session_id` from the stdin payload, so multiple Claude Code sessions in the same directory no longer interfere with each other's metrics. Per-session files older than 7 days are pruned automatically at proxy startup. (v3.4.0 以降、EvoPet の状態は `<cwd>/.evo/sessions/<sessionId>.json` にセッション単位で保存され、同一ディレクトリで並列起動した Claude Code セッションが互いのメトリクスを上書きすることはなくなりました。)
-
-### Updating
-
-The published patch versions of this package roll forward automatically:
-
-- Every Monday at 03:00 UTC, the upstream repository's `Sync Claude Code Docs` workflow regenerates the auto-synced tip blocks inside `statusline.py` from `https://code.claude.com/docs/en/best-practices` and `https://code.claude.com/docs/en/commands`.
-- If anything changed, the workflow opens a PR labeled `auto-merge-ok`. When that PR merges to `main`, `Publish to npm` bumps the patch version and runs `npm publish`.
-
-To pull the latest tips:
+Don't want to install globally? Run it once with `npx`:
 
 ```bash
-npm update -g evolutionary-cli-wrapper
-evo install-statusline --yes   # re-deploy the refreshed statusline.py
+npx evolutionary-cli-wrapper install-statusline
 ```
-
-The deployed `~/.claude/base_statusline.py` is a copy of the file from the package, so you must re-run `install-statusline` after `npm update` for the new tips to take effect.
-
-The statusline itself also performs a lightweight update check: on render, if there is no fresh cache at `<EVO_HOME>/.evo/update-check.json` (default: `~/.evo/update-check.json`), it fires a non-blocking HTTP GET to `https://registry.npmjs.org/evolutionary-cli-wrapper/latest` with a 24-hour stale-while-revalidate cache. When the cached `latest` is newer than the running version, an `⚠ update: <current> → <latest> (npm update -g evolutionary-cli-wrapper)` notice is included in the render. Set `EVO_NO_UPDATE_CHECK=1` to disable.
-
-### Diagnostics
-
-- `evo doctor` — print a one-page health report (versions, env vars, file checks, recent errors, live-state freshness). Add `--json` for machine-readable output.
-- `evo logs --bundle [--out <path>]` — bundle the last 7 days of logs + redacted config + doctor output into a zip for sharing in bug reports. Sensitive paths and tokens are masked.
-- `EVO_DEBUG=1` — temporarily raise log level to DEBUG.
-- `DEBUG=evopet:proxy,evopet:render` — DEBUG only specific namespaces.
-- `EVO_LOG_FORMAT=json` — emit structured JSON logs (one object per line).
-
-See [docs/observability.md](docs/observability.md) for full details.
-
-### Uninstall
-
-```bash
-evo install-statusline --uninstall
-npm uninstall -g evolutionary-cli-wrapper
-```
-
-`--uninstall` removes `~/.claude/base_statusline.py` and restores the most recent backup of `~/.claude/settings.json` (or strips the evopet `statusLine` key in place if no backup is present). It does not delete `~/.claude/.evo-self.json` or `~/.evo/update-check.json`; remove those manually if desired.
-
-### Configuration / env vars
-
-Environment variables that affect the npm-installed statusline:
-
-| Variable | Default | Effect |
-|---|---|---|
-| `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses both the registry fetch and the update notice. |
-| `EVO_HOME` | `~` | Override for where the update-check cache lives (`<EVO_HOME>/.evo/update-check.json`). |
-
-The remaining environment variables documented in the [For developers](#for-developers) section (`EVO_LOG_LEVEL`, `EVO_LOG_DIR`, `EVO_LOG_DISABLE`, `EVO_CONFIG`, `EVO_PROXY_ACTIVE`) only have effect when running the `evo` Node CLI itself, which the npm-shipped statusline does not invoke.
-
-### Privacy & Data Handling
-
-EvoPet runs entirely on your local machine. No telemetry is sent. This section is the authoritative source for what EvoPet reads, writes, and sends over the network.
-
-#### What EvoPet reads
-- The current Claude Code JSONL transcript at `~/.claude/projects/<encoded-cwd>/*.jsonl` (this is the file Claude Code itself writes during your session)
-- Files under `<cwd>` for AST-level function diffs, respecting `.gitignore` and excluding `node_modules`, `.evo/`, `dist/`
-
-#### What EvoPet stores locally
-
-The npm package only ships `dist/`, `bin/`, `statusline.py`, `README.md`, and `LICENSE` (see `files` in `package.json`). When you run `evo install-statusline` plus normal Claude Code sessions, the following files may appear:
-
-- `~/.claude/base_statusline.py` — the deployed statusline script (a copy of the package's `statusline.py`)
-- `~/.claude/settings.json` — modified to add the `statusLine` entry. A `.bak.<timestamp>` sibling of the whole file is written before each overwrite
-- `~/.claude/.evo-self.json` — small JSON file the statusline uses to track call counts and last-seen session id when running standalone (no proxy)
-- `~/.evo/update-check.json` — registry update cache (24h TTL). Path overridable via `EVO_HOME`
-- `<cwd>/.evo/evolutionary.db` — SQLite, per-project episode history and scores (developer-mode / proxy path only)
-- `<cwd>/.evo/live-state.json` — latest live session state for statusline render (developer-mode / proxy path only)
-- `<cwd>/.evo/sessions/<sessionId>.json` — per-session state, v3.4.0+ (developer-mode / proxy path only)
-- `<EVO_HOME>/.evo/logs/session-<date>.log` (default) or `<EVO_LOG_DIR>/session-<date>.log` (when `EVO_LOG_DIR` is set) — daily log file (rotated, 30-day retention)
-- `~/.claude/.evo/mascot.json` — your EvoPet mascot state (PC-wide)
-
-No files are written under your project directories by the npm-installed flow. SQLite databases, `.evo/` per-project state, and shell shims only appear if you run the developer-mode `npm run setup` from a clone of this repo (see [For developers](#for-developers)).
-
-#### What EvoPet does NOT do
-- Does not send telemetry, metrics, or usage data to any server
-- Does not consume Claude API tokens (this is the whole point — local-only scoring)
-- The only outbound HTTP is an optional check against `registry.npmjs.org` for new-version notifications (disable with `EVO_NO_UPDATE_CHECK=1`)
-
-#### Retention
-- Logs: 30 days
-- Raw episode rows (in SQLite): 200 most recent (configurable via `retention.keepRecentRawEpisodes`)
-- Session JSON files: pruned after 7 days
-
-#### User controls
-- `EVO_LOG_DISABLE=1` — disable file logs entirely
-- Manually delete `<cwd>/.evo/` if you want to clear per-project tracking (the directory will be re-created on the next session)
-- `EVO_NO_UPDATE_CHECK=1` — suppress the update-check fetch to `registry.npmjs.org`
 
 ### Troubleshooting
 
-- **EvoPet not appearing in the statusline?** See [`docs/runbooks/evopet-not-appearing.md`](./docs/runbooks/evopet-not-appearing.md).
+| Symptom | Fix |
+|---|---|
+| Statusline is blank after install | Restart the Claude Code session. The default display mode has been `expansion` since v3.5.0; if you're on an older deploy, run `evo display expansion` then `evo install-statusline --yes`. |
+| `python: command not found` on render | The statusline is a Python script. Install Python 3 and make sure `python` resolves on your `PATH`. |
+| Tips didn't change after `npm update -g` | The deployed `~/.claude/base_statusline.py` is a *copy* of the package file — re-run `evo install-statusline --yes` to redeploy the refreshed tips. |
+| The `⚠ update:` notice is noisy / you're offline | The notice comes from the `evo` CLI's own renderer (not the deployed statusline). Set `EVO_NO_UPDATE_CHECK=1` to suppress the registry check and the notice. |
+| You want your old statusline back | `evo install-statusline --uninstall` removes the script and restores the most recent `settings.json` backup. |
 
-### For developers
+## Getting started
 
-#### Clone, build, test
-
-```bash
-git clone https://github.com/1-10maru/evolutionary-cli-wrapper.git
-cd evolutionary-cli-wrapper
-npm install
-npm run build       # tsc → dist/
-npm test            # vitest run tests
-```
-
-`npm run setup` (defined in `package.json`) runs `node scripts/setup.mjs`, which performs `npm run build`, `evo init`, `evo setup-shell` (which writes PowerShell / cmd / bash profile hooks under the repo's `bin/` to make `claude` go through the Evo proxy), and copies `statusline.py` to `~/.claude/base_statusline.py`. This script is **not** shipped to npm; it only runs from a clone.
-
-The proxy pipeline that records episodes, scores prompts, and writes per-project `.evo/` SQLite data is exercised through `claude` (intercepted by the shim) once `setup-shell` has run. Run `evo undo-shell` or `evo uninstall` to revert.
-
-#### Repo layout
-
-- `src/index.ts` — `evo` CLI entrypoint (commander).
-- `src/cli/installStatusline.ts` — `evo install-statusline` (the npm-consumer path).
-- `src/cli/statusline.ts` + `src/cli/statusline-data*.ts` — `evo statusline` Node renderer (parallel implementation of the Python `statusline.py`, used in tests).
-- `src/proxyRuntime.ts` + `src/proxy/` — proxy session driver and live-state writer (`~/.claude/.evo-live.json`).
-- `src/runtime.ts`, `src/scoring.ts`, `src/signalDetector.ts` — episode lifecycle, surrogate cost scoring, signal detection.
-- `src/db.ts` — better-sqlite3 persistence (`<cwd>/.evo/evolutionary.db`).
-- `src/ast.ts` — tree-sitter function-level diffs (TypeScript / JavaScript / Python).
-- `src/shellIntegration.ts` — shim and profile management for PowerShell, cmd, and bash.
-- `src/logger.ts` — file logger writing to `<EVO_LOG_DIR or cwd>/.evo/logs/session-<UTC-date>.log`, 30-day retention.
-- `src/updateCheck.ts` — npm-registry update check with 24h cache.
-- `src/issueIntake.ts` — GitHub issue reader for agent intake (used by `evo issue show`).
-- `src/capture/frictionCore.ts` + `src/capture/codexCapture.ts` + `src/capture/genericCapture.ts` — friction event aggregation, score, and stop-and-reframe decision; CLI-specific adapters for Codex and Claude/generic.
-- `src/mascot.ts` — EvoPet state and rendering.
-- `statusline.py` — the Python statusline shipped to npm consumers and deployed by `evo install-statusline`.
-- `scripts/setup.mjs` — developer convenience script (build + init + setup-shell + statusline copy).
-- `scripts/sync-claude-docs.mjs` — used by the weekly GitHub Actions cron to refresh AUTO-GENERATED tip blocks in `statusline.py`.
-- `install/evopet-install.sh` + `install/evopet-uninstall.sh` — bash-only alternative to `evo install-statusline` for users running from a clone (not in the npm package).
-- `tests/` — vitest suite plus a Python statusline render test.
-
-#### Shared-risk areas (coordinate before parallel edits)
-
-- `src/proxyRuntime.ts`
-- `src/index.ts`
-- `src/scoring.ts`
-- `src/db.ts`
-- `scripts/setup.mjs`
-
-#### Environment variables (developer mode)
-
-| Variable | Default | Effect |
-|---|---|---|
-| `EVO_HOME` | repo root or `~` | Resolves the global `.evo` directory used by mascot state and the update-check cache. |
-| `EVO_CONFIG` | `<cwd>/.evo/config.json` | Set by the shell shims so the `evo` CLI knows which config to read. |
-| `EVO_LOG_LEVEL` | `INFO` | One of `ERROR` / `WARN` / `INFO` / `DEBUG`. `DEBUG` also mirrors lines to stderr. |
-| `EVO_LOG_DIR` | `<cwd>` | Base directory; logs are written under `<EVO_LOG_DIR>/.evo/logs/session-YYYYMMDD.log`. |
-| `EVO_LOG_DISABLE` | `0` | When `1`, all log emission is a no-op. |
-| `EVO_NO_UPDATE_CHECK` | unset | When `1`, suppresses the npm-registry update check. |
-| `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when invoking the underlying `claude` binary, used to detect re-entry. |
-| `EVO_FORCE_NORMAL` | unset | When `1` or `true`, forces full (non-lightweight) tracking regardless of cwd heuristics. Takes precedence over `EVO_FORCE_LIGHT`. Useful when running `claude` from an aggregate parent directory where subagents operate on child projects. |
-| `EVO_FORCE_LIGHT` | unset | When `1` or `true`, forces lightweight tracking regardless of cwd heuristics. Overridden by `EVO_FORCE_NORMAL` when both are set. |
-| `EVOPET_ENABLED` | `1` | Read by `install/evopet-install.sh`'s shim only. Set to `0` to skip PATH wiring. |
-| `DISABLE_OPTIONAL_PROJECTS` | `0` | Read by the same shim only. Master kill-switch for `optional-projects.sh`. |
-
-#### Auto-sync pipeline
-
-The weekly `Sync Claude Code Docs` workflow (`.github/workflows/sync-claude-docs.yml`, cron `0 3 * * 1`) does the following:
-
-1. Runs `node scripts/sync-claude-docs.mjs`, which fetches the public Claude Code best-practices and commands pages, extracts bullet points, and rewrites the `# AUTO-GENERATED:START ... # AUTO-GENERATED:END` blocks in `statusline.py`.
-2. If `statusline.py` changed, opens a PR labeled `auto-merge-ok`. The label is created on the workflow's first run.
-3. An external auto-merge handler (the upstream uses `~/.claude/scripts/pr-handler.sh`) squash-merges PRs carrying that label after CI passes.
-4. On merge to `main`, `.github/workflows/publish-on-merge.yml` triggers, runs `npm version patch` (creating a tag and a `chore: release vX.Y.Z [skip ci]` commit), pushes, and runs `npm publish --access public`.
-
-#### Maintainer setup (one-time, on a fork)
-
-1. Generate an npm Automation token at `https://www.npmjs.com/settings/<user>/tokens`.
-2. Add it as a repository secret named `NPM_TOKEN` (Settings → Secrets and variables → Actions).
-3. Optionally pair with an auto-merge handler that squash-merges `auto-merge-ok` PRs after CI passes; otherwise merge them manually.
-
-#### Versioning
-
-Semantic Versioning. Tags are `vX.Y.Z`. The `package.json` version and the Git tag are kept in sync. Patch bumps are produced by the publish workflow on every doc-sync merge. Manual bumps follow these rules:
-
-- Breaking changes: bump major (e.g. `v2.0.0` → `v3.0.0`), prepare on `main`, cut a `release/vX` branch, tag.
-- Normal feature additions: bump minor on `main` (e.g. `v2.1.0`).
-- Bug fix only: bump patch on the relevant `release/vX` line (e.g. `v2.1.1`).
-
-Each manual release: update `package.json` version, update `CHANGELOG.md`, run `npm run release:check` (build + test), commit, optionally update `release/vX`, create and push the `vX.Y.Z` tag. Release-line state and full process: see [docs/VERSIONING.md](./docs/VERSIONING.md) and [CHANGELOG.md](./CHANGELOG.md).
-
-#### Branching and parallel work
-
-- Daily development on `main`. Major stable lines on `release/vX`.
-- Working branches: `codex/<issue-or-topic>` (1 issue = 1 branch = 1 PR).
-- Don't widen scope mid-branch; hold docs and implementation in the same PR.
-- Before touching shared-risk areas, leave a note in the issue or in [docs/ROADMAP.md](./docs/ROADMAP.md). UTF-8 for all docs.
-
-For full contributor guidelines (commit style, recommended labels, PR checklist), see [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md). For agent-specific workflow, decision logs, project map, review playbook, and Windows/Zellij troubleshooting knowledge, see [docs/ai/](./docs/ai/).
-
-### License
-
-ISC. See [LICENSE](./LICENSE).
-
----
-
-## 日本語
-
-EvoPet は、[Claude Code](https://claude.com/claude-code) のステータスラインに常駐するローカルのコンパニオンです。プロンプトエンジニアリングのヒント、セッションのムードコメント、コンテキスト/レート制限の 1 行ゲージを直接ステータスラインに表示します。ヒントは厳選リストと、Anthropic の Claude Code 公式ドキュメントから自動同期されたサブセットから供給されます。完全にローカルで動作し、Claude API トークンを消費せず、テレメトリも送信せず、セッション内容もアップロードしません。
-
-#### v3.1 ハイライト
-
-- **育成段階が ISG ベース化**: 累積 EXP ではなく Ideal State Gauge（直近の指示品質）で段階が決まります。バンド: egg <25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+。既存ユーザーは指示品質が安定するまで段階が下がる可能性があります。
-- **マスコットが PC グローバル**: `EVO_HOME` の既定が `<cwd>` から `~/.claude` に変更。初回起動時に既存の `<cwd>/.evo/mascot.json` を `~/.claude/.evo/` に自動コピーします（センチネルファイルで再実行を防止）。
-- **ヒントがカテゴリ対応**: プロキシが検出したシグナル（例: `prompt_too_vague`）に対応するカテゴリのヒント（`specificity` / `verification` / `permissions` / `context` / `recovery` / `exploration`）に絞り込まれます。
-- **ムードコメントがプロキシ稼働時にも表示**: アドバイス行がない場合、5 バンドのムードコメント（start / early / working / busy / critical）がプロキシ稼働パスにも表示されるようになりました。
-
-このリポジトリの使い方は 2 通りあります。
-
-- **npm からインストールするユーザー** — グローバルにパッケージをインストールし、Claude Code のステータスラインだけを差し替える。多くの利用者向けの推奨パスです。
-- **開発者として** — リポジトリを clone してコードベースを触る、テストスイートを動かす、または npm に同梱されない shell-integration / proxy を使う。
-
-### クイックインストール
-
-#### npm 経由（一番カンタン）
+Once the statusline is live, EvoPet works with no further setup — every prompt you type is scored and the pet reacts. A few commands are worth knowing:
 
 ```bash
-npm install -g evolutionary-cli-wrapper
-evo install-statusline
+evo stats                 # your current rank, growth gauge, and recent history
+evo pet list              # browse the 10 pet species
+evo pet choose fox        # pick the one you like
+evo display toggle        # switch between the compact and expanded statusline
 ```
 
-`evo install-statusline` はデフォルト対話モードで動き、以下の 2 アクションのみ実行します:
-
-1. `<package>/statusline.py` を `~/.claude/base_statusline.py` にコピー
-2. `~/.claude/settings.json` の `statusLine` を次の形に設定:
-   ```json
-   { "type": "command", "command": "python \"<HOME>/.claude/base_statusline.py\"" }
-   ```
-   `settings.json` の他のキーは保持されます。既存ファイルがあれば上書き前に `~/.claude/settings.json.bak.<ISO-timestamp>` にバックアップを作成。既存の `statusLine.command` が evopet 以外を指している場合は確認プロンプトが出ます。
-
-オプション:
-
-- `--yes` — 全プロンプトをスキップ（CI や自動プロビジョニング用）
-- `--uninstall` — `~/.claude/base_statusline.py` を削除し、直近の `settings.json.bak.*` から復元
-
-インストール後は Claude Code セッションを再起動してください。
-
-#### clone してフルセットアップする場合（開発者向け）
-
-```powershell
-git clone https://github.com/1-10maru/evolutionary-cli-wrapper.git
-cd evolutionary-cli-wrapper
-npm install
-npm run setup
-```
-
-PowerShell を開き直すと、`codex` と `claude` が自動で Evo 経由になります。
-
-```powershell
-codex
-claude
-```
-
-設定と履歴は CLI を起動したフォルダの `.evo` に保存されます:
-
-```text
-<対象フォルダ>\.evo\config.json
-<対象フォルダ>\.evo\evolutionary.db
-```
-
-別 PC への移行は同じ手順を繰り返すだけです。
-
-### できること
-
-ステータスラインに次の 3 つが表示されます:
-
-1. モデル名、cwd、`ctx` / `5h` / `7d` の使用量ゲージ（カラードット + パーセント表示）
-2. EvoPet のムード行（セッション開始時のブースト or cwd/ターン認識のコメント）
-3. プロンプトエンジニアリングの短いヒント（オプションで `❌ before / ✅ after` の例ペア付き）
-
-### 仕組み
-
-Python ステータスラインスクリプトは Claude Code が描画ごとに呼び出します（ポーリングなし、バックグラウンドプロセスなし）。Claude Code が stdin で渡す JSON と、開発者が proxy 経由で動かしている時に書き込まれるオプションの `~/.claude/.evo-live.json` を読みます。`~/.claude/.evo-live.json` がない時はステータスライン側で `~/.claude/.evo-self.json` に呼び出し回数を記録し、手書きヒントと公式ドキュメントから自動同期される全件ヒントを Tier 1 (主要) / Tier 2 (標準) / Tier 3 (ニッチ) を 5:2:1 で重み付けしたラウンドロビンでローテーションします。
-
-EvoPet の「X回目」カウンタは、現在の Claude Code セッション（セッション ID で識別）内のユーザー入力メッセージのみをカウントします。サブエージェントへの委譲はサブエージェント側の JSONL に独立して記録されるため、親セッションのカウントは増えません。ディレクトリ切り替えや新規セッション開始でカウンタはリセットされます。
-
-### 一時的に切る・再開する
-
-```powershell
-evo shell off
-evo shell on
-```
-
-### アップデート
-
-このパッケージの patch バージョンは自動的に進みます:
-
-- 毎週月曜 03:00 UTC に upstream の `Sync Claude Code Docs` workflow が、`https://code.claude.com/docs/en/best-practices` と `https://code.claude.com/docs/en/commands` から自動同期ヒントブロックを `statusline.py` に再生成します。
-- 変更があれば `auto-merge-ok` ラベル付きの PR が作成され、`main` にマージされると `Publish to npm` が patch 版をリリースします。
-
-最新ヒントを取り込む手順:
+Uninstalling is symmetric:
 
 ```bash
-npm update -g evolutionary-cli-wrapper
-evo install-statusline --yes   # 更新後の statusline.py を再デプロイ
-```
-
-`~/.claude/base_statusline.py` はパッケージからのコピーなので、`npm update` 後に `install-statusline` を再実行する必要があります。
-
-ステータスライン自体も軽量な更新チェックを行います: 描画時に `<EVO_HOME>/.evo/update-check.json`（既定: `~/.evo/update-check.json`）が新鮮でなければ、`https://registry.npmjs.org/evolutionary-cli-wrapper/latest` に非ブロッキングで HTTP GET（24 時間 stale-while-revalidate キャッシュ）を投げ、新しいバージョンを検出した場合のみ `⚠ update: <current> → <latest>` を表示します。`EVO_NO_UPDATE_CHECK=1` で無効化できます。
-
-### アンインストール
-
-```bash
-evo install-statusline --uninstall
+evo install-statusline --uninstall   # remove the statusline, restore your backup
 npm uninstall -g evolutionary-cli-wrapper
 ```
 
-`--uninstall` は `~/.claude/base_statusline.py` を削除し、`~/.claude/settings.json` を直近のバックアップから復元します（バックアップがない場合は evopet の `statusLine` キーだけを削除）。`~/.claude/.evo-self.json` と `~/.evo/update-check.json` は削除されないので、必要なら手動で削除してください。
+## Command reference
 
-### 設定・環境変数
+Commands most users touch:
 
-npm 版ステータスラインに影響する環境変数:
+| Command | What it does |
+|---|---|
+| `evo install-statusline` | Deploy `statusline.py` to `~/.claude/` and wire it into `settings.json`. `--yes` skips prompts, `--uninstall` reverts. |
+| `evo stats` | Show your EvoPet rank, growth gauge, and episode history. |
+| `evo pet list` | List the available EvoPet species. |
+| `evo pet choose <id>` | Set your pet species (e.g. `evo pet choose cat`). |
+| `evo display [mode]` | Toggle the statusline layout: `minimum`, `expansion`, or `toggle`. No arg prints the current mode. |
+| `evo doctor` | Print a one-page health report — versions, environment, file checks, recent errors, and live-state freshness (`--json` for machine-readable output). |
+| `evo logs [--tail N] [--since 30m] [--bundle]` | Tail recent Evo log lines, or `--bundle` a redacted zip of the last 7 days of logs + doctor output for a bug report. |
 
-| 変数 | 既定 | 効果 |
+Developer / power-user commands (mostly relevant after `npm run setup` from a clone):
+
+| Command | What it does |
+|---|---|
+| `evo init` | Create a local `.evo/config.json` with sensible defaults. |
+| `evo setup-shell` | Install the terminal integration and proxy shims so `claude` routes through Evo. |
+| `evo undo-shell` | Remove the managed shell-integration block. |
+| `evo shell on \| off \| status` | Enable, disable, or inspect shell integration for new terminals. |
+| `evo pause` / `evo resume` | Temporarily stop / re-enable the auto-proxy for new sessions. |
+| `evo mode <auto\|active\|quiet>` | Set the default advice verbosity for proxied sessions. |
+| `evo proxy --cli claude -- <args>` | Run `claude` through the Evo proxy for one invocation. |
+| `evo run -- <command>` | Run any LLM CLI command with episode tracking and scoring. |
+| `evo explain <episodeId>` | Explain how a recorded episode was scored. |
+| `evo storage` | Show the local database footprint and retention status. |
+| `evo compact` | Archive old raw episodes while keeping learned rollups. |
+| `evo export-knowledge --output <path>` | Export learned local stats to a portable JSON bundle. |
+| `evo import-knowledge --input <path>` | Merge a knowledge bundle back into local stats. |
+| `evo issue show <number> [--repo owner/name]` | Print a GitHub issue summarized for AI-agent intake. |
+| `evo forget` | Delete the local `.evo` history for a project folder. |
+| `evo uninstall [--purge-data]` | Remove shell integration and, optionally, local Evo data. |
+| `evo statusline` | Render the EvoPet portion of the statusline from JSON on stdin (used internally). |
+
+## How it works
+
+The Python statusline script is invoked by Claude Code on every render — no polling, no background process. It reads the JSON Claude Code passes on stdin plus, when a developer is running through the in-repo proxy, an optional `~/.claude/.evo-live.json` live-state file.
+
+- **When the proxy is active**, EvoPet reflects real session signals: a per-session turn counter, detected loops, prompt-quality scores, and the current mood.
+- **When it isn't** (the default npm path), the statusline self-tracks call counts in `~/.claude/.evo-self-state.json` and rotates through the whole tip library — a curated set plus every tip auto-synced from Anthropic's public Claude Code docs — using a tier-weighted round-robin (core / default / niche, weighted 5 : 2 : 1).
+
+The turn counter is scoped to the current Claude Code session ID, so sub-agent dispatches and parallel sessions in the same directory don't inflate or clobber each other's numbers. Since v3.4.0, per-session state lives in `<cwd>/.evo/sessions/<sessionId>.json` and files older than 7 days are pruned automatically.
+
+## Documentation
+
+A full map of everything under `docs/` lives in **[docs/README.md](./docs/README.md)**. Highlights:
+
+| Doc | What's inside |
+|---|---|
+| [CHANGELOG.md](./CHANGELOG.md) | Release history and per-version behavior changes. |
+| [docs/VERSIONING.md](./docs/VERSIONING.md) | Semantic-versioning policy and release-line layout. |
+| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | Commit style, labels, and the PR checklist. |
+| [docs/ROADMAP.md](./docs/ROADMAP.md) | Planned work and shared-risk areas. |
+| [docs/ai/](./docs/ai/) | Agent workflow, decision logs, project map, review playbook, and Windows/Zellij notes. |
+
+## Configuration
+
+The deployed statusline (`base_statusline.py`) needs no configuration and reads no environment variables of its own. These variables affect the **`evo` CLI** — specifically its built-in `evo statusline` renderer and its update check:
+
+| Variable | Default | Effect |
 |---|---|---|
-| `EVO_NO_UPDATE_CHECK` | 未設定 | `1` でレジストリ fetch と更新通知を抑制 |
-| `EVO_HOME` | `~` | update-check キャッシュの保存先（`<EVO_HOME>/.evo/update-check.json`）を上書き |
+| `EVO_NO_UPDATE_CHECK` | unset | When `1`, disables the `evo` CLI's npm-registry update check and its `⚠ update:` notice. |
+| `EVO_HOME` | `~` | Overrides where the update-check cache lives (`<EVO_HOME>/.evo/update-check.json`). |
 
-その他の環境変数（`EVO_LOG_LEVEL`、`EVO_LOG_DIR`、`EVO_LOG_DISABLE`、`EVO_CONFIG`、`EVO_PROXY_ACTIVE`）は `evo` Node CLI を直接動かす時のみ効きます（[英語版 For developers](#for-developers) を参照）。
+When the statusline is rendered through the `evo` CLI (`evo statusline`), it performs a lightweight update check: with no fresh cache it fires one non-blocking GET to `registry.npmjs.org` (stale-while-revalidate) and, when a newer version is published, appends an `⚠ update: <current> → <latest>` notice. The Python statusline that `evo install-statusline` deploys does not do this.
 
-### プライバシーとデータ取り扱い
+<details>
+<summary><b>Developer-mode environment variables</b> (only apply when running the <code>evo</code> Node CLI itself)</summary>
 
-EvoPet は完全にローカルマシン上で動作します。テレメトリは一切送信しません。本セクションが EvoPet の読み書き・通信に関する唯一の正本です。
+| Variable | Default | Effect |
+|---|---|---|
+| `EVO_CONFIG` | `<cwd>/.evo/config.json` | Which config the `evo` CLI reads (set by the shell shims). |
+| `EVO_LOG_LEVEL` | `INFO` | `ERROR` / `WARN` / `INFO` / `DEBUG`. `DEBUG` also mirrors to stderr. |
+| `EVO_LOG_DIR` | `<cwd>` | Base dir for logs (`<EVO_LOG_DIR>/.evo/logs/session-YYYYMMDD.log`). |
+| `EVO_LOG_DISABLE` | `0` | When `1`, all log emission is a no-op. |
+| `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when spawning the real `claude`, used for re-entry detection. |
+| `EVO_FORCE_NORMAL` | unset | Force full (non-lightweight) tracking regardless of cwd heuristics. Wins over `EVO_FORCE_LIGHT`. |
+| `EVO_FORCE_LIGHT` | unset | Force lightweight tracking regardless of cwd heuristics. |
 
-#### EvoPet が読み込むもの
-- `~/.claude/projects/<encoded-cwd>/*.jsonl` にある Claude Code の JSONL トランスクリプト（Claude Code 自身がセッション中に書き込むファイル）
-- AST レベルの関数差分を取るために `<cwd>` 配下のファイル（`.gitignore` を尊重し、`node_modules`・`.evo/`・`dist/` は除外）
+</details>
 
-#### EvoPet がローカルに保存するもの
+## The Pet
 
-npm パッケージが配布するのは `dist/`、`bin/`、`statusline.py`、`README.md`、`LICENSE` のみ（`package.json` の `files` 参照）。`evo install-statusline` と通常の Claude Code セッションで生成されるのは以下です:
+EvoPet is what makes this a *companion* and not just another linter. It has an identity that reacts to how you drive Claude Code.
 
-- `~/.claude/base_statusline.py` — デプロイされたステータスラインスクリプト
-- `~/.claude/settings.json` — `statusLine` エントリ追加。上書き前に **ファイル全体** の `.bak.<timestamp>` を作成
-- `~/.claude/.evo-self.json` — proxy なし時の呼び出し回数・最終 session id
-- `~/.evo/update-check.json` — レジストリ更新キャッシュ（24h TTL、`EVO_HOME` で変更可）
-- `<cwd>/.evo/evolutionary.db` — SQLite、プロジェクトごとのエピソード履歴とスコア（開発者モード / proxy 経由のみ）
-- `<cwd>/.evo/live-state.json` — ステータスライン描画用の最新セッション状態（開発者モード / proxy 経由のみ）
-- `<cwd>/.evo/sessions/<sessionId>.json` — セッションごとの状態、v3.4.0 以降（開発者モード / proxy 経由のみ）
-- `<EVO_HOME>/.evo/logs/session-<日付>.log`（既定）または `<EVO_LOG_DIR>/session-<日付>.log`（`EVO_LOG_DIR` 設定時）— 日次ログファイル（ローテーション、30 日保持）
-- `~/.claude/.evo/mascot.json` — EvoPet マスコットの状態（PC 全体で共有）
+**Ten species** to choose from — the pet starts as 🐣 `chick`, and you can switch anytime with `evo pet choose <id>`:
 
-npm 経由の利用ではプロジェクトディレクトリ配下に何も書きません。SQLite DB、プロジェクトごとの `.evo/` 状態、shell shim は `npm run setup`（clone した repo から）を実行した場合にのみ作られます。
+🐣 chick · 🐱 cat · 🐶 dog · 🦊 fox · 🐰 rabbit · 🐻 bear · 🐼 panda · 🐨 koala · 🐯 tiger · 🐧 penguin
 
-#### EvoPet がしないこと
-- テレメトリ、メトリクス、使用データをサーバーに送信しない
-- Claude API トークンを消費しない（これがローカル完結スコアリングの意義）
-- 外部への HTTP 通信は、新バージョン通知のための `registry.npmjs.org` への任意チェックのみ（`EVO_NO_UPDATE_CHECK=1` で無効化可能）
+**Five evolution stages.** Crucially, the stage is driven by the **Ideal State Gauge (ISG)** — a rolling measure of *sustained prompt quality* — not by cumulative experience. Keep writing clear, structured prompts and your pet climbs; let quality slip and it can drop back down. That's the whole point.
 
-#### 保持期間
-- ログ: 30 日
-- SQLite の生エピソード行: 直近 200 件（`retention.keepRecentRawEpisodes` で変更可能）
-- セッション JSON ファイル: 7 日後に自動削除
+| Stage | Rank | ISG band |
+|---|---|---|
+| 🥚 egg | Beginner | `< 25` |
+| 🌱 sprout | Apprentice | `25 – 45` |
+| 🐾 buddy | Practitioner | `45 – 65` |
+| 🧙 wizard | Skilled | `65 – 82` |
+| 👑 legend | Master | `82+` |
 
-#### ユーザーコントロール
-- `EVO_LOG_DISABLE=1` — ファイルログを完全無効化
-- `<cwd>/.evo/` を手動削除すればプロジェクトごとのトラッキングを消去可能（次回セッション時に自動再生成）
-- `EVO_NO_UPDATE_CHECK=1` — `registry.npmjs.org` への更新チェック fetch を抑制
+**Five moods** that shift with the session: `chill` when idle, `good` on a clean first pass, `fired up` when a nudge could save real tokens, `worried` when it spots an edit- or search-loop, and `proud` when your prompt structure is genuinely dialed in.
 
-### トラブルシューティング
+**Combos and the growth gauge.** A "good" prompt — structured, first-pass green, no loops — extends a combo streak, with celebrations at 3, 5, 10, and 20 in a row. The growth gauge you see (育成度) *is* the Ideal State Gauge: it only pins near 100% when recent prompt quality is high **and** your last few episodes were loop-free.
 
-- **ステータスラインに EvoPet が表示されない？** [`docs/runbooks/evopet-not-appearing.md`](./docs/runbooks/evopet-not-appearing.md) を参照してください。
+Under the hood, a signal detector watches for patterns like `prompt_too_vague`, `same_function_revisit`, `scope_creep`, `no_success_criteria`, and `approval_fatigue`, then turns the top one into a single, concrete suggestion — often with a before/after rewrite of your own request.
 
-### 開発者向け
+## Contributing
 
-英語版の [For developers](#for-developers) を参照してください。リポジトリ構造、共有リスク領域、環境変数（開発者モード）、自動同期パイプライン、メンテナ初期設定、バージョニング方針、ブランチ運用が書かれています。
+Contributions are welcome. In short:
 
-並列開発・コミット規約・ラベル運用・PR チェックリスト・AI エージェント向け作業手順・判断ログ・プロジェクトマップ・レビュー観点・Windows/Zellij トラブルシューティングは [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) と [docs/ai/](./docs/ai/) にまとまっています。
+- Daily development happens on `main`; stable lines live on `release/vX`.
+- One issue = one branch (`codex/<issue-or-topic>`) = one PR. Keep docs and implementation in the same PR and don't widen scope mid-branch.
+- Before touching shared-risk areas (`src/proxyRuntime.ts`, `src/index.ts`, `src/scoring.ts`, `src/db.ts`, `scripts/setup.mjs`), leave a note in the issue or [docs/ROADMAP.md](./docs/ROADMAP.md).
+- All docs are UTF-8.
 
-### ライセンス
+Build and test from a clone:
 
-ISC。[LICENSE](./LICENSE) を参照。
+```bash
+git clone https://github.com/1-10maru/evolutionary-cli-wrapper.git
+cd evolutionary-cli-wrapper
+npm install
+npm run build      # tsc → dist/
+npm test           # vitest
+```
+
+`npm run setup` additionally deploys the shell shims and statusline for full developer mode; `evo undo-shell` or `evo uninstall` reverts it. Full guidelines: [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md).
+
+## License
+
+[ISC](./LICENSE) © 1-10maru
