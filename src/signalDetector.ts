@@ -11,6 +11,7 @@ import {
   NudgeSeverity,
   PromptProfile,
 } from "./types";
+import { getEligibleGuidanceTips } from "./promptingGuidance";
 
 // ── Signal detection from turn-level data ──
 
@@ -628,9 +629,14 @@ export const TIPS_LIBRARY: Array<{
   },
 ];
 
-/** Pick a tip based on turn number (rotates through the library) */
-export function pickTip(turnIndex: number): ActionableAdvice {
-  const tip = TIPS_LIBRARY[turnIndex % TIPS_LIBRARY.length];
+interface TipEntry {
+  headline: string;
+  detail: string;
+  beforeExample?: string;
+  afterExample?: string;
+}
+
+function tipToAdvice(tip: TipEntry): ActionableAdvice {
   return {
     signal: { kind: "first_pass_success", confidence: 0, severity: "low", context: {} },
     headline: tip.headline,
@@ -639,4 +645,31 @@ export function pickTip(turnIndex: number): ActionableAdvice {
     afterExample: tip.afterExample,
     category: "praise",
   };
+}
+
+/**
+ * Build the tip rotation pool for a given model: the static hand-written
+ * library first (so existing low-index rotation is unchanged), then the
+ * model-aware official-doc tips (base always, model-specific when it matches).
+ */
+function buildTipPool(model?: string | null): TipEntry[] {
+  return [...TIPS_LIBRARY, ...getEligibleGuidanceTips(model)];
+}
+
+/**
+ * Pick a tip based on turn number, layering in guidance tuned to `model`.
+ * When `model` is undefined/unknown, only base + static tips are eligible.
+ */
+export function pickTipForModel(
+  turnIndex: number,
+  model?: string | null,
+): ActionableAdvice {
+  const pool = buildTipPool(model);
+  const idx = Math.abs(turnIndex) % pool.length;
+  return tipToAdvice(pool[idx]);
+}
+
+/** Pick a tip based on turn number (rotates through the library + base tips) */
+export function pickTip(turnIndex: number): ActionableAdvice {
+  return pickTipForModel(turnIndex, undefined);
 }

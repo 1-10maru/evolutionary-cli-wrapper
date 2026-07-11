@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // sync-claude-docs.mjs
 //
 // Fetch Anthropic's public Claude Code docs, extract bullets, and rewrite
@@ -15,16 +14,21 @@
 //   1  ALL sources failed to fetch (CI fail-closed)
 //   2  unexpected internal error
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import TurndownService from 'turndown';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, '..');
 const STATUSLINE_PATH = join(REPO_ROOT, 'statusline.py');
+// Bundled, committed model-aware prompting guidance asset (loaded at runtime by
+// src/promptingGuidance.ts). Regenerated deterministically from the official
+// Anthropic JA prompt-engineering docs — no LLM involved.
+const GUIDANCE_PATH = join(REPO_ROOT, 'src', 'data', 'prompting-guidance.json');
 
 const SOURCES = [
   {
@@ -36,6 +40,40 @@ const SOURCES = [
     kind: 'slash-commands',
   },
 ];
+
+// ─── Model-aware prompting guidance (v3.6.0) ───
+// Anthropic publishes clean markdown at each doc URL + ".md". The base page
+// applies to every current model; the model-specific pages layer on top and
+// are selected at runtime by matching the user's model id against
+// MODEL_PATTERNS. Adding a future model is a pure data change: append a source
+// + a pattern here, re-run, and commit the regenerated JSON.
+const GUIDANCE_DOC_BASE =
+  'https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/';
+const PROMPTING_SOURCES = [
+  { url: GUIDANCE_DOC_BASE + 'claude-prompting-best-practices.md', section: 'base' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5.md', section: 'fable' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md', section: 'opus' },
+];
+// Section labels prepended to model-specific tip headlines so the user can see
+// which tips are tuned to their current model. Base tips carry no label.
+const SECTION_LABELS = {
+  base: '',
+  fable: 'Fable 5のコツ',
+  opus: 'Opus 4.8のコツ',
+};
+// model id (or display name) → guidance section. First match wins, so more
+// specific patterns come first. Fable and Mythos share the same model, so both
+// map to the "fable" section.
+const MODEL_PATTERNS = [
+  { pattern: 'mythos', flags: 'i', section: 'fable' },
+  { pattern: 'fable', flags: 'i', section: 'fable' },
+  { pattern: 'opus', flags: 'i', section: 'opus' },
+];
+// Size guards keep the bundled asset (and the statusline it feeds) light.
+const GUIDANCE_MAX_TIPS_PER_SECTION = 12;
+const GUIDANCE_MAX_DETAIL_CHARS = 220;
+const GUIDANCE_MAX_HEADLINE_CHARS = 48;
+const GUIDANCE_MAX_JSON_BYTES = 80 * 1024;
 
 // ─── Tier classification (v3.0.0) ───
 // Tier 1 = core daily-use; Tier 3 = niche/diagnostic; Tier 2 = default (everything else).
@@ -131,6 +169,17 @@ const SELF_TEST_STUBS = {
     '<tr><td><code>/agents</code></td><td>Manage agent configurations.</td></tr>' +
     '<tr><td><code>/diff</code></td><td>Open an interactive diff viewer showing uncommitted changes.</td></tr>' +
     '</tbody></table></body></html>',
+};
+
+// Markdown stubs mirroring the real docs' shape (## / ### headings, prose
+// paragraph, then a fenced English example prompt to be skipped).
+const PROMPTING_SELF_TEST_STUBS = {
+  [GUIDANCE_DOC_BASE + 'claude-prompting-best-practices.md']:
+    '# ベストプラクティス\n\n## Claude Fable 5\n\nこのガイダンスは専用ページにあります。\n\n## 一般原則\n\n以下は現行の全モデルに適用されます。\n\n### 明確かつ直接的に\n\nClaudeは明確で具体的な指示によく反応します。望む出力について具体的に指定することで結果を向上させられます。\n\n```text\nCreate an analytics dashboard\n```\n\n### 例を効果的に使用する\n\n例はClaudeの出力形式やトーンを誘導する最も信頼性の高い方法の一つです。3〜5個の例を含めてください。\n',
+  [GUIDANCE_DOC_BASE + 'prompting-claude-fable-5.md']:
+    '# Fable 5\n\n## デフォルトでより長いターン\n\n難しいタスクに対する個々のリクエストは、より高いエフォート設定では何分も実行されることがあります。\n\n```text wrap\nWhen you have enough information to act, act.\n```\n\n## 境界を明示する\n\nClaude Fable 5 は要求されていないアクションを実行することがあります。すべきこととすべきでないことについて明示的な制約を定義してください。\n',
+  [GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md']:
+    '# Opus 4.8\n\n## 応答の長さと冗長性\n\nClaude Opus 4.8 は簡潔さと徹底性のバランスを取ります。望む長さを明示的に伝えてください。\n\n```text\nBe concise.\n```\n\n## より文字通りの指示追従\n\nClaude Opus 4.8 は指示をより文字通りに解釈します。暗黙の期待に頼らず明示してください。\n',
 };
 
 const args = process.argv.slice(2);
@@ -344,6 +393,277 @@ function extractSlashCommands(markdown) {
 }
 
 // -------------------------------------------------------------
+// Prompting-guidance extraction (rule-based, no LLM)
+// -------------------------------------------------------------
+//
+// The official docs are already markdown (URL + ".md"). We treat each
+// "leaf" heading (## or ### with no deeper heading nested under it) as one
+// tip: the heading becomes the tip headline, the first prose paragraph after
+// it becomes the detail. Fenced code blocks (the English example prompts) and
+// JSX/HTML component tags (<Note>, <Tip>, <Accordion>, <CodeGroup>) are
+// skipped. Cross-link pointer sections ("… は専用ページにあります") are dropped.
+
+// Collapse a heading title into a short, clean headline.
+function cleanGuidanceHeading(title) {
+  let t = stripMarkdownLinks(title);
+  t = stripBackticks(t);
+  t = t.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/[*_#]+/g, '');
+  // Drop a trailing "のプロンプト作成" / colon noise but keep the core phrase.
+  t = sanitize(t);
+  if (t.length > GUIDANCE_MAX_HEADLINE_CHARS) {
+    t = t.slice(0, GUIDANCE_MAX_HEADLINE_CHARS).trimEnd() + '…';
+  }
+  return t;
+}
+
+// Cap to maxChars, preferring a sentence boundary (。 or ". ").
+function capGuidanceLength(s, maxChars) {
+  if (s.length <= maxChars) return s;
+  const slice = s.slice(0, maxChars);
+  const jpEnd = slice.lastIndexOf('。');
+  const enEnd = slice.lastIndexOf('. ');
+  const cut = Math.max(jpEnd, enEnd);
+  if (cut > maxChars * 0.5) return slice.slice(0, cut + 1);
+  return slice.trimEnd() + '…';
+}
+
+// Classify each body line, ignoring fenced code (the English example prompts).
+function classifyGuidanceRows(body) {
+  const rows = [];
+  let inCode = false;
+  for (const raw of body) {
+    const ln = raw.trim();
+    if (/^(```|~~~)/.test(ln)) {
+      inCode = !inCode;
+      rows.push({ kind: 'fence' });
+      continue;
+    }
+    if (inCode) {
+      rows.push({ kind: 'code' });
+      continue;
+    }
+    if (/^<\/?[A-Za-z][A-Za-z0-9]*(\s[^>]*)?\/?>?/.test(ln)) {
+      rows.push({ kind: 'tag' });
+      continue;
+    }
+    if (ln === '') { rows.push({ kind: 'blank' }); continue; }
+    if (ln === '---') { rows.push({ kind: 'hr' }); continue; }
+    if (/^[-*]\s+/.test(ln)) {
+      rows.push({ kind: 'bullet', text: ln.replace(/^[-*]\s+/, '') });
+      continue;
+    }
+    rows.push({ kind: 'prose', text: ln });
+  }
+  return rows;
+}
+
+// Extract the first prose paragraph from a section body, plus the bullet list
+// that immediately follows it (many sections are "intro sentence + bullets").
+function distillGuidanceBody(body) {
+  const rows = classifyGuidanceRows(body);
+  const collected = [];
+  let started = false;
+  let boundary = false;
+  let bulletCount = 0;
+  for (const r of rows) {
+    if (r.kind === 'code' || r.kind === 'fence' || r.kind === 'tag' || r.kind === 'hr') {
+      if (started) break;
+      continue;
+    }
+    if (r.kind === 'blank') {
+      if (started) boundary = true;
+      continue;
+    }
+    if (r.kind === 'prose') {
+      // A new prose paragraph after our first block ends the excerpt; bullets
+      // are the only thing allowed to continue past the blank line.
+      if (boundary && collected.length) break;
+      collected.push(r.text);
+      started = true;
+    } else if (r.kind === 'bullet') {
+      if (bulletCount >= 3) break; // keep the excerpt bounded
+      collected.push(r.text);
+      started = true;
+      bulletCount += 1;
+    }
+    boundary = false;
+  }
+
+  let text = collected.join(' ');
+  text = stripMarkdownLinks(text);
+  text = stripBackticks(text);
+  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');
+  text = text.replace(/[*_]{1,3}/g, '');
+  text = sanitize(text);
+  // Drop a trailing lead-in clause that only introduced a (skipped) code block,
+  // e.g. "…簡単な例：" or "…as follows:". Keep everything up to the last full
+  // sentence; if nothing full remains the caller's length filter drops it.
+  if (/[：:]\s*$/.test(text)) {
+    const cut = Math.max(text.lastIndexOf('。'), text.lastIndexOf('. '));
+    text = cut >= 0 ? text.slice(0, cut + 1) : '';
+  }
+  return capGuidanceLength(text, GUIDANCE_MAX_DETAIL_CHARS);
+}
+
+function extractPromptingGuidance(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  // Locate headings, ignoring those inside fenced code blocks.
+  const headings = [];
+  let inCode = false;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*```/.test(ln) || /^\s*~~~/.test(ln)) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    const m = ln.match(/^(#{2,3})\s+(.*\S)\s*$/);
+    if (m) headings.push({ level: m[1].length, title: m[2].trim(), line: i });
+  }
+
+  const tips = [];
+  const seen = new Set();
+  for (let h = 0; h < headings.length; h++) {
+    const cur = headings[h];
+    const next = headings[h + 1];
+    // A heading is a container (skip it) if the very next heading is deeper.
+    const isLeaf = !next || next.level <= cur.level;
+    if (!isLeaf) continue;
+    const endLine = next ? next.line : lines.length;
+    const detail = distillGuidanceBody(lines.slice(cur.line + 1, endLine));
+    if (!detail || detail.length < 40) continue;
+    // Cross-reference pointer sections carry no real guidance.
+    if (/専用ページ|専用のページ/.test(detail)) continue;
+    const headline = cleanGuidanceHeading(cur.title);
+    if (!headline || headline.length < 2) continue;
+    const key = headline.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tips.push({ headline, detail });
+    if (tips.length >= GUIDANCE_MAX_TIPS_PER_SECTION) break;
+  }
+  return tips;
+}
+
+function loadExistingGuidance() {
+  try {
+    if (!existsSync(GUIDANCE_PATH)) return null;
+    return JSON.parse(readFileSync(GUIDANCE_PATH, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+// Build the guidance object. `fetchImpl(url, timeoutMs) -> markdown`. On a
+// per-source failure we fail open: reuse the previous snapshot for that
+// section if one exists. Returns { guidance, warnings, anyOk }.
+async function buildPromptingGuidance(fetchImpl) {
+  const prev = loadExistingGuidance();
+  const sections = {};
+  const warnings = [];
+  let anyOk = false;
+
+  for (const src of PROMPTING_SOURCES) {
+    try {
+      const md = await fetchImpl(src.url, 20000);
+      if (!md || !md.trim()) throw new Error('empty response');
+      const tips = extractPromptingGuidance(md);
+      if (tips.length === 0) throw new Error('no tips extracted');
+      sections[src.section] = {
+        label: SECTION_LABELS[src.section] ?? '',
+        sourceUrl: src.url,
+        fetchedAt: new Date().toISOString(),
+        contentHash: createHash('sha256').update(md).digest('hex').slice(0, 16),
+        tips,
+      };
+      anyOk = true;
+    } catch (e) {
+      const kept = prev && prev.sections && prev.sections[src.section];
+      if (kept) {
+        sections[src.section] = prev.sections[src.section];
+        warnings.push(`${src.section}: fetch/extract failed (${e.message}) — kept previous snapshot`);
+      } else {
+        warnings.push(`${src.section}: fetch/extract failed (${e.message}) — no previous snapshot to keep`);
+      }
+    }
+  }
+
+  const guidance = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    modelPatterns: MODEL_PATTERNS,
+    sections,
+  };
+  return { guidance, warnings, anyOk };
+}
+
+// Schema + size sanity. Throws on violation. Used before writing and in CI.
+function validateGuidance(guidance) {
+  if (!guidance || typeof guidance !== 'object') throw new Error('guidance is not an object');
+  if (typeof guidance.version !== 'number') throw new Error('missing version');
+  if (!Array.isArray(guidance.modelPatterns) || guidance.modelPatterns.length === 0) {
+    throw new Error('modelPatterns must be a non-empty array');
+  }
+  for (const mp of guidance.modelPatterns) {
+    if (typeof mp.pattern !== 'string' || typeof mp.section !== 'string') {
+      throw new Error('modelPattern entries need string pattern + section');
+    }
+    // Ensure the regex compiles.
+    new RegExp(mp.pattern, mp.flags ?? '');
+  }
+  if (!guidance.sections || typeof guidance.sections !== 'object') {
+    throw new Error('sections must be an object');
+  }
+  if (!guidance.sections.base) throw new Error('base section is required');
+  for (const [name, sec] of Object.entries(guidance.sections)) {
+    if (!Array.isArray(sec.tips) || sec.tips.length === 0) {
+      throw new Error(`section ${name} has no tips`);
+    }
+    if (sec.tips.length > GUIDANCE_MAX_TIPS_PER_SECTION) {
+      throw new Error(`section ${name} exceeds tip cap`);
+    }
+    for (const tip of sec.tips) {
+      if (typeof tip.headline !== 'string' || typeof tip.detail !== 'string') {
+        throw new Error(`section ${name} has a malformed tip`);
+      }
+      if (tip.detail.length > GUIDANCE_MAX_DETAIL_CHARS + 4) {
+        throw new Error(`section ${name} tip detail exceeds length cap`);
+      }
+    }
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(guidance), 'utf-8');
+  if (bytes > GUIDANCE_MAX_JSON_BYTES) {
+    throw new Error(`guidance JSON ${bytes}B exceeds ${GUIDANCE_MAX_JSON_BYTES}B cap`);
+  }
+}
+
+// Stable serialization: keys in a fixed order, 2-space indent, trailing NL.
+function serializeGuidance(guidance) {
+  return JSON.stringify(guidance, null, 2) + '\n';
+}
+
+// Content fingerprint that ignores volatile timestamps (generatedAt,
+// per-section fetchedAt). Two runs over identical upstream docs produce the
+// same signature, so the weekly job only opens a PR when tips actually change.
+function guidanceContentSignature(guidance) {
+  if (!guidance || !guidance.sections) return '';
+  const sections = {};
+  for (const [name, sec] of Object.entries(guidance.sections)) {
+    sections[name] = {
+      label: sec.label ?? '',
+      sourceUrl: sec.sourceUrl,
+      contentHash: sec.contentHash,
+      tips: sec.tips,
+    };
+  }
+  return JSON.stringify({
+    version: guidance.version,
+    modelPatterns: guidance.modelPatterns,
+    sections,
+  });
+}
+
+// -------------------------------------------------------------
 // Marker rewrite
 // -------------------------------------------------------------
 
@@ -531,6 +851,60 @@ async function main() {
     console.log('No changes to write.');
   }
 
+  // ── Model-aware prompting guidance regeneration (fail-open) ──
+  const guidanceFetch = SELF_TEST
+    ? async (url) => {
+        const stub = PROMPTING_SELF_TEST_STUBS[url];
+        if (!stub) throw new Error('no guidance stub for ' + url);
+        return stub;
+      }
+    : (url, timeoutMs) => fetchWithTimeout(url, timeoutMs);
+
+  let guidanceChanged = false;
+  try {
+    const { guidance, warnings, anyOk } = await buildPromptingGuidance(guidanceFetch);
+    validateGuidance(guidance);
+    for (const w of warnings) console.warn('[guidance] ' + w);
+    const prevGuidance = loadExistingGuidance();
+    const sameContent =
+      prevGuidance &&
+      guidanceContentSignature(prevGuidance) === guidanceContentSignature(guidance);
+    guidanceChanged = !sameContent;
+    const tipTotal = Object.values(guidance.sections).reduce(
+      (n, s) => n + s.tips.length,
+      0,
+    );
+    console.log(
+      '[guidance] sections=' +
+        Object.keys(guidance.sections).join(',') +
+        ' tips=' +
+        tipTotal +
+        ' anyFetched=' +
+        anyOk +
+        ' changed=' +
+        guidanceChanged
+    );
+    if (SELF_TEST) {
+      // Round-trip parse proves the emitted asset is valid JSON.
+      JSON.parse(serializeGuidance(guidance));
+      console.log('[self-test] guidance JSON valid');
+    } else if (!sameContent && !DRY_RUN) {
+      mkdirSync(dirname(GUIDANCE_PATH), { recursive: true });
+      writeFileSync(GUIDANCE_PATH, serializeGuidance(guidance), 'utf-8');
+      console.log('Wrote ' + GUIDANCE_PATH);
+    } else if (DRY_RUN && !sameContent) {
+      console.log('[dry-run] would write ' + GUIDANCE_PATH);
+    } else {
+      console.log('[guidance] no changes to write.');
+    }
+  } catch (e) {
+    // Fail-open: guidance problems must never abort the statusline sync job.
+    console.error(
+      '[guidance] generation failed (kept existing asset): ' +
+        (e && e.message ? e.message : e)
+    );
+  }
+
   // Self-test post-validation: temporarily write, py_compile, then restore.
   if (SELF_TEST) {
     if (changed) {
@@ -565,7 +939,33 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => {
-  console.error('FATAL:', e && e.stack ? e.stack : e);
-  process.exit(2);
-});
+// Only auto-run when executed directly (e.g. `node scripts/sync-claude-docs.mjs`
+// or the CI workflow). When imported by tests, expose the pure functions
+// without running main(). realpath comparison is robust to relative-vs-absolute
+// argv and symlinked node installs.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
+  main().catch((e) => {
+    console.error('FATAL:', e && e.stack ? e.stack : e);
+    process.exit(2);
+  });
+}
+
+export {
+  extractPromptingGuidance,
+  distillGuidanceBody,
+  buildPromptingGuidance,
+  validateGuidance,
+  guidanceContentSignature,
+  MODEL_PATTERNS,
+};
