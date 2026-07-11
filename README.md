@@ -136,6 +136,8 @@ The turn counter is scoped to the current Claude Code session ID, so sub-agent d
 
 ## Documentation
 
+A full map of everything under `docs/` lives in **[docs/README.md](./docs/README.md)**. Highlights:
+
 | Doc | What's inside |
 |---|---|
 | [CHANGELOG.md](./CHANGELOG.md) | Release history and per-version behavior changes. |

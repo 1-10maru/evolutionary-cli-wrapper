@@ -136,6 +136,8 @@ Python ステータスラインスクリプトは Claude Code が描画ごとに
 
 ## ドキュメント
 
+`docs/` 配下の全体マップは **[docs/README.md](./docs/README.md)** にあります。主なもの:
+
 | ドキュメント | 内容 |
 |---|---|
 | [CHANGELOG.md](./CHANGELOG.md) | リリース履歴とバージョンごとの挙動変更。 |
