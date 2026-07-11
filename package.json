@@ -33,9 +33,11 @@
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
   "files": [
     "dist/",
-    "bin/",
     "README.md",
     "LICENSE",
     "statusline.py"
