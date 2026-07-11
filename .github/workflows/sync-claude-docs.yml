@@ -28,13 +28,24 @@ jobs:
 
       - run: npm ci
 
+      # Regenerates both the statusline.py marker blocks and the model-aware
+      # prompting-guidance asset (src/data/prompting-guidance.json). Per-source
+      # fetch failures fail open inside the script: the previous snapshot is kept
+      # and a "[guidance] … kept previous snapshot" warning is printed. Output is
+      # captured so those warnings can be surfaced in the PR body below.
       - name: Run sync script
-        run: node scripts/sync-claude-docs.mjs
+        run: node scripts/sync-claude-docs.mjs 2>&1 | tee sync-output.log
+
+      # The guidance asset must always be valid JSON that passes the same schema
+      # and size checks used at generation time (even when a fetch failed and the
+      # prior snapshot was reused).
+      - name: Validate prompting-guidance asset
+        run: node scripts/validate-guidance.mjs
 
       - name: Detect changes
         id: diff
         run: |
-          if git diff --quiet statusline.py; then
+          if git diff --quiet statusline.py src/data/prompting-guidance.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -60,16 +71,37 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add statusline.py
+          git add statusline.py src/data/prompting-guidance.json
           git commit -m "chore: sync Claude Code docs $DATE"
           git push -f origin "$BRANCH"
+          # Surface any fail-open guidance warnings (previous snapshot kept) so a
+          # silently-degraded sync is visible to the reviewer.
+          WARNINGS=$(grep -F '[guidance]' sync-output.log | grep -iE 'failed|kept previous snapshot' || true)
+          {
+            echo "Automated weekly sync of Anthropic Claude docs."
+            echo
+            echo "## Statusline tips (statusline.py)"
+            echo "- https://code.claude.com/docs/en/best-practices"
+            echo "- https://docs.claude.com/en/docs/claude-code/slash-commands"
+            echo
+            echo "## Model-aware prompting guidance (src/data/prompting-guidance.json)"
+            echo "Rule-based extraction from the official JA prompt-engineering docs (no LLM):"
+            echo "- base: https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/claude-prompting-best-practices.md"
+            echo "- fable (Fable 5 / Mythos 5): https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-fable-5.md"
+            echo "- opus (Opus 4.8): https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-opus-4-8.md"
+            echo
+            echo "Per-source fetch/extract failures fail open: the previous snapshot for that section is kept and the job does not fail."
+            if [ -n "$WARNINGS" ]; then
+              echo
+              echo "### ⚠️ Fail-open warnings this run"
+              echo '```'
+              echo "$WARNINGS"
+              echo '```'
+            fi
+          } > pr-body.md
           gh pr create \
             --title "chore: sync Claude Code docs $DATE" \
-            --body "Automated weekly sync of Anthropic Claude Code docs into statusline tips.
-
-          Sources:
-          - https://code.claude.com/docs/en/best-practices
-          - https://docs.claude.com/en/docs/claude-code/slash-commands" \
+            --body-file pr-body.md \
             --label auto-merge-ok \
             --base main \
             --head "$BRANCH"

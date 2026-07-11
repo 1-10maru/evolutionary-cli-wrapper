@@ -26,6 +26,7 @@ import {
   pickMoodPool,
 } from "./statusline-data";
 import { getUpdateNotice } from "../updateCheck";
+import { getEligibleGuidanceTips } from "../promptingGuidance";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -37,7 +38,8 @@ interface StatuslineInput {
   context_window?: { used_percentage?: unknown } | unknown;
   session_id?: unknown;
   sessionId?: unknown;
-  // model/rate_limits exist but are not used by EvoPet rendering
+  // model drives model-aware tip selection (resolveStatuslineModel); rate_limits
+  // exist but are not used by EvoPet rendering.
   [k: string]: unknown;
 }
 
@@ -124,6 +126,22 @@ function clip(s: string, _n: number): string {
   return s;
 }
 
+// Resolve the model from the statusline stdin payload. Claude Code sends it as
+// `{ model: { id, display_name } }`; tolerate a bare string too. Authoritative
+// per session, so it drives model-aware tip selection in the fallback path.
+function resolveStatuslineModel(data: StatuslineInput): string | null {
+  const m = (data as Record<string, unknown>).model;
+  if (typeof m === "string") return m.trim() || null;
+  if (m && typeof m === "object") {
+    const obj = m as Record<string, unknown>;
+    if (typeof obj.id === "string" && obj.id.trim()) return obj.id.trim();
+    if (typeof obj.display_name === "string" && obj.display_name.trim()) {
+      return obj.display_name.trim();
+    }
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main handler
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,6 +179,10 @@ export async function runStatuslineCommand(): Promise<void> {
   const sessionId =
     asString((data as Record<string, unknown>).session_id) ||
     asString((data as Record<string, unknown>).sessionId);
+
+  // Model from the stdin payload (authoritative for this session) — drives the
+  // model-aware tip rotation in the self-tracked fallback below.
+  const modelId = resolveStatuslineModel(data);
 
   // ── Display mode ──
   const displayMode = readCurrentMode();
@@ -373,8 +395,19 @@ export async function runStatuslineCommand(): Promise<void> {
 
     line1Bits.push(`${DIM}${calls}回目${R}`);
 
-    // Tip rotation
-    const tip = TIPS[calls % TIPS.length];
+    // Tip rotation — merge the static library with model-aware guidance tips
+    // (base always eligible; model-specific tips when the stdin model matches).
+    const guidanceTips = getEligibleGuidanceTips(modelId);
+    const tipPool: Array<{
+      headline: string;
+      before?: string | null;
+      after?: string | null;
+      detail?: string;
+    }> = [
+      ...TIPS.map((t) => ({ headline: t.headline, before: t.before, after: t.after })),
+      ...guidanceTips.map((t) => ({ headline: t.headline, detail: t.detail })),
+    ];
+    const tip = tipPool[calls % tipPool.length];
     const th = tip.headline;
     const tb = tip.before;
     const ta = tip.after;
@@ -382,6 +415,8 @@ export async function runStatuslineCommand(): Promise<void> {
       const tbD = clip(tb, 30);
       const taD = clip(ta, 55);
       line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${tbD}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${taD}"${R}`;
+    } else if (tip.detail) {
+      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${BOLD}${tip.detail}${R}`;
     } else {
       line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}`;
     }

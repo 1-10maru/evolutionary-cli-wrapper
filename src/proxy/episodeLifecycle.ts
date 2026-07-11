@@ -16,7 +16,8 @@ import {
   renderMascotTurnLine,
   computeIdealStateGauge,
 } from "../mascot";
-import { detectLiveSignals, generateTopAdvice, pickTip } from "../signalDetector";
+import { detectLiveSignals, generateTopAdvice, pickTipForModel } from "../signalDetector";
+import { resolveProxyModel } from "../promptingGuidance";
 import { computeLiveGrade } from "../sessionGrade";
 import { extractPromptProfile } from "../promptProfile";
 import {
@@ -94,6 +95,13 @@ export interface ProxyLiveState {
    * new locked file's sessionId is read.
    */
   sessionId?: string;
+  /**
+   * Model for this proxy session, resolved lazily on first advice refresh
+   * from the forwarded `--model` arg or ~/.claude/settings.json. Used to pick
+   * model-appropriate prompting tips. Empty string means "resolved to unknown"
+   * (base tips only); undefined means "not resolved yet".
+   */
+  model?: string;
 }
 
 const TURN_NOISE_PATTERNS = [
@@ -186,8 +194,13 @@ export function refreshLiveAdvice(
     liveState.beforeExample = topAdvice.beforeExample ?? "";
     liveState.afterExample = topAdvice.afterExample ?? "";
   } else {
-    // No signal fired — show a rotating tip from the tips library
-    const tip = pickTip(liveState.turns);
+    // No signal fired — show a rotating tip from the tips library, layering in
+    // guidance for the session's model. Resolve the model once per session
+    // (forwarded --model arg > settings.json default > unknown) and cache it.
+    if (liveState.model === undefined) {
+      liveState.model = resolveProxyModel() ?? "";
+    }
+    const tip = pickTipForModel(liveState.turns, liveState.model || undefined);
     liveState.advice = tip.headline;
     liveState.adviceDetail = tip.detail;
     liveState.signalKind = "tip";
