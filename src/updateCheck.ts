@@ -105,6 +105,9 @@ function fetchLatestAsync(filePath: string): void {
   // Fire-and-forget. Never await this in the statusline path.
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  // Do not let this fire-and-forget timeout keep the event loop alive; the
+  // statusline/CLI must be free to exit while the background fetch is pending.
+  timer.unref?.();
   // Node 22 global fetch.
   // eslint-disable-next-line @typescript-eslint/no-floating-promises
   (async () => {

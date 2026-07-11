@@ -8,7 +8,7 @@
 //   - other → direct spawn, shell:false
 // The EVO_PROXY_ACTIVE / EVO_PROXY_DISABLED env vars are injected in all branches.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
 
 /**
@@ -136,6 +136,31 @@ export function spawnInteractiveCommand(
       EVO_PROXY_DISABLED: "0",
     },
   });
+}
+
+/**
+ * Terminate a spawned child and, on Windows, its entire process tree.
+ *
+ * On POSIX, forwarding the signal to the child is enough for our shell:false
+ * spawns. On Windows there are no real signals and `.cmd`/`.bat` originals run
+ * under a cmd.exe wrapper whose grandchildren survive a plain `child.kill()`;
+ * we shell out to `taskkill /PID <pid> /T /F` to tear the whole tree down so
+ * the wrapped CLI is never left orphaned. Best-effort: never throws, so it is
+ * safe to call from signal handlers and teardown paths.
+ */
+export function killProcessTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  try {
+    if (process.platform === "win32" && typeof child.pid === "number") {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      return;
+    }
+    child.kill(signal);
+  } catch {
+    // best-effort — never throw from a signal/teardown path
+  }
 }
 
 // Export internals for testing.

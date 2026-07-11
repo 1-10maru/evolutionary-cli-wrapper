@@ -295,8 +295,25 @@ function extractShimTargetPath(commandPath: string): string | null {
   return null;
 }
 
+/**
+ * Whether a resolved command can actually be launched on the current platform
+ * by `spawnInteractiveCommand`. On Windows we can spawn `.exe` directly, `.cmd`
+ * / `.bat` via cmd.exe, and `.ps1` via pwsh/powershell — but an extensionless
+ * POSIX stub (npm's bash wrapper) is not runnable via CreateProcess and would
+ * fail with ENOENT under `shell:false`. Accepting/caching such a candidate on
+ * Windows produces a broken original-command mapping, so reject it up front.
+ * On POSIX, shebang and extensionless stubs are directly executable, so any
+ * existing file is considered spawnable.
+ */
+function isSpawnableOnThisPlatform(commandPath: string): boolean {
+  if (process.platform !== "win32") return true;
+  const ext = path.extname(commandPath).toLowerCase();
+  return ext === ".exe" || ext === ".cmd" || ext === ".bat" || ext === ".ps1";
+}
+
 function isUsableCommandCandidate(commandPath: string): boolean {
   if (!commandPath || !fs.existsSync(commandPath)) return false;
+  if (!isSpawnableOnThisPlatform(commandPath)) return false;
   const shimTarget = extractShimTargetPath(commandPath);
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }

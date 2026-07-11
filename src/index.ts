@@ -208,8 +208,8 @@ program
       // Best-effort: patch existing live-state files so observers see the
       // passthrough exit code. Never CREATE files here.
       patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
-      process.exitCode = code;
-      return;
+      // Force exit with the child's code, consistent with the proxied branch.
+      process.exit(code);
     }
 
     const config = ensureEvoConfig(cwd);
@@ -235,6 +235,11 @@ program
         turns: result.artifacts.turns,
       }),
     );
+    // Propagate the wrapped CLI's exit code and force the process to exit.
+    // runProxySession may leave lingering handles alive (a resumed stdin, the
+    // chokidar watcher, or better-sqlite3), so relying on a natural exit would
+    // let the wrapper hang after the child has already finished.
+    process.exit(result.exitCode);
   });
 
 program

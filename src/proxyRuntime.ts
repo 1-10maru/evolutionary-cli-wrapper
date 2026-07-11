@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import chokidar from "chokidar";
 import { detectCli, extractEventsFromLine, parseUsageObservation } from "./adapters";
@@ -47,7 +48,7 @@ import {
   shouldUseInteractivePassthrough,
   shouldUseLightweightTracking as _shouldUseLightweightTracking,
 } from "./proxy/sessionMode";
-import { spawnInteractiveCommand } from "./proxy/spawnCommand";
+import { killProcessTree, spawnInteractiveCommand } from "./proxy/spawnCommand";
 
 // Re-export for public API parity (was originally exported from this file).
 export const shouldUseLightweightTracking = _shouldUseLightweightTracking;
@@ -56,9 +57,21 @@ const proxyResolveLog = getLogger().child("proxy.resolve");
 const proxySpawnLog = getLogger().child("proxy.spawn");
 const proxySubprocessLog = getLogger().child("proxy.subprocess");
 
+/**
+ * Conventional shell exit code for a process terminated by a signal:
+ * 128 + the platform's signal number (e.g. SIGINT -> 130). Falls back to 128
+ * when the signal number is unknown on this platform.
+ */
+function signalExitCode(signal: NodeJS.Signals): number {
+  const signalNumbers = os.constants.signals as unknown as Record<string, number | undefined>;
+  const num = signalNumbers[signal];
+  return 128 + (typeof num === "number" ? num : 0);
+}
+
 export async function runProxySession(options: ProxyRunOptions): Promise<{
   episodeId: number;
   artifacts: EpisodeArtifacts;
+  exitCode: number;
 }> {
   const cwd = path.resolve(options.cwd);
   const config = ensureEvoConfig(cwd);
@@ -296,21 +309,13 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     }
   }
 
-  // Graceful shutdown: ensure live-state cleanup on SIGINT/SIGTERM/SIGHUP and
-  // before the Node.js event loop exits. SIGHUP fires when a Windows console
-  // window is closed (or the parent terminal hangs up on POSIX), which is
-  // distinct from SIGINT/SIGTERM and was previously not cleaned up — leaving
-  // stale live-state files for the statusline observer.
-  const onProcessExit = (): void => {
-    teardownLiveTracking();
-    process.exit(0);
-  };
+  // Graceful shutdown: clean up live-state files before the Node.js event loop
+  // exits. Signal handling (SIGINT/SIGTERM/SIGHUP) is registered *after* the
+  // child spawns so the signal can be forwarded to the child instead of
+  // orphaning it — see `onSignal` below.
   const onBeforeExit = (): void => {
     teardownLiveTracking();
   };
-  process.on("SIGINT", onProcessExit);
-  process.on("SIGTERM", onProcessExit);
-  process.on("SIGHUP", onProcessExit);
   process.on("beforeExit", onBeforeExit);
 
   proxySpawnLog.info("spawning subprocess", {
@@ -322,6 +327,41 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   });
   const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
 
+  // Handle terminal signals without orphaning the child. The previous handler
+  // called process.exit(0) here, which left the child running (a zombie/orphan
+  // source) and masked its real exit status with 0.
+  //
+  //  - If the child already exited: finish teardown and exit with the
+  //    conventional 128 + signal-number code.
+  //  - Interactive passthrough (inherited stdio, shared console/process group):
+  //    the terminal already delivered the signal to the child, so let the child
+  //    handle it (e.g. cancel the current turn) and drive its own `close` path.
+  //    Killing here would preempt that and — on Windows via taskkill /F —
+  //    hard-kill an interactive session on the very first Ctrl+C. A SIGHUP
+  //    (console closed / terminal hangup) or a repeated signal escalates to a
+  //    forced tree-kill so a stuck child can never trap the wrapper.
+  //  - Otherwise (non-interactive, or an escalation): forward the signal and,
+  //    on Windows where the child is a cmd.exe/pwsh wrapper tree, tear the whole
+  //    tree down so nothing is orphaned. The child's `close` path then runs
+  //    teardown and propagates the real exit code.
+  let signalCount = 0;
+  const onSignal = (signal: NodeJS.Signals): void => {
+    signalCount += 1;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      teardownLiveTracking();
+      process.exit(signalExitCode(signal));
+      return;
+    }
+    const escalate = signal === "SIGHUP" || signalCount >= 2 || child.killed;
+    if (interactivePassthrough && !escalate) {
+      return;
+    }
+    killProcessTree(child, signal);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
+
   const stdinListener = (chunk: Buffer | string): void => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     turnStateRef.current.inputText += text;
@@ -331,7 +371,12 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     }
     child.stdin?.write(chunk);
   };
-  const attachStdin = Boolean(process.stdin.isTTY) && !interactivePassthrough;
+  // EVO_FORCE_STDIN_ATTACH=1 forces the interactive stdin-forwarding path even
+  // when stdin is not a TTY. This exists so a non-TTY environment (CI, vitest)
+  // can exercise the stdin resume/teardown lifecycle that otherwise only runs
+  // under a real terminal. It never changes behavior unless explicitly set.
+  const forceAttachStdin = process.env.EVO_FORCE_STDIN_ATTACH === "1";
+  const attachStdin = (Boolean(process.stdin.isTTY) || forceAttachStdin) && !interactivePassthrough;
   if (attachStdin) {
     process.stdin.resume();
     process.stdin.on("data", stdinListener);
@@ -447,15 +492,20 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     });
   });
 
-  process.off("SIGINT", onProcessExit);
-  process.off("SIGTERM", onProcessExit);
-  process.off("SIGHUP", onProcessExit);
+  process.off("SIGINT", onSignal);
+  process.off("SIGTERM", onSignal);
+  process.off("SIGHUP", onSignal);
   process.off("beforeExit", onBeforeExit);
   teardownLiveTracking();
   if (idleTimer) clearTimeout(idleTimer);
   if (startupNoticeTimer) clearTimeout(startupNoticeTimer);
   if (attachStdin) {
     process.stdin.off("data", stdinListener);
+    // Pause and unref the resumed TTY/forced stdin. Without this the resumed
+    // stdin keeps the event loop alive, so the wrapper hangs after the child
+    // has already exited (the original /exit hang).
+    process.stdin.pause();
+    process.stdin.unref?.();
   }
 
   if (!interactivePassthrough) {
@@ -507,5 +557,6 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   return {
     episodeId,
     artifacts,
+    exitCode,
   };
 }

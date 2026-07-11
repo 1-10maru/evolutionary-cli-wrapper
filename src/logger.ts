@@ -228,7 +228,21 @@ function initSink(s: LoggerState): void {
   const flushSync = (): void => {
     flushQueue(s);
   };
-  s.exitListener = flushSync;
+  // On real process exit, flush THEN close the log fd so we don't leak the
+  // descriptor. beforeExit only flushes: the event loop may still resume, so
+  // the fd must stay open for later writes.
+  const flushAndClose = (): void => {
+    flushQueue(s);
+    if (s.fd !== null) {
+      try {
+        fs.closeSync(s.fd);
+      } catch {
+        // ignore — process is exiting anyway
+      }
+      s.fd = null;
+    }
+  };
+  s.exitListener = flushAndClose;
   s.beforeExitListener = flushSync;
   process.on("exit", s.exitListener);
   process.on("beforeExit", s.beforeExitListener);

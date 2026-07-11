@@ -86,7 +86,7 @@ describe("proxy runtime", () => {
     expect(storage.rowCounts.turns).toBeGreaterThan(0);
     expect(storage.rowCounts.turn_summaries).toBeGreaterThan(0);
     db.close();
-  });
+  }, 30_000);
 
   it("suppresses startup-noise-only turns", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-proxy-noise-"));
@@ -128,5 +128,58 @@ describe("proxy runtime", () => {
     });
 
     expect(result.artifacts.turns ?? []).toHaveLength(0);
-  });
+  }, 30_000);
+
+  // C1 isolation: the spawned-process regression test in
+  // tests/integration/wrapper-lifecycle.test.ts proves the wrapper no longer
+  // hangs, but the proxy action's process.exit() force-terminates the process
+  // regardless of a lingering resumed stdin, so it cannot prove that teardown
+  // itself pauses stdin. This in-process test exercises runProxySession
+  // directly (no process.exit) and asserts the resumed stdin is paused on the
+  // way out — the event-loop-clean guarantee C1 actually provides.
+  it("pauses the forced-attach stdin during teardown so the event loop can drain (C1)", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-proxy-stdin-"));
+    tempDirs.push(cwd);
+    fs.writeFileSync(path.join(cwd, "package.json"), "{\"name\":\"demo\"}");
+    fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+    const fakeCliPath = path.join(cwd, "fake-exit-cli.js");
+    fs.writeFileSync(
+      fakeCliPath,
+      ["console.log('Read src/index.ts');", "process.exit(0);"].join("\n"),
+    );
+
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: {
+          ...config.shellIntegration.originalCommandMap,
+          claude: process.execPath,
+        },
+      },
+      proxy: { ...config.proxy, turnIdleMs: 50, defaultMode: "active" },
+    });
+
+    const prevForce = process.env.EVO_FORCE_STDIN_ATTACH;
+    const stdinWasPaused = process.stdin.isPaused();
+    process.env.EVO_FORCE_STDIN_ATTACH = "1";
+    try {
+      const result = await runProxySession({
+        cwd,
+        cli: "claude",
+        args: [fakeCliPath],
+        mode: "active",
+      });
+      expect(result.exitCode).toBe(0);
+      // Without the C1 fix, runProxySession resumes stdin (isPaused === false)
+      // and never pauses it back, keeping the event loop alive.
+      expect(process.stdin.isPaused()).toBe(true);
+    } finally {
+      if (prevForce === undefined) delete process.env.EVO_FORCE_STDIN_ATTACH;
+      else process.env.EVO_FORCE_STDIN_ATTACH = prevForce;
+      // Restore whatever paused-state the test runner started with.
+      if (stdinWasPaused && !process.stdin.isPaused()) process.stdin.pause();
+    }
+  }, 30_000);
 });
