@@ -122,8 +122,9 @@ describe("shell integration", () => {
 
     const npmDir = path.join(cwd, "npm");
     const legacyShim = writeClaudeCmdShim(npmDir, "claude.evo-original.cmd", "node_modules\\@anthropic-ai\\claude-code\\cli.js");
-    const liveShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
-    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "binary");
 
     const config = ensureEvoConfig(cwd);
     updateEvoConfig(cwd, {
@@ -140,8 +141,10 @@ describe("shell integration", () => {
     const resolved = resolveOriginalCommand(cwd, "claude");
     const updatedConfig = ensureEvoConfig(cwd);
 
-    expect(resolved).toBe(liveShim);
-    expect(updatedConfig.shellIntegration.originalCommandMap.claude).toBe(liveShim);
+    // Self-heals off the legacy backup to the live claude.cmd sibling, which is
+    // then followed through to the real .exe it targets (FIX A).
+    expect(resolved).toBe(exePath);
+    expect(updatedConfig.shellIntegration.originalCommandMap.claude).toBe(exePath);
   });
 
   it("prefers the Windows-native claude.cmd over the extensionless shim from PATH", () => {
@@ -151,15 +154,20 @@ describe("shell integration", () => {
     process.env.EVO_HOME = cwd;
 
     const npmDir = path.join(cwd, "npm");
-    const shShim = writeClaudeShShim(npmDir, "node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+    // Point the two shims at DIFFERENT exes so the resolved path reveals which
+    // shim won the ranking — each is now followed through to its own .exe.
+    const shShim = writeClaudeShShim(npmDir, "node_modules/@anthropic-ai/claude-code/bin/claude-posix.exe");
     const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
-    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    const cmdExe = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(cmdExe, "binary");
+    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude-posix.exe"), "binary");
     process.env.EVO_TEST_WHERE_STDOUT = `${shShim}\r\n${cmdShim}\r\n`;
 
     const resolved = resolveOriginalCommand(cwd, "claude");
 
-    expect(resolved).toBe(cmdShim);
-    expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdShim);
+    // The .cmd outranks the extensionless sh shim, and is followed to its exe.
+    expect(resolved).toBe(cmdExe);
+    expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdExe);
   });
 
   it("rejects broken shims whose packaged target no longer exists", () => {
@@ -310,5 +318,82 @@ describe("createProxyShims path injection guard", () => {
       const msg = err instanceof Error ? err.message : String(err);
       expect(msg).not.toContain("shell metacharacters");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveOriginalCommand — follow an npm interpreter shim through to the .exe
+// (FIX A). Cross-platform: EVO_TEST_MODE fixtures, no real `where` probe.
+// ---------------------------------------------------------------------------
+function writeClaudePs1Shim(rootDir: string, target: string): string {
+  const shimPath = path.join(rootDir, "claude.ps1");
+  writeFile(
+    shimPath,
+    [
+      "#!/usr/bin/env pwsh",
+      `if ($MyInvocation.ExpectingInput) { $input | & \"$PSScriptRoot\\${target.replace(/\//g, "\\")}\" $args }`,
+      `else { & \"$PSScriptRoot\\${target.replace(/\//g, "\\")}\" $args }`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"),
+  );
+  return shimPath;
+}
+
+describe("resolveOriginalCommand — interpreter-shim follow-through (FIX A)", () => {
+  function setup(prefix: string): string {
+    process.env.EVO_TEST_MODE = "1";
+    process.env.EVO_TEST_WHERE_STDOUT = "";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+    return cwd;
+  }
+
+  function mapClaudeTo(cwd: string, commandPath: string): void {
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: commandPath },
+      },
+    });
+  }
+
+  const EXE_REL = "node_modules/@anthropic-ai/claude-code/bin/claude.exe";
+
+  it("follows a .cmd shim through to the real .exe it targets", () => {
+    const cwd = setup("evo-shim-cmd-exe-");
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake binary");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", EXE_REL);
+    mapClaudeTo(cwd, cmdShim);
+
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(exePath);
+  });
+
+  it("follows a .ps1 shim through to the real .exe it targets", () => {
+    const cwd = setup("evo-shim-ps1-exe-");
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake binary");
+    const ps1Shim = writeClaudePs1Shim(npmDir, EXE_REL);
+    mapClaudeTo(cwd, ps1Shim);
+
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(exePath);
+  });
+
+  it("does NOT redirect a shim that targets a .js launcher (leaves node shims alone)", () => {
+    const cwd = setup("evo-shim-cmd-js-");
+    const npmDir = path.join(cwd, "npm");
+    const jsTarget = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    writeFile(jsTarget, "console.log('hi')");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules/@anthropic-ai/claude-code/cli.js");
+    mapClaudeTo(cwd, cmdShim);
+
+    // .js targets must be left alone — resolution stays on the shim.
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(cmdShim);
   });
 });

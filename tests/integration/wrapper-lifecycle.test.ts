@@ -306,6 +306,54 @@ describe("exit watchdog: child exit with lingering stdio does not trap the wrapp
   }, 30_000);
 });
 
+// Windows-only: reproduces npm's PowerShell interpreter shim, which pipes a
+// redirected stdin (`$input | & <exe>`) that blocks PowerShell forever unless
+// stdin reaches EOF — even after the real CLI has exited. Guards FIX B (the
+// wrapper closes the non-attach child's stdin) end-to-end. On main this HANGS.
+const itWin = process.platform === "win32" ? it : it.skip;
+describe("interpreter-shim stdin wedge (Windows)", () => {
+  itWin(
+    "does not hang when the resolved command is a PowerShell shim that pipes stdin",
+    async () => {
+      const cwd = makeProjectDir("evo-ps1-wedge-");
+      // A fast-exit-1 fake CLI the shim invokes. A .cmd stands in for the real
+      // .exe (we can't mint a PE here); the wedge is in PowerShell's stdin
+      // handling and is independent of what the inner command is.
+      fs.writeFileSync(path.join(cwd, "fake-claude.cmd"), "@echo off\r\nexit /b 1\r\n");
+      // Mirror npm's shim. The target is NOT under node_modules, so FIX A's
+      // shim-follow-through deliberately does not apply here — this isolates the
+      // stdin-EOF fix (FIX B) with the PowerShell layer actually in place.
+      const ps1 = path.join(cwd, "claude.ps1");
+      fs.writeFileSync(
+        ps1,
+        [
+          "if ($MyInvocation.ExpectingInput) {",
+          '  $input | & "$PSScriptRoot\\fake-claude.cmd" $args',
+          "} else {",
+          '  & "$PSScriptRoot\\fake-claude.cmd" $args',
+          "}",
+          "exit $LASTEXITCODE",
+          "",
+        ].join("\r\n"),
+      );
+      const config = ensureEvoConfig(cwd);
+      updateEvoConfig(cwd, {
+        ...config,
+        shellIntegration: {
+          ...config.shellIntegration,
+          originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: ps1 },
+        },
+      });
+
+      // spawnWrapper leaves the wrapper's own stdin OPEN, and the wrapper runs
+      // non-attach (non-TTY) so it must close the PowerShell child's stdin.
+      const result = await spawnWrapper({ cwd, proxyArgs: ["--bad-flag-xyz"], timeoutMs: 15_000 });
+      expect(result.code).toBe(1);
+    },
+    30_000,
+  );
+});
+
 describe("killProcessTree", () => {
   it("terminates a long-running child within a timeout", async () => {
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

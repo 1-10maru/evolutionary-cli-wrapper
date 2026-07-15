@@ -393,6 +393,15 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   if (attachStdin) {
     process.stdin.resume();
     process.stdin.on("data", stdinListener);
+  } else if (child.stdin) {
+    // Non-attach path: we are not forwarding our stdin to the child, so deliver
+    // EOF right away by closing its stdin pipe. Without this, an interpreter
+    // layer left in front of the real CLI (npm's PowerShell shim runs
+    // `$input | & claude.exe`) blocks on a stdin pipe that never reaches EOF —
+    // hanging forever even after the real CLI has exited. Only the piped,
+    // non-interactive path has a child.stdin stream to close (an inherited
+    // stdio child exposes none), so this never touches interactive sessions.
+    child.stdin.end();
   }
 
   const idleMs = config.proxy.turnIdleMs;

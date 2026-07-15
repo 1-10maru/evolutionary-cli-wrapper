@@ -296,6 +296,35 @@ function extractShimTargetPath(commandPath: string): string | null {
 }
 
 /**
+ * If a resolved command is an npm interpreter shim (`.cmd` / `.ps1` / `.bat`, or
+ * an extensionless stub) that points at a real `.exe`, return that `.exe` so we
+ * can spawn it directly instead of through a cmd.exe / PowerShell interpreter
+ * layer.
+ *
+ * Why this matters: npm's PowerShell shim runs
+ *   `if ($MyInvocation.ExpectingInput) { $input | & claude.exe $args } ...`
+ * With a redirected stdin that never reaches EOF, PowerShell blocks on stdin
+ * forever even after `claude.exe` has already exited — so evo's direct child
+ * (powershell) never exits and the teardown watchdog, which is keyed on the
+ * direct child's exit, never fires. The `.cmd` variant instead surfaces the
+ * interactive "Terminate batch job (Y/N)?" prompt on Ctrl+C. Spawning the
+ * `.exe` directly removes the interpreter entirely and both symptoms vanish.
+ *
+ * Strictly guarded to `.exe` targets: a shim that points at a `.js` / `cli.js`
+ * (a node launcher) is left alone — following it to node is out of scope here.
+ */
+function followShimToExe(resolved: string): string {
+  const ext = path.extname(resolved).toLowerCase();
+  const isShim = ext === ".cmd" || ext === ".ps1" || ext === ".bat" || ext === "";
+  if (!isShim) return resolved;
+  const target = extractShimTargetPath(resolved);
+  if (!target) return resolved;
+  if (path.extname(target).toLowerCase() !== ".exe") return resolved;
+  if (!fs.existsSync(target)) return resolved;
+  return target;
+}
+
+/**
  * Whether a resolved command can actually be launched on the current platform
  * by `spawnInteractiveCommand`. On Windows we can spawn `.exe` directly, `.cmd`
  * / `.bat` via cmd.exe, and `.ps1` via pwsh/powershell — but an extensionless
@@ -409,12 +438,18 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
   const discoveredCandidates = discoverOriginalCommandsFromPath(shellHome, binDir, cli);
   const fallbackCandidates = configuredCandidates;
 
-  const resolved = dedupeCommandCandidates([
+  const resolvedRaw = dedupeCommandCandidates([
     ...siblingCandidates,
     ...liveConfiguredCandidates,
     ...discoveredCandidates,
     ...fallbackCandidates,
   ]).find((candidate) => isUsableCommandCandidate(candidate)) ?? null;
+
+  // Follow an npm interpreter shim (.cmd/.ps1/.bat/extensionless) through to the
+  // real .exe it points at, so we spawn the .exe directly and never wrap it in a
+  // cmd.exe/PowerShell layer that can wedge on a never-EOF stdin. No-op unless
+  // the shim points at an existing .exe.
+  const resolved = resolvedRaw ? followShimToExe(resolvedRaw) : null;
 
   if (resolved && !isLegacyEvoBackupCommand(resolved)) {
     persistResolvedCommand(cwd, shellHome, cli, resolved);
