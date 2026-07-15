@@ -1,11 +1,15 @@
 /**
- * `evo advice` — print the current session's full EvoPet advice.
+ * `evo advice` — print the full EvoPet advice for this directory.
  *
  * The statusline truncates advice/detail/before-after to fit one or two lines
- * and points here (`→ 続きは \`evo advice\``) for the untruncated text. This
- * reads the same live-state sinks the statusline reads (newest per-session
- * file in <cwd>/.evo/sessions first, then the legacy shared sinks) and prints
- * the full headline, detail, and before/after example.
+ * and points here (`→ 続きは \`evo advice\``) for the untruncated text.
+ *
+ * CAVEAT: this command has no session_id of its own, so it shows the advice of
+ * the MOST RECENTLY ACTIVE session in this directory — it picks the newest
+ * per-session file in <cwd>/.evo/sessions by modification time (then falls back
+ * to the legacy shared sinks). With multiple concurrent sessions in the same
+ * cwd, that is normally the one you just interacted with, but not guaranteed to
+ * be a specific pane. It prints the full headline, detail, and before/after.
  */
 
 import * as fs from "node:fs";

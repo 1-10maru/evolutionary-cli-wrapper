@@ -676,9 +676,14 @@ class TestStatuslineV34PerSession(unittest.TestCase):
         plain = strip_ansi(out)
         # EvoPet block = everything after the token line (first newline).
         idx = plain.find("\n")
-        block = plain[idx:] if idx >= 0 else plain
-        self.assertLess(
-            len(block), 600, f"EvoPet block not hard-capped ({len(block)} chars)"
+        block = plain[idx + 1:] if idx >= 0 else plain
+        # Bounded by the total-block cap (500) + the appended `evo advice`
+        # pointer — never the ~1MB the payload could have flooded.
+        pointer_len = len(" → 続きは `evo advice`")
+        self.assertLessEqual(
+            len(block),
+            500 + pointer_len,
+            f"EvoPet block not hard-capped ({len(block)} chars)",
         )
         self.assertIn("evo advice", block)
 

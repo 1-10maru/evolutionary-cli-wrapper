@@ -590,7 +590,7 @@ program
 
 program
   .command("advice")
-  .description("Print the current session's full EvoPet advice (untruncated headline, detail, and before/after example).")
+  .description("Print the full EvoPet advice (untruncated) for the most recently active session in this directory.")
   .option("--cwd <path>", "Project directory that owns the .evo live-state.", process.cwd())
   .action((options: Record<string, unknown>) => {
     runAdviceCommand({ cwd: String(options.cwd) });

@@ -3,7 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { clip, displayWidth, hardCapVisible } from "../../src/cli/statusline";
+import {
+  clip,
+  displayWidth,
+  hardCapVisible,
+  EVOPET_BLOCK_MAX_CHARS,
+} from "../../src/cli/statusline";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // Spawn the pre-built CLI. `npm run build` runs before the suite in the verify
@@ -240,7 +245,7 @@ describe("evo statusline (session binding + tags)", () => {
     expect(plain).toMatch(/\[(公式|汎用|[^\]]+向け)\]/);
   });
 
-  it("hard-caps a pathological payload (200KB advice + nickname) well under the block cap", () => {
+  it("hard-caps a pathological payload (200KB advice + detail + nickname) at the total-block cap", () => {
     const { home, cwd } = makeTempDirs();
     // Skip the session-start boost so the 200KB advice actually renders (and is
     // capped) instead of being replaced by the first-tick boost message.
@@ -268,9 +273,11 @@ describe("evo statusline (session binding + tags)", () => {
       }),
     );
     const { plain } = runStatusline(baseStdin(cwd, { session_id: "s1" }), home, cwd);
-    // Whole rendered EvoPet block (all lines), ANSI already stripped, must be
-    // bounded — never the ~800KB the payload could have flooded.
-    expect(plain.length).toBeLessThan(600);
+    // Whole rendered EvoPet block (all lines), ANSI already stripped, is bounded
+    // by the total-block cap + the appended pointer — never the ~1MB the payload
+    // could have flooded.
+    const pointerLen = " → 続きは `evo advice`".length;
+    expect(plain.length).toBeLessThanOrEqual(EVOPET_BLOCK_MAX_CHARS + pointerLen);
     expect(plain).toContain("evo advice"); // pointer to the full content
   });
 });

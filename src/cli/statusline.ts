@@ -204,13 +204,14 @@ export function clip(s: string, maxCols: number, opts?: { pointer?: boolean }): 
   return opts?.pointer ? truncated + ADVICE_POINTER : truncated + "…";
 }
 
-// Absolute hard cap (final safety net). Even with per-field clip, an unclipped
-// field (e.g. a crafted nickname) or a future code path could flood the line;
-// this bounds the VISIBLE length of an emitted line no matter what. ANSI escape
-// sequences pass through uncounted (so colors stay intact); a hard cut appends
-// a reset + the `evo advice` pointer. Measured in code points (emoji = 1).
-const EVO_LINE1_MAX_VISIBLE = 200;
-const EVO_LINE2_MAX_VISIBLE = 300;
+// Absolute hard total-block cap (final safety net). Even with per-field clip,
+// an unclipped field (e.g. a crafted nickname) or a future code path could
+// flood the statusline; this bounds the VISIBLE length of the WHOLE assembled
+// EvoPet block no matter what. ANSI escape sequences pass through uncounted (so
+// colors stay intact); a hard cut appends a reset + the `evo advice` pointer.
+// Measured in code points (emoji = 1). The newline between line 1 and line 2
+// counts as one visible unit.
+export const EVOPET_BLOCK_MAX_CHARS = 500;
 
 export function hardCapVisible(s: string, maxVisible: number): string {
   const cps = Array.from(s);
@@ -577,12 +578,15 @@ export async function runStatuslineCommand(): Promise<void> {
   // ── Emit ──
   // Output: line1 (joined with SEP), optional line2 on next line.
   // Never emit the token/model/cwd line — that's ClaudeConfig's job.
+  // Assemble the EvoPet block (line 1 + optional line 2), then enforce the
+  // absolute hard total-block cap on the joined output as the final backstop.
+  const blockLines: string[] = [];
+  if (line1Bits.length > 0) blockLines.push(line1Bits.join(SEP));
+  if (line2) blockLines.push(line2);
+
   const out: string[] = [];
-  if (line1Bits.length > 0) {
-    out.push(hardCapVisible(line1Bits.join(SEP), EVO_LINE1_MAX_VISIBLE));
-  }
-  if (line2) {
-    out.push(hardCapVisible(line2, EVO_LINE2_MAX_VISIBLE));
+  if (blockLines.length > 0) {
+    out.push(hardCapVisible(blockLines.join("\n"), EVOPET_BLOCK_MAX_CHARS));
   }
 
   // Append (last line) an update-available notice when npm has a newer

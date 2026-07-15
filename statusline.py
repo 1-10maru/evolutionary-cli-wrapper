@@ -730,12 +730,12 @@ def _clip(s, max_cols, pointer=False):
     return truncated + (_ADVICE_POINTER if pointer else '…')
 
 
-# Absolute hard cap (final safety net). Even with per-field clip, an unclipped
-# field (e.g. a crafted nickname) or a future code path could flood the line;
-# this bounds the VISIBLE length of an emitted line regardless. ANSI escapes
-# pass through uncounted; a hard cut appends reset + the `evo advice` pointer.
-_EVO_LINE1_MAX_VISIBLE = 200
-_EVO_LINE2_MAX_VISIBLE = 300
+# Absolute hard total-block cap (final safety net). Even with per-field clip, an
+# unclipped field (e.g. a crafted nickname) or a future code path could flood the
+# statusline; this bounds the VISIBLE length of the WHOLE assembled EvoPet block
+# regardless. ANSI escapes pass through uncounted; a hard cut appends reset + the
+# `evo advice` pointer. The newline between line 1 and line 2 counts as 1 unit.
+_EVOPET_BLOCK_MAX_CHARS = 500
 
 
 def _hard_cap_visible(s, max_visible):
@@ -1052,15 +1052,17 @@ else:
     else:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}"
 
+# Assemble the EvoPet block (line 1 + optional line 2), then enforce the
+# absolute hard total-block cap on the joined block as the final backstop.
+_evo_block_parts = []
 if _line1_bits:
-    parts.append('\n' + _hard_cap_visible(SEP.join(_line1_bits), _EVO_LINE1_MAX_VISIBLE))
+    _evo_block_parts.append(SEP.join(_line1_bits))
 if _line2:
     # v3.3.0: dim line2 too when proxy is stale, so the entire EvoPet block
     # consistently looks subdued rather than mixing fresh-bright advice with
     # dim-stale stats.
-    _l2 = (DIM + _line2 + R) if _evo_source == 'proxy_stale' else _line2
-    # v3.6: absolute hard cap as a final safety net against a pathological
-    # payload flooding the statusline, regardless of per-field clip.
-    parts.append('\n' + _hard_cap_visible(_l2, _EVO_LINE2_MAX_VISIBLE))
+    _evo_block_parts.append((DIM + _line2 + R) if _evo_source == 'proxy_stale' else _line2)
+if _evo_block_parts:
+    parts.append('\n' + _hard_cap_visible('\n'.join(_evo_block_parts), _EVOPET_BLOCK_MAX_CHARS))
 
 print(SEP.join(parts), end='')
