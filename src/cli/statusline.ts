@@ -204,6 +204,36 @@ export function clip(s: string, maxCols: number, opts?: { pointer?: boolean }): 
   return opts?.pointer ? truncated + ADVICE_POINTER : truncated + "…";
 }
 
+// Absolute hard cap (final safety net). Even with per-field clip, an unclipped
+// field (e.g. a crafted nickname) or a future code path could flood the line;
+// this bounds the VISIBLE length of an emitted line no matter what. ANSI escape
+// sequences pass through uncounted (so colors stay intact); a hard cut appends
+// a reset + the `evo advice` pointer. Measured in code points (emoji = 1).
+const EVO_LINE1_MAX_VISIBLE = 200;
+const EVO_LINE2_MAX_VISIBLE = 300;
+
+export function hardCapVisible(s: string, maxVisible: number): string {
+  const cps = Array.from(s);
+  let out = "";
+  let visible = 0;
+  let i = 0;
+  while (i < cps.length) {
+    if (cps[i] === "\x1b") {
+      // Copy a CSI/SGR escape verbatim: ESC [ <params> <final letter>.
+      out += cps[i++];
+      if (i < cps.length && cps[i] === "[") out += cps[i++];
+      while (i < cps.length && !/[A-Za-z]/.test(cps[i])) out += cps[i++];
+      if (i < cps.length) out += cps[i++];
+      continue;
+    }
+    if (visible >= maxVisible) break;
+    out += cps[i++];
+    visible++;
+  }
+  if (i < cps.length) out += `${ANSI.R}${ADVICE_POINTER}`;
+  return out;
+}
+
 // Resolve the model from the statusline stdin payload. Claude Code sends it as
 // `{ model: { id, display_name } }`; tolerate a bare string too. Authoritative
 // per session, so it drives model-aware tip selection in the fallback path.
@@ -377,7 +407,7 @@ export async function runStatuslineCommand(): Promise<void> {
   if (evo && evoSource === "proxy") {
     // ═══ Full proxy data ═══
     const avatar = (typeof evo.avatar === "string" && evo.avatar) || "🐣";
-    const nick = (typeof evo.nickname === "string" && evo.nickname) || "EvoPet";
+    const nick = clip((typeof evo.nickname === "string" && evo.nickname) || "EvoPet", 24);
     const bond = asNumberOr(evo.bond, 0) as number;
     const isg =
       evo.idealStateGauge === null || evo.idealStateGauge === undefined
@@ -549,10 +579,10 @@ export async function runStatuslineCommand(): Promise<void> {
   // Never emit the token/model/cwd line — that's ClaudeConfig's job.
   const out: string[] = [];
   if (line1Bits.length > 0) {
-    out.push(line1Bits.join(SEP));
+    out.push(hardCapVisible(line1Bits.join(SEP), EVO_LINE1_MAX_VISIBLE));
   }
   if (line2) {
-    out.push(line2);
+    out.push(hardCapVisible(line2, EVO_LINE2_MAX_VISIBLE));
   }
 
   // Append (last line) an update-available notice when npm has a newer

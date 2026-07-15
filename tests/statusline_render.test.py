@@ -649,6 +649,39 @@ class TestStatuslineV34PerSession(unittest.TestCase):
         plain = strip_ansi(out)
         self.assertIn("XferPet", plain)
 
+    def test_hard_caps_pathological_payload(self) -> None:
+        """v3.6: an unbounded advice/nickname/example must NOT flood the
+        statusline. The EvoPet block is hard-capped as a final safety net,
+        regardless of the per-field meaning-aware truncation."""
+        payload = {
+            "avatar": "🦊",
+            "nickname": "猫" * 200_000,
+            "sessionGrade": "A",
+            "promptScore": 85,
+            "idealStateGauge": 70,
+            "signalKind": "tip",
+            "advice": "x" * 200_000,
+            "adviceDetail": "y" * 200_000,
+            "beforeExample": "b" * 200_000,
+            "afterExample": "a" * 200_000,
+            "sessionId": "s-huge",
+            "updatedAt": int(time.time() * 1000) - 1_000,
+        }
+        (self.sessions_dir / "s-huge.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        out = run_statusline(
+            self._stdin(session_id="s-huge"), self.fake_home, self.cwd_dir
+        )
+        plain = strip_ansi(out)
+        # EvoPet block = everything after the token line (first newline).
+        idx = plain.find("\n")
+        block = plain[idx:] if idx >= 0 else plain
+        self.assertLess(
+            len(block), 600, f"EvoPet block not hard-capped ({len(block)} chars)"
+        )
+        self.assertIn("evo advice", block)
+
 
 if __name__ == "__main__":
     unittest.main()

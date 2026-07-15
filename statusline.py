@@ -730,6 +730,46 @@ def _clip(s, max_cols, pointer=False):
     return truncated + (_ADVICE_POINTER if pointer else '…')
 
 
+# Absolute hard cap (final safety net). Even with per-field clip, an unclipped
+# field (e.g. a crafted nickname) or a future code path could flood the line;
+# this bounds the VISIBLE length of an emitted line regardless. ANSI escapes
+# pass through uncounted; a hard cut appends reset + the `evo advice` pointer.
+_EVO_LINE1_MAX_VISIBLE = 200
+_EVO_LINE2_MAX_VISIBLE = 300
+
+
+def _hard_cap_visible(s, max_visible):
+    if not s:
+        return s
+    out = []
+    visible = 0
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '\x1b':
+            out.append(c)
+            i += 1
+            if i < n and s[i] == '[':
+                out.append(s[i])
+                i += 1
+            while i < n and not s[i].isalpha():
+                out.append(s[i])
+                i += 1
+            if i < n:
+                out.append(s[i])
+                i += 1
+            continue
+        if visible >= max_visible:
+            break
+        out.append(c)
+        visible += 1
+        i += 1
+    if i < n:
+        out.append(R + _ADVICE_POINTER)
+    return ''.join(out)
+
+
 # ══════════════════════════════════════════════════════════════
 # Data source resolution: proxy > home fallback > self-tracking
 # ══════════════════════════════════════════════════════════════
@@ -858,7 +898,7 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
     # ═══ Full proxy data ═══
     _is_stale = _evo_source == 'proxy_stale'
     _avatar = _evo.get('avatar', '\U0001f423')
-    _nick = _evo.get('nickname', 'EvoPet')
+    _nick = _clip(str(_evo.get('nickname') or 'EvoPet'), 24)
     _turns = _evo.get('turns', 0)
     _user_msgs = _evo.get('userMessages', 0)
     _bond = _evo.get('bond', 0)
@@ -1013,14 +1053,14 @@ else:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}"
 
 if _line1_bits:
-    parts.append('\n' + SEP.join(_line1_bits))
+    parts.append('\n' + _hard_cap_visible(SEP.join(_line1_bits), _EVO_LINE1_MAX_VISIBLE))
 if _line2:
     # v3.3.0: dim line2 too when proxy is stale, so the entire EvoPet block
     # consistently looks subdued rather than mixing fresh-bright advice with
     # dim-stale stats.
-    if _evo_source == 'proxy_stale':
-        parts.append('\n' + DIM + _line2 + R)
-    else:
-        parts.append('\n' + _line2)
+    _l2 = (DIM + _line2 + R) if _evo_source == 'proxy_stale' else _line2
+    # v3.6: absolute hard cap as a final safety net against a pathological
+    # payload flooding the statusline, regardless of per-field clip.
+    parts.append('\n' + _hard_cap_visible(_l2, _EVO_LINE2_MAX_VISIBLE))
 
 print(SEP.join(parts), end='')

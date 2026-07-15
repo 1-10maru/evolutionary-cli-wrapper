@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { clip, displayWidth } from "../../src/cli/statusline";
+import { clip, displayWidth, hardCapVisible } from "../../src/cli/statusline";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // Spawn the pre-built CLI. `npm run build` runs before the suite in the verify
@@ -57,6 +57,34 @@ describe("clip", () => {
     const out = clip("/a/b/averyveryverylongbasenamefile.tsx", 8);
     expect(out.startsWith("averyver")).toBe(true);
     expect(out.endsWith("…")).toBe(true);
+  });
+});
+
+describe("hardCapVisible (absolute safety net)", () => {
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  it("leaves a short string untouched", () => {
+    expect(hardCapVisible("hello", 100)).toBe("hello");
+  });
+
+  it("bounds the VISIBLE length of a pathological plain string", () => {
+    const out = hardCapVisible("x".repeat(200_000), 300);
+    expect(strip(out).length).toBeLessThanOrEqual(300 + " → 続きは `evo advice`".length);
+    expect(out).toContain("evo advice");
+  });
+
+  it("does not count ANSI escapes toward the visible budget", () => {
+    // 50 colored 1-char segments = 50 visible chars, well under the cap.
+    const colored = Array.from({ length: 50 }, () => "\x1b[31mx\x1b[0m").join("");
+    const out = hardCapVisible(colored, 100);
+    expect(strip(out)).toBe("x".repeat(50));
+    expect(out).toBe(colored); // untouched: visible 50 <= 100
+  });
+
+  it("counts a wide/emoji code point as one visible unit (no mid-surrogate cut)", () => {
+    const out = hardCapVisible("🦊".repeat(500), 10);
+    // 10 emoji kept, then the pointer — never a broken surrogate half.
+    expect(Array.from(strip(out).replace(" → 続きは `evo advice`", "")).length).toBe(10);
   });
 });
 
@@ -210,5 +238,39 @@ describe("evo statusline (session binding + tags)", () => {
     runStatusline(baseStdin(cwd), home, cwd);
     const { plain } = runStatusline(baseStdin(cwd), home, cwd);
     expect(plain).toMatch(/\[(公式|汎用|[^\]]+向け)\]/);
+  });
+
+  it("hard-caps a pathological payload (200KB advice + nickname) well under the block cap", () => {
+    const { home, cwd } = makeTempDirs();
+    // Skip the session-start boost so the 200KB advice actually renders (and is
+    // capped) instead of being replaced by the first-tick boost message.
+    fs.writeFileSync(
+      path.join(home, ".claude", ".evo-self-state.json"),
+      JSON.stringify({ start: Date.now() / 1000, calls: 5, cwd, ctx_pct: 20 }),
+    );
+    const dir = path.join(cwd, ".evo", "sessions");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "s1.json"),
+      JSON.stringify({
+        avatar: "🦊",
+        nickname: "猫".repeat(200_000),
+        sessionGrade: "A",
+        promptScore: 85,
+        idealStateGauge: 70,
+        signalKind: "tip",
+        advice: "x".repeat(200_000),
+        adviceDetail: "y".repeat(200_000),
+        beforeExample: "b".repeat(200_000),
+        afterExample: "a".repeat(200_000),
+        sessionId: "s1",
+        updatedAt: Date.now() - 1000,
+      }),
+    );
+    const { plain } = runStatusline(baseStdin(cwd, { session_id: "s1" }), home, cwd);
+    // Whole rendered EvoPet block (all lines), ANSI already stripped, must be
+    // bounded — never the ~800KB the payload could have flooded.
+    expect(plain.length).toBeLessThan(600);
+    expect(plain).toContain("evo advice"); // pointer to the full content
   });
 });
