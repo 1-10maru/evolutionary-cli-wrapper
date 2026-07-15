@@ -96,14 +96,23 @@ interface RunResult {
   stderr: string;
 }
 
-function runBuiltCli(opts: {
+// Low-level spawn of the built CLI `proxy` action. `proxyArgs` are the tokens
+// after `-- ` (the wrapped-CLI argv). Leaves the wrapper's stdin OPEN (never
+// end()) to reproduce the open-stdin hang condition.
+function spawnWrapper(opts: {
   cwd: string;
-  jsonlOut: string;
-  exitCode: number;
-  forceAttachStdin?: boolean;
+  proxyArgs: string[];
+  extraEnv?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  // Which event marks "the wrapper returned". Default "close" (fires after the
+  // process exits AND its stdio streams end, so full stdout is captured). Use
+  // "exit" when a lingering grandchild holds a stdio pipe open on Windows: the
+  // process itself has exited (the thing under test) but `close` would be
+  // delayed by the leaked handle, unrelated to the wrapper's own lifecycle.
+  resolveOn?: "close" | "exit";
 }): Promise<RunResult> {
   const timeoutMs = opts.timeoutMs ?? 15_000;
+  const resolveOn = opts.resolveOn ?? "close";
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     EVO_TEST_MODE: "1",
@@ -112,25 +121,10 @@ function runBuiltCli(opts: {
     EVO_LIVE_TRACKING: "0",
     EVO_NO_UPDATE_CHECK: "1",
     EVO_NO_INSTALL_PROMPT: "1",
+    ...opts.extraEnv,
   };
-  if (opts.forceAttachStdin) env.EVO_FORCE_STDIN_ATTACH = "1";
 
-  const args = [
-    CLI_PATH,
-    "proxy",
-    "--cli",
-    "claude",
-    "--cwd",
-    opts.cwd,
-    "--",
-    FIXTURE_PATH,
-    "--out",
-    opts.jsonlOut,
-    "--exit-code",
-    String(opts.exitCode),
-    "--turns",
-    "3",
-  ];
+  const args = [CLI_PATH, "proxy", "--cli", "claude", "--cwd", opts.cwd, "--", ...opts.proxyArgs];
 
   return new Promise<RunResult>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
@@ -153,20 +147,59 @@ function runBuiltCli(opts: {
     }, timeoutMs);
     timer.unref?.();
 
+    let settled = false;
+    const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Release our ends of the pipes so the test's own event loop can drain,
+      // even if a leaked grandchild handle keeps the write ends open.
+      try {
+        child.stdin?.destroy();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      } catch {
+        // best-effort
+      }
+      child.unref?.();
+      resolve({ code, signal, stdout, stderr });
+    };
+
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(err);
     });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      // Release our end of the pipe so the test's own event loop can drain.
-      child.stdin?.destroy();
-      resolve({ code, signal, stdout, stderr });
-    });
+    if (resolveOn === "exit") {
+      child.on("exit", (code, signal) => settle(code, signal));
+    } else {
+      child.on("close", (code, signal) => settle(code, signal));
+    }
 
     // IMPORTANT: leave child.stdin OPEN (never call end()) to reproduce the
     // open-stdin condition under which the wrapper previously hung.
   });
+}
+
+function runBuiltCli(opts: {
+  cwd: string;
+  jsonlOut: string;
+  exitCode: number;
+  forceAttachStdin?: boolean;
+  timeoutMs?: number;
+}): Promise<RunResult> {
+  return spawnWrapper({
+    cwd: opts.cwd,
+    proxyArgs: [FIXTURE_PATH, "--out", opts.jsonlOut, "--exit-code", String(opts.exitCode), "--turns", "3"],
+    extraEnv: opts.forceAttachStdin ? { EVO_FORCE_STDIN_ATTACH: "1" } : undefined,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
+// An Evo episode is recorded only by the proxied path (which opens the SQLite
+// db and prints a run summary). A transparent passthrough opens neither.
+function expectNoEpisodeArtifacts(cwd: string, stdout: string): void {
+  expect(fs.existsSync(path.join(cwd, ".evo", "evolutionary.db"))).toBe(false);
+  expect(stdout).not.toContain("Episode #");
 }
 
 describe("wrapper lifecycle: exit-code propagation + no hang on open stdin", () => {
@@ -194,6 +227,82 @@ describe("wrapper lifecycle: exit-code propagation + no hang on open stdin", () 
       forceAttachStdin: true,
     });
     expect(result.code).toBe(5);
+  }, 30_000);
+});
+
+describe("nesting guard: EVO_PROXY_ACTIVE=1 passes through with no nested episode", () => {
+  it("exits promptly with the child's code and records no episode when already inside a proxy", async () => {
+    const cwd = makeProjectDir("evo-life-nested-");
+    const jsonl = path.join(cwd, "session.jsonl");
+    const result = await spawnWrapper({
+      cwd,
+      proxyArgs: [FIXTURE_PATH, "--out", jsonl, "--exit-code", "3", "--turns", "3"],
+      extraEnv: { EVO_PROXY_ACTIVE: "1" },
+    });
+    expect(result.code).toBe(3);
+    // The wrapped child still ran (its stdout was forwarded)...
+    expect(result.stdout).toContain("Read src/index.ts");
+    // ...but no nested proxy session/episode was opened.
+    expectNoEpisodeArtifacts(cwd, result.stdout);
+  }, 30_000);
+});
+
+describe("update passthrough: update ops are never proxied", () => {
+  it("passes the top-level --update flag through and records no episode", async () => {
+    const cwd = makeProjectDir("evo-life-update-flag-");
+    const jsonl = path.join(cwd, "session.jsonl");
+    const result = await spawnWrapper({
+      cwd,
+      // --update anywhere in the args marks this an update op; the fixture
+      // ignores the unknown flag and exits with the requested code.
+      proxyArgs: [FIXTURE_PATH, "--out", jsonl, "--exit-code", "4", "--turns", "3", "--update"],
+    });
+    expect(result.code).toBe(4);
+    expectNoEpisodeArtifacts(cwd, result.stdout);
+  }, 30_000);
+
+  it("passes the `update` subcommand through and records no episode", async () => {
+    const cwd = makeProjectDir("evo-life-update-sub-");
+    // The resolved original command is Node (mapped by makeProjectDir), so a
+    // leading `update` runs ./update from cwd. Give it a trivial script that
+    // exits with a known code — proving the subcommand bypasses the proxy.
+    fs.writeFileSync(path.join(cwd, "update"), "process.exit(9);\n");
+    const result = await spawnWrapper({ cwd, proxyArgs: ["update"] });
+    expect(result.code).toBe(9);
+    expectNoEpisodeArtifacts(cwd, result.stdout);
+  }, 30_000);
+});
+
+describe("exit watchdog: child exit with lingering stdio does not trap the wrapper", () => {
+  it("returns within the watchdog window when a grandchild holds the stdout pipe open", async () => {
+    const cwd = makeProjectDir("evo-life-watchdog-");
+    const jsonl = path.join(cwd, "session.jsonl");
+    // The mock exits (exit-code 6) but leaves a detached grandchild holding its
+    // stdout for 10s, so the wrapper's child `close` event is delayed well past
+    // `exit`. With a 400ms watchdog the wrapper must still return promptly; the
+    // 6000ms test timeout is far below the 10s stdio-hold, so a regression
+    // (waiting for `close`) would fail here.
+    const result = await spawnWrapper({
+      cwd,
+      proxyArgs: [
+        FIXTURE_PATH,
+        "--out",
+        jsonl,
+        "--exit-code",
+        "6",
+        "--turns",
+        "3",
+        "--hold-stdout-ms",
+        "10000",
+      ],
+      extraEnv: { EVO_EXIT_WATCHDOG_MS: "400" },
+      timeoutMs: 6000,
+      // The wrapper PROCESS exits promptly (via the watchdog); its stdout
+      // `close` is delayed by the grandchild that still holds the pipe, so we
+      // key on the process `exit` event — the thing the watchdog controls.
+      resolveOn: "exit",
+    });
+    expect(result.code).toBe(6);
   }, 30_000);
 });
 

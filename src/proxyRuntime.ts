@@ -58,6 +58,19 @@ const proxySpawnLog = getLogger().child("proxy.spawn");
 const proxySubprocessLog = getLogger().child("proxy.subprocess");
 
 /**
+ * How long to wait after the child's `exit` event for its `close` event before
+ * proceeding with teardown anyway. `close` fires only once every stdio stream
+ * has ended; a grandchild that inherits (and holds) a stdio pipe can keep it
+ * open indefinitely after the child itself has exited, which would otherwise
+ * trap the wrapper forever. Overridable via EVO_EXIT_WATCHDOG_MS (primarily for
+ * tests). Defaults to 2000ms.
+ */
+function exitWatchdogMs(): number {
+  const raw = Number(process.env.EVO_EXIT_WATCHDOG_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
+}
+
+/**
  * Conventional shell exit code for a process terminated by a signal:
  * 128 + the platform's signal number (e.g. SIGINT -> 130). Falls back to 128
  * when the signal number is unknown on this platform.
@@ -466,10 +479,21 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const subprocessStartMs = Date.now();
   let exitSignal: string | null = null;
   const exitCode = await new Promise<number>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
+    let settled = false;
+    let watchdog: NodeJS.Timeout | null = null;
+    const finish = (
+      code: number | null,
+      signal: NodeJS.Signals | null,
+      via: "close" | "exit-watchdog",
+    ): void => {
+      if (settled) return;
+      settled = true;
+      if (watchdog) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
       const durationMs = Date.now() - subprocessStartMs;
-      const ctx = { exitCode: code, signal, durationMs };
+      const ctx = { exitCode: code, signal, durationMs, via };
       if ((code !== null && code !== 0) || signal !== null) {
         proxySubprocessLog.warn("subprocess exited", ctx);
       } else {
@@ -487,8 +511,23 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         exitCode: code,
         signal,
         durationMs,
+        via,
       });
       resolve(code ?? 1);
+    };
+    child.on("error", reject);
+    // Normal path: `close` fires after the child exited AND every stdio stream
+    // ended. Exit-code propagation semantics are unchanged when it arrives.
+    child.on("close", (code, signal) => finish(code, signal, "close"));
+    // Watchdog: `exit` fires as soon as the child process itself has exited. If
+    // a grandchild keeps a stdio pipe open, `close` may never fire — so arm a
+    // short timer to proceed with teardown using the child's own exit status.
+    // When `close` follows promptly (the common case) it settles first and the
+    // watchdog is cleared, so behavior is identical to before.
+    child.on("exit", (code, signal) => {
+      if (settled || watchdog) return;
+      watchdog = setTimeout(() => finish(code, signal, "exit-watchdog"), exitWatchdogMs());
+      watchdog.unref?.();
     });
   });
 

@@ -32,6 +32,28 @@ import { formatExplain, formatIssueIntake, formatMascotStats, formatRunSummary, 
  */
 const PASSTHROUGH_SUBCOMMANDS = new Set(["review"]);
 
+/**
+ * Native update-family subcommands that must never be proxied — even at the top
+ * level. Claude Code's own auto-updater (and the manual `claude update` /
+ * `install` / `migrate-installer` flows) relaunch `claude` and manage helper
+ * child processes of their own. Proxying these would (a) hold the running
+ * `claude` executable open as an Evo-managed child so Windows cannot replace the
+ * locked image (`update_apply_exe_locked`), and (b) let Evo's signal escalation
+ * tree-kill a deferred updater helper. We hand these straight to the real CLI
+ * with no tracking and no signal handlers.
+ */
+const UPDATE_SUBCOMMANDS = new Set(["update", "install", "migrate-installer"]);
+
+/**
+ * True when this invocation is an update-family operation: a leading update
+ * subcommand (`claude update`), or the top-level `--update` flag anywhere in
+ * the argument list (`claude --update`).
+ */
+export function isUpdateInvocation(args: string[]): boolean {
+  if (args.length > 0 && UPDATE_SUBCOMMANDS.has(args[0].toLowerCase())) return true;
+  return args.some((arg) => arg === "--update");
+}
+
 const cliPassthroughLog = getLogger().child("cli.passthrough");
 const cliResolveLog = getLogger().child("cli.resolve");
 
@@ -79,6 +101,74 @@ function patchLiveStateOnPassthroughExit(
       // best-effort — never fail the passthrough on observability writes
     }
   }
+}
+
+/**
+ * Run the wrapped CLI transparently: no Evo tracking, episode, statusline, run
+ * summary, or signal machinery. Resolves the original command, inherits stdio,
+ * forwards the child's exit code, and force-exits with it. Used for three cases:
+ *
+ *   - "subcommand": native passthrough subcommands (e.g. `claude review`).
+ *   - "update":     update-family ops (`claude update` / `claude --update`).
+ *                   No signal handlers are installed, so Evo can never tree-kill
+ *                   a deferred updater helper, and the real CLI owns its own
+ *                   child processes and exe replacement.
+ *   - "nested":     EVO_PROXY_ACTIVE=1 — claude re-invoked `claude` by name (a
+ *                   /logout re-auth flow or an updater relaunch) and hit the evo
+ *                   shim again. Opening a second proxy session here is what made
+ *                   the outer wrapper wait forever (the /logout hang), so we must
+ *                   pass straight through and create no nested episode.
+ *
+ * Never creates the wrapped-CLI live-state files; it only patches them if they
+ * already exist (best-effort observability).
+ */
+async function runTransparentPassthrough(
+  cwd: string,
+  cli: "claude",
+  args: string[],
+  reason: "subcommand" | "update" | "nested",
+): Promise<void> {
+  const originalCommand = resolveOriginalCommand(cwd, cli);
+  if (!originalCommand) {
+    cliResolveLog.error("could not resolve original CLI", {
+      cli,
+      message: `no live ${cli} install on PATH after excluding evo shim`,
+    });
+    process.stderr.write(formatMissingOriginalCommandMessage(cli));
+    process.exit(1);
+  }
+  const ext = path.extname(originalCommand).toLowerCase();
+  const needsShell = ext === ".cmd" || ext === ".bat";
+  const child = needsShell
+    ? spawn(`"${originalCommand}" ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`, {
+        cwd,
+        shell: true,
+        stdio: "inherit",
+        env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
+      })
+    : spawn(originalCommand, args, {
+        cwd,
+        stdio: "inherit",
+        env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
+      });
+  const code = await new Promise<number>((resolve) => {
+    child.on("error", () => resolve(1));
+    child.on("close", (c) => resolve(c ?? 1));
+  });
+  if (code !== 0) {
+    cliPassthroughLog.warn("passthrough exited non-zero", {
+      cli,
+      exitCode: code,
+      reason,
+      // Log only the first arg (subcommand/flag) — never full content/prompt body.
+      args: args[0] ?? "",
+    });
+  }
+  // Best-effort: patch existing live-state files so observers see the
+  // passthrough exit code. Never CREATE files here.
+  patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
+  // Force exit with the child's code, consistent with the proxied branch.
+  process.exit(code);
 }
 
 const program = new Command();
@@ -167,49 +257,27 @@ program
     void options.cli;
     const cli = "claude" as const;
 
-    // Passthrough: native subcommands like `claude review` bypass Evo entirely
+    // Nesting guard (fixes both the /logout hang and the auto-update lock): if
+    // we are already inside an Evo proxy, claude re-invoked `claude` by name and
+    // hit our shim again. Pass straight through with NO tracking/episode/signal
+    // machinery so we never open a nested session. Must run before any setup.
+    if (process.env.EVO_PROXY_ACTIVE === "1") {
+      await runTransparentPassthrough(cwd, cli, args, "nested");
+      return;
+    }
+
+    // Update-family ops (`claude update` / `claude --update` / install /
+    // migrate-installer) must never be proxied even at top level: the native
+    // updater owns its own children and needs to replace the running claude exe.
+    if (isUpdateInvocation(args)) {
+      await runTransparentPassthrough(cwd, cli, args, "update");
+      return;
+    }
+
+    // Native subcommands like `claude review` bypass Evo entirely.
     if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
-      const originalCommand = resolveOriginalCommand(cwd, cli);
-      if (!originalCommand) {
-        cliResolveLog.error("could not resolve original CLI", {
-          cli,
-          message: `no live ${cli} install on PATH after excluding evo shim`,
-        });
-        process.stderr.write(formatMissingOriginalCommandMessage(cli));
-        process.exitCode = 1;
-        return;
-      }
-      const ext = path.extname(originalCommand).toLowerCase();
-      const needsShell = ext === ".cmd" || ext === ".bat";
-      const child = needsShell
-        ? spawn(`"${originalCommand}" ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`, {
-            cwd,
-            shell: true,
-            stdio: "inherit",
-            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-          })
-        : spawn(originalCommand, args, {
-            cwd,
-            stdio: "inherit",
-            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-          });
-      const code = await new Promise<number>((resolve) => {
-        child.on("error", () => resolve(1));
-        child.on("close", (c) => resolve(c ?? 1));
-      });
-      if (code !== 0) {
-        cliPassthroughLog.warn("passthrough exited non-zero", {
-          cli,
-          exitCode: code,
-          // Log only first arg (subcommand name) — never full content/prompt body.
-          args: args[0],
-        });
-      }
-      // Best-effort: patch existing live-state files so observers see the
-      // passthrough exit code. Never CREATE files here.
-      patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
-      // Force exit with the child's code, consistent with the proxied branch.
-      process.exit(code);
+      await runTransparentPassthrough(cwd, cli, args, "subcommand");
+      return;
     }
 
     const config = ensureEvoConfig(cwd);
