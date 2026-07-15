@@ -20,6 +20,26 @@
 ### Internal
 - Declared `engines.node >= 20`.
 
+## v3.6.0-rc.2 (2026-07-15)
+
+_Release candidate for v3.6.0. Builds on v3.6.0-rc.1 and adds the `/logout` hang fix and the native `claude` auto-update interference fix (#68)._
+
+### Fixed
+- Fixed the `/logout` hang: logging out (and any other flow where Claude Code re-invokes `claude` by name, e.g. a re-auth relaunch) no longer freezes the terminal until Ctrl+C. The evo shim sits first on PATH, so the inner `claude` hit the shim again and opened a **nested** proxy session that the outer wrapper waited on forever. The `proxy` action now detects `EVO_PROXY_ACTIVE=1` and passes straight through to the real CLI (inherited stdio, forwarded exit code) with no nested tracking/episode, and every generated shim (cmd/ps1/sh) execs the real claude directly when already inside a proxy.
+- Fixed interference with Claude Code's native auto-updater (`update_apply_exe_locked`). Update-family invocations — `claude update`, `claude install`, `claude migrate-installer`, and the top-level `claude --update` flag — now bypass the proxy entirely at any level, so evo never holds the running `claude` executable open as a managed child (Windows could not replace the locked image) and never installs the signal handlers that could tree-kill a deferred updater helper. The updater owns its own child processes.
+- Teardown can no longer be trapped by a child whose stdio lingers: in addition to the child's `close` event, teardown now proceeds on the child's `exit` event via a short watchdog (default 2000ms, `EVO_EXIT_WATCHDOG_MS`), so a grandchild that inherits and holds a stdio pipe open cannot keep the wrapper alive after the wrapped CLI has already exited. Exit-code propagation semantics are unchanged.
+- Wrapper no longer hangs after the wrapped CLI exits (the `/exit` hang). The `proxy` action now propagates the wrapped CLI's exit code and force-exits, instead of always exiting `0` and lingering on open handles. `runProxySession` returns the child's exit code.
+- Interactive (TTY) stdin forwarding is now paused and unref'd on teardown, so a resumed stdin can no longer keep the event loop alive after the child has exited.
+- `SIGINT` / `SIGTERM` / `SIGHUP` are forwarded to the wrapped CLI instead of exiting the wrapper with `0` and orphaning the child. The wrapper now exits with the child's status (or `128 + signal`), and on Windows tears down the whole `cmd.exe`/`pwsh` process tree so nothing is left orphaned. During interactive passthrough the first Ctrl+C is left for the child to handle; a second signal (or a console-close `SIGHUP`) escalates to a forced tree-kill.
+- The background update-check timeout and the log-flush listener no longer keep the process alive: the fetch timer is `unref`'d and the log file descriptor is closed on exit.
+- On Windows, original-command resolution rejects candidates that cannot actually be launched on the platform (e.g. an extensionless POSIX stub), preventing a broken command mapping from being cached.
+
+### Removed
+- Deleted the committed `bin/claude` and `bin/codex` shim scripts (they embedded a hardcoded developer path) and dropped `bin/` from the published `files` list. The real `evo` bin entry (`dist/index.js`) is unaffected.
+
+### Internal
+- Declared `engines.node >= 20`.
+
 ## v3.6.0-rc.1 (2026-07-11)
 
 _Release candidate for v3.6.0 — the changes below are exactly what the stable v3.6.0 will ship._
