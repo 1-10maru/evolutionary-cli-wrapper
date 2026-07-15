@@ -66,8 +66,10 @@ which -a evo  # Unix
 ソース側 (`<repo>/bin/evo`) が npm グローバル側より先に来ているか確認する。
 
 ## リリース手順
-- **RC channel**: `git tag v3.6.0-rc.1 && git push origin v3.6.0-rc.1` → `release-rc.yml` が走り `@next` で公開
-- **Stable channel**: GitHub Actions UI から「Release Stable」を手動実行(version 入力)→ `release-stable.yml` が走り `@latest` で公開
+- 公開は単一ワークフロー `.github/workflows/release.yml` が npm OIDC Trusted Publishing で実行（`NPM_TOKEN` 不要）
+- **RC channel**: `git tag v3.6.0-rc.2 && git push origin v3.6.0-rc.2` → `release.yml`（RC 経路）が走り `@next` で公開
+- **Stable channel**: GitHub Actions UI から「Release」を手動実行(version 入力)→ `release.yml`（stable 経路）が走り `@latest` で公開
+- 初回のみ npmjs.com で Trusted Publisher 登録が必要（user=`1-10maru` / repo=`evolutionary-cli-wrapper` / workflow filename=`release.yml`）
 - 詳細: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)
 - ロールバック: [docs/runbooks/rollback-bad-release.md](docs/runbooks/rollback-bad-release.md)
 
