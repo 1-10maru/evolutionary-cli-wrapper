@@ -4,6 +4,7 @@ import {
   createEmptyTurn,
   createEvent,
   processJsonlEntry,
+  refreshLiveAdvice,
   resetLiveStateOnRotation,
   shouldSuppressTurnFeedback,
   type ProxyLiveState,
@@ -209,5 +210,84 @@ describe("buildLiveStatePayload", () => {
     expect(payload).toHaveProperty("comboCount");
     expect(payload).toHaveProperty("lastExitCode");
     expect(payload).toHaveProperty("lastSubcommand");
+  });
+
+  it("live idealStateGauge is -1 (測定中) with no window and no episodes", () => {
+    const liveState = makeLiveState();
+    const payload = buildLiveStatePayload(liveState, makeMascot());
+    expect(payload.idealStateGauge).toBe(-1);
+  });
+
+  it("live idealStateGauge reflects the in-session promptScore window", () => {
+    const liveState = makeLiveState();
+    liveState.promptScoreWindow = [80, 80, 80];
+    const payload = buildLiveStatePayload(liveState, makeMascot());
+    // No finalized episodes, but the live window pulls the gauge to ~80 (never
+    // a stale 0 beside a high live 指示の質).
+    expect(payload.idealStateGauge).toBe(80);
+  });
+});
+
+describe("advice fire memory (repeat suppression)", () => {
+  function reviseTarget(liveState: ProxyLiveState, file: string): void {
+    // Force a same_file_revisit signal for `file` (>= threshold of 3).
+    liveState.filePatchCounts = new Map([[file, 3]]);
+    liveState.lastFile = file;
+  }
+
+  it("renders the 1st and 2nd fire, suppresses the 3rd+ of the same target", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+    reviseTarget(liveState, "/abs/a.ts");
+
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("same_file_revisit");
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("same_file_revisit");
+    // 3rd identical fire → suppressed → falls through to a rotating tip.
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("tip");
+    // Still suppressed on the 4th.
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("tip");
+  });
+
+  it("does not suppress a DIFFERENT target (own counter)", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+
+    reviseTarget(liveState, "/abs/a.ts");
+    refreshLiveAdvice(liveState, config); // a.ts #1
+    refreshLiveAdvice(liveState, config); // a.ts #2
+    refreshLiveAdvice(liveState, config); // a.ts #3 → suppressed
+    expect(liveState.signalKind).toBe("tip");
+
+    // A different file starts its own count → renders as advice again.
+    reviseTarget(liveState, "/abs/b.ts");
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("same_file_revisit");
+  });
+
+  it("resets fire memory on JSONL rotation", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+    reviseTarget(liveState, "/abs/a.ts");
+    refreshLiveAdvice(liveState, config);
+    refreshLiveAdvice(liveState, config);
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("tip"); // suppressed
+
+    resetLiveStateOnRotation(liveState);
+    reviseTarget(liveState, "/abs/a.ts"); // rotation cleared filePatchCounts
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("same_file_revisit"); // fires again
+  });
+
+  it("drops the raw N回目 counter from the same_file_revisit headline", () => {
+    const liveState = makeLiveState();
+    reviseTarget(liveState, "/abs/a.ts");
+    refreshLiveAdvice(liveState, makeConfig());
+    expect(liveState.signalKind).toBe("same_file_revisit");
+    expect(liveState.advice).not.toMatch(/回目/);
   });
 });

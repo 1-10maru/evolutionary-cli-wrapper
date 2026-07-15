@@ -126,6 +126,35 @@ export function computeIdealStateGauge(profile: MascotProfile): number {
   return isg;
 }
 
+/**
+ * Live 育成度 for an IN-PROGRESS session.
+ *
+ * `computeIdealStateGauge` reads only `recentEpisodes`, which is appended to
+ * exclusively at episode finalization (process exit). During a live session it
+ * is therefore frozen at prior-session state — a literal 0% next to a high live
+ * promptScore ("指示の質: とても良い!") is contradictory, which is the bug the
+ * user reported. This blends a live rolling promptScore window (fed each turn
+ * in ProxyLiveState) with the historical gauge so the value moves within a
+ * session and tracks the same signal that drives 指示の質.
+ *
+ * Returns -1 (rendered as 測定中) ONLY when there is genuinely no data at all:
+ * an empty live window AND no finalized episodes. A literal 0 is impossible
+ * unless the live prompt scores (or real episodes) are genuinely ~0 — in which
+ * case 指示の質 would itself read "曖昧すぎるかも", so the two agree.
+ */
+export function computeLiveIdealStateGauge(
+  promptScoreWindow: number[] | undefined,
+  profile: MascotProfile,
+): number {
+  const historical = computeIdealStateGauge(profile); // -1 when no episodes
+  const window = promptScoreWindow ?? [];
+  if (window.length === 0) return historical; // -1 or a real historical value
+  const liveAvg = window.reduce((s, v) => s + v, 0) / window.length;
+  const live = Math.max(0, Math.min(100, Math.round(liveAvg)));
+  if (historical < 0) return live; // no finalized episodes yet → pure live
+  return Math.round((live + historical) / 2); // blend live trend with history
+}
+
 export interface QualityMetrics {
   promptScore: number;
   sessionGrade: string;

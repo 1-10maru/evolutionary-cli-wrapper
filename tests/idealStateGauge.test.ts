@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   computeIdealStateGauge,
+  computeLiveIdealStateGauge,
   loadMascotProfile,
   saveMascotProfile,
   updateMascotAfterEpisode,
@@ -197,6 +198,57 @@ describe("computeIdealStateGauge", () => {
     updateMascotAfterEpisode(project, makeSummary());
     const profile = loadMascotProfile(project);
     expect(profile.recentEpisodes?.length ?? 0).toBe(0);
+  });
+});
+
+describe("computeLiveIdealStateGauge (live in-session gauge)", () => {
+  it("returns -1 (測定中) only when there is NO data at all", () => {
+    // empty live window AND no finalized episodes
+    expect(computeLiveIdealStateGauge([], buildProfile([]))).toBe(-1);
+    expect(computeLiveIdealStateGauge(undefined, buildProfile([]))).toBe(-1);
+  });
+
+  it("falls back to the historical gauge when the live window is empty", () => {
+    const episodes = Array.from({ length: 20 }, () =>
+      record({ promptScore: 95, structureScore: 5, grade: "A", signalKind: "" }),
+    );
+    // Historical gate met → 100; empty live window → returns historical.
+    expect(computeLiveIdealStateGauge([], buildProfile(episodes))).toBe(100);
+  });
+
+  it("uses the live promptScore window when there are no finalized episodes", () => {
+    // No episodes (historical -1) → pure live average of the window.
+    expect(computeLiveIdealStateGauge([80, 80, 80], buildProfile([]))).toBe(80);
+    expect(computeLiveIdealStateGauge([60, 80], buildProfile([]))).toBe(70);
+  });
+
+  it("cannot sit at a stale 0% beside a high live promptScore", () => {
+    // The reported bug: historical gauge computed to a low/0 value from prior
+    // bad episodes, but the live session has high-quality prompts. The live
+    // gauge must reflect the live quality, not the frozen historical 0.
+    const badHistory = Array.from({ length: 10 }, () =>
+      record({ promptScore: 5, structureScore: 1, grade: "D", hadFixLoop: true }),
+    );
+    const historical = computeIdealStateGauge(buildProfile(badHistory));
+    const live = computeLiveIdealStateGauge([90, 90, 90], buildProfile(badHistory));
+    expect(live).toBeGreaterThan(historical);
+    expect(live).toBeGreaterThan(0);
+  });
+
+  it("only yields 0 when the data itself is genuinely ~0", () => {
+    // Live prompts genuinely scoring 0 (which would also read 指示の質: 曖昧)
+    expect(computeLiveIdealStateGauge([0, 0], buildProfile([]))).toBe(0);
+  });
+
+  it("blends the live trend with real history", () => {
+    const midHistory = Array.from({ length: 20 }, () =>
+      record({ promptScore: 60, structureScore: 3, grade: "B" }),
+    );
+    const historical = computeIdealStateGauge(buildProfile(midHistory));
+    const live = computeLiveIdealStateGauge([100], buildProfile(midHistory));
+    // Blend of live 100 and historical ~60 lands strictly between them.
+    expect(live).toBeGreaterThan(historical);
+    expect(live).toBeLessThan(100);
   });
 });
 

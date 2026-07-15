@@ -14,7 +14,7 @@ import {
   renderMascotSpecialEvent,
   renderMascotState,
   renderMascotTurnLine,
-  computeIdealStateGauge,
+  computeLiveIdealStateGauge,
 } from "../mascot";
 import { detectLiveSignals, generateTopAdvice, pickTipForModel } from "../signalDetector";
 import { resolveProxyModel } from "../promptingGuidance";
@@ -102,7 +102,23 @@ export interface ProxyLiveState {
    * (base tips only); undefined means "not resolved yet".
    */
   model?: string;
+  /**
+   * v3.6: rolling per-turn promptScore window (cap 20) feeding the LIVE 育成度
+   * gauge, so it moves within a session instead of being frozen at prior
+   * finalized-episode state. Lazily initialized on the first user turn.
+   */
+  promptScoreWindow?: number[];
+  /**
+   * v3.6: per-session advice fire memory, keyed by `${signalKind}:${target}`.
+   * The 1st and 2nd fire of the same kind+target render as advice; the 3rd+ is
+   * suppressed (falls through to a rotating tip) so an identical nudge doesn't
+   * repeat on every edit. Lazily initialized on the first advice refresh.
+   */
+  signalFireCounts?: Map<string, number>;
 }
+
+const PROMPT_SCORE_WINDOW_CAP = 20;
+const SIGNAL_FIRE_SUPPRESS_AT = 3; // suppress the 3rd+ identical kind+target
 
 const TURN_NOISE_PATTERNS = [
   /no stdin data received in \d+s/i,
@@ -187,16 +203,36 @@ export function refreshLiveAdvice(
   });
 
   const topAdvice = generateTopAdvice(signals);
+
+  // v3.6: per-session fire memory. Suppress the 3rd+ fire of the SAME
+  // kind+target so an identical nudge doesn't repeat on every edit; the 1st
+  // and 2nd render as today. A different target (different file/symbol) has its
+  // own counter and is never suppressed by another target's fires.
+  let showAdvice = !!topAdvice;
   if (topAdvice) {
+    const ctx = topAdvice.signal.context;
+    const target =
+      (typeof ctx.file === "string" && ctx.file) ||
+      (typeof ctx.symbol === "string" && ctx.symbol) ||
+      "";
+    const key = `${topAdvice.signal.kind}:${target}`;
+    if (!liveState.signalFireCounts) liveState.signalFireCounts = new Map();
+    const fired = (liveState.signalFireCounts.get(key) ?? 0) + 1;
+    liveState.signalFireCounts.set(key, fired);
+    if (fired >= SIGNAL_FIRE_SUPPRESS_AT) showAdvice = false;
+  }
+
+  if (topAdvice && showAdvice) {
     liveState.advice = topAdvice.headline;
     liveState.adviceDetail = topAdvice.detail;
     liveState.signalKind = topAdvice.signal.kind;
     liveState.beforeExample = topAdvice.beforeExample ?? "";
     liveState.afterExample = topAdvice.afterExample ?? "";
   } else {
-    // No signal fired — show a rotating tip from the tips library, layering in
-    // guidance for the session's model. Resolve the model once per session
-    // (forwarded --model arg > settings.json default > unknown) and cache it.
+    // No signal fired (or it was suppressed by fire memory) — show a rotating
+    // tip from the tips library, layering in guidance for the session's model.
+    // Resolve the model once per session (forwarded --model arg >
+    // settings.json default > unknown) and cache it.
     if (liveState.model === undefined) {
       liveState.model = resolveProxyModel() ?? "";
     }
@@ -247,7 +283,14 @@ export function buildLiveStatePayload(
     avatar: state.avatar,
     nickname: mascotProfile.nickname,
     bond: state.progressPercent,
-    idealStateGauge: computeIdealStateGauge(mascotProfile),
+    // v3.6: LIVE gauge — blends the in-session rolling promptScore window with
+    // the historical episode gauge so it moves within a session and can't sit
+    // at a stale 0% beside a high live 指示の質. -1 (測定中) only when there is
+    // genuinely no data (empty window AND no finalized episodes).
+    idealStateGauge: computeLiveIdealStateGauge(
+      liveState.promptScoreWindow,
+      mascotProfile,
+    ),
     updatedAt: Date.now(),
     sessionGrade: liveState.sessionGrade,
     promptScore: liveState.promptScore,
@@ -328,6 +371,12 @@ export function processJsonlEntry(
         const specificityPart = (liveState.lastHasFileRefs || liveState.lastHasSymbolRefs) ? 30 : 0;
         const verificationPart = (liveState.lastHasAcceptanceRef || liveState.lastHasTestRef) ? 30 : 0;
         liveState.promptScore = Math.round(structurePart + specificityPart + verificationPart);
+        // v3.6: feed the live 育成度 gauge window with this turn's promptScore.
+        if (!liveState.promptScoreWindow) liveState.promptScoreWindow = [];
+        liveState.promptScoreWindow.push(liveState.promptScore);
+        if (liveState.promptScoreWindow.length > PROMPT_SCORE_WINDOW_CAP) {
+          liveState.promptScoreWindow.shift();
+        }
       }
     }
     refreshLiveAdvice(liveState, config);
@@ -388,6 +437,10 @@ export function resetLiveStateOnRotation(liveState: ProxyLiveState): void {
   liveState.lastHasTestRef = false;
   liveState.lastStructureScore = 0;
   liveState.lastFirstPassGreen = true;
+  // v3.6: a rotation is a fresh session — reset the live gauge window and the
+  // advice fire memory so neither carries over from the previous session.
+  liveState.promptScoreWindow = [];
+  liveState.signalFireCounts = new Map();
   // sessionId is intentionally NOT cleared here — callers (jsonl rotation
   // handler) update it explicitly with the new session's ID after reset.
   // Clearing it here would create a brief window where the live-state
