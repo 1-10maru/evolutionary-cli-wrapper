@@ -313,7 +313,7 @@ function extractShimTargetPath(commandPath: string): string | null {
  * Strictly guarded to `.exe` targets: a shim that points at a `.js` / `cli.js`
  * (a node launcher) is left alone — following it to node is out of scope here.
  */
-function followShimToExe(resolved: string): string {
+export function followShimToExe(resolved: string): string {
   const ext = path.extname(resolved).toLowerCase();
   const isShim = ext === ".cmd" || ext === ".ps1" || ext === ".bat" || ext === "";
   if (!isShim) return resolved;
@@ -321,6 +321,11 @@ function followShimToExe(resolved: string): string {
   if (!target) return resolved;
   if (path.extname(target).toLowerCase() !== ".exe") return resolved;
   if (!fs.existsSync(target)) return resolved;
+  // Containment: only follow into the shim's OWN node_modules subtree — never to
+  // an arbitrary location a crafted (or corrupt) shim body might reference.
+  const nmRoot = path.join(path.dirname(resolved), "node_modules");
+  const rel = path.relative(nmRoot, target);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return resolved;
   return target;
 }
 
@@ -340,9 +345,51 @@ function isSpawnableOnThisPlatform(commandPath: string): boolean {
   return ext === ".exe" || ext === ".cmd" || ext === ".bat" || ext === ".ps1";
 }
 
-function isUsableCommandCandidate(commandPath: string): boolean {
+/**
+ * Basenames (with OR without extension, case-insensitive) that are language/OS
+ * interpreters — never a real `claude` / `codex` CLI. A stale cached
+ * `originalCommandMap` value can point at one of these: e.g. an old evo build
+ * cached `C:\Program Files\nodejs\node.exe` from a cli.js-era npm shim, and the
+ * candidate order trusts that cache over the live discoverable shim, so the
+ * wrapper ends up launching the interpreter itself. Resolution rejects these.
+ */
+const INTERPRETER_DENYLIST = new Set([
+  "node",
+  "npm",
+  "npx",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "sh",
+  "bash",
+  "wscript",
+  "cscript",
+  "env",
+]);
+
+function isInterpreterBasename(commandPath: string): boolean {
+  const base = path.basename(commandPath).toLowerCase();
+  const noExt = base.replace(/\.[^.]+$/, "");
+  return INTERPRETER_DENYLIST.has(base) || INTERPRETER_DENYLIST.has(noExt);
+}
+
+/**
+ * Positive constraint on a resolved original command: it is only acceptable if
+ * it is plausibly the wrapped CLI — its basename (sans extension) equals the cli
+ * name, OR its path lies inside a `node_modules` subtree (an npm-installed
+ * package). A bare system binary or stray interpreter is rejected even if it
+ * happens to exist and be spawnable.
+ */
+function isAcceptableOriginal(commandPath: string, cli: SupportedCli): boolean {
+  const baseNoExt = path.basename(commandPath).replace(/\.[^.]+$/, "").toLowerCase();
+  if (baseNoExt === cli) return true;
+  return normalize(commandPath).split(/[\\/]+/).includes("node_modules");
+}
+
+export function isUsableCommandCandidate(commandPath: string): boolean {
   if (!commandPath || !fs.existsSync(commandPath)) return false;
   if (!isSpawnableOnThisPlatform(commandPath)) return false;
+  if (isInterpreterBasename(commandPath)) return false;
   const shimTarget = extractShimTargetPath(commandPath);
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }
@@ -434,22 +481,32 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
   const binDir = getBinDir(shellHome);
   const configuredCandidates = dedupeCommandCandidates([localKnown, shellKnown]);
   const siblingCandidates = configuredCandidates.flatMap((commandPath) => getSiblingCommandCandidates(commandPath, cli));
-  const liveConfiguredCandidates = configuredCandidates.filter((commandPath) => !isLegacyEvoBackupCommand(commandPath));
+  // Filter the cached (configured) values through the interpreter denylist so a
+  // poisoned cache (e.g. a stale `node.exe`) can neither win the resolution nor
+  // be re-persisted.
+  const liveConfiguredCandidates = configuredCandidates
+    .filter((commandPath) => !isLegacyEvoBackupCommand(commandPath))
+    .filter((commandPath) => !isInterpreterBasename(commandPath));
   const discoveredCandidates = discoverOriginalCommandsFromPath(shellHome, binDir, cli);
-  const fallbackCandidates = configuredCandidates;
+  const fallbackCandidates = configuredCandidates.filter((commandPath) => !isInterpreterBasename(commandPath));
 
   const resolvedRaw = dedupeCommandCandidates([
     ...siblingCandidates,
     ...liveConfiguredCandidates,
     ...discoveredCandidates,
     ...fallbackCandidates,
-  ]).find((candidate) => isUsableCommandCandidate(candidate)) ?? null;
+  ]).find((candidate) => isUsableCommandCandidate(candidate) && isAcceptableOriginal(candidate, cli)) ?? null;
 
   // Follow an npm interpreter shim (.cmd/.ps1/.bat/extensionless) through to the
   // real .exe it points at, so we spawn the .exe directly and never wrap it in a
   // cmd.exe/PowerShell layer that can wedge on a never-EOF stdin. No-op unless
-  // the shim points at an existing .exe.
-  const resolved = resolvedRaw ? followShimToExe(resolvedRaw) : null;
+  // the shim points at an existing .exe inside its own node_modules subtree.
+  const followed = resolvedRaw ? followShimToExe(resolvedRaw) : null;
+  // Re-validate the followed target: it must still be a plausible CLI and not an
+  // interpreter (defends against a shim that resolves to node.exe under
+  // node_modules).
+  const resolved =
+    followed && !isInterpreterBasename(followed) && isAcceptableOriginal(followed, cli) ? followed : null;
 
   if (resolved && !isLegacyEvoBackupCommand(resolved)) {
     persistResolvedCommand(cwd, shellHome, cli, resolved);
