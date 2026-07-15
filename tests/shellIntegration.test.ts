@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
+  buildNestingGuardLines,
   createProxyShims,
   getShellStatus,
   resolveOriginalCommand,
@@ -186,6 +187,43 @@ describe("shell integration", () => {
 
     expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
     expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(legacyShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildNestingGuardLines — EVO_PROXY_ACTIVE=1 shim guard (defense-in-depth)
+// ---------------------------------------------------------------------------
+describe("buildNestingGuardLines", () => {
+  it("cmd guard propagates the real nested exit code (no parse-time masking)", () => {
+    const lines = buildNestingGuardLines("cmd", "C:\\npm\\claude.cmd");
+    // Must NOT wrap `exit /b %ERRORLEVEL%` in a `( ... )` block — cmd.exe would
+    // expand %ERRORLEVEL% at parse time (before the call), always yielding 0
+    // and swallowing the nested claude's non-zero exit code.
+    expect(lines.some((l) => l.includes("("))).toBe(false);
+    expect(lines.some((l) => l.trim() === ")")).toBe(false);
+    // The exit must be a standalone `if` line so %ERRORLEVEL% is expanded only
+    // after the call line has executed.
+    expect(lines).toContain('if "%EVO_PROXY_ACTIVE%"=="1" call "C:\\npm\\claude.cmd" %*');
+    expect(lines).toContain('if "%EVO_PROXY_ACTIVE%"=="1" exit /b %ERRORLEVEL%');
+  });
+
+  it("ps1 guard forwards args and propagates $LASTEXITCODE", () => {
+    const lines = buildNestingGuardLines("ps1", "C:\\npm\\claude.cmd");
+    expect(lines.join("\n")).toContain("$env:EVO_PROXY_ACTIVE -eq '1'");
+    expect(lines).toContain("  & 'C:\\npm\\claude.cmd' @args");
+    expect(lines).toContain("  exit $LASTEXITCODE");
+  });
+
+  it("sh guard execs the resolved original", () => {
+    const lines = buildNestingGuardLines("sh", "/usr/local/bin/claude");
+    expect(lines.join("\n")).toContain('[ "$EVO_PROXY_ACTIVE" = "1" ]');
+    expect(lines).toContain('  exec "/usr/local/bin/claude" "$@"');
+  });
+
+  it("emits nothing when the original is missing or unsafe to interpolate", () => {
+    expect(buildNestingGuardLines("cmd", null)).toEqual([]);
+    // Contains cmd metacharacters (& and |) rejected by SHIM_PATH_FORBIDDEN.
+    expect(buildNestingGuardLines("cmd", "C:\\bad & path|x\\claude.cmd")).toEqual([]);
   });
 });
 

@@ -603,11 +603,16 @@ const SHIM_PATH_FORBIDDEN = /['"`$;%&|<>^\n\r]/;
 export function buildNestingGuardLines(kind: "sh" | "cmd" | "ps1", original: string | null): string[] {
   if (!original || SHIM_PATH_FORBIDDEN.test(original)) return [];
   if (kind === "cmd") {
+    // Two standalone `if` statements, NOT a parenthesized block: inside a
+    // `( ... )` block cmd.exe expands %ERRORLEVEL% at parse time (before the
+    // `call` runs), so it would always be 0 and mask the nested claude's real
+    // exit code. As separate lines, cmd parses the exit line only after the
+    // call line has executed, so %ERRORLEVEL% is the real post-call value.
+    // (Delayed expansion / `!ERRORLEVEL!` is avoided because enabling it would
+    // make `!` special and corrupt any nested claude argument containing `!`.)
     return [
-      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" (`,
-      `  call \"${original}\" %*`,
-      "  exit /b %ERRORLEVEL%",
-      ")",
+      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" call \"${original}\" %*`,
+      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" exit /b %ERRORLEVEL%`,
     ];
   }
   if (kind === "ps1") {
