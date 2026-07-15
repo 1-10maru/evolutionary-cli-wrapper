@@ -374,14 +374,15 @@ function generateBeforeAfter(signal: AdviceSignal): BeforeAfterPair | null {
 function signalHeadline(signal: AdviceSignal): string {
   const ctx = signal.context;
   const file = typeof ctx.file === "string" ? shortPath(ctx.file) : "";
-  const touchCount = typeof ctx.touchCount === "number" ? ctx.touchCount : 0;
 
   switch (signal.kind) {
     case "prompt_too_vague":
       return "ファイル名を足そう — 曖昧だと探索が広がるよ";
     case "same_file_revisit":
+      // v3.6: dropped the raw "N回目" counter from the headline — per-session
+      // fire memory (episodeLifecycle) now suppresses the repeat instead.
       return file
-        ? `${file} ${touchCount}回目 — 現状/期待/NGで整理しよう`
+        ? `${file} を繰り返し修正中 — 現状/期待/NGで整理しよう`
         : "同じファイルを何度も修正中 — 整理して伝えよう";
     case "same_function_revisit":
       return "同じ関数にまた来たよ — 現状/期待/NGで切り直そう";
