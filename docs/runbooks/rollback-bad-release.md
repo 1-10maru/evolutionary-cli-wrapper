@@ -30,8 +30,8 @@ Open a PR with the fix on a `fix/` or `hotfix/` branch. Land it. Then:
 2. Add a CHANGELOG entry under `## Unreleased` describing the fix
 3. Rename `## Unreleased` to `## v3.5.1 (YYYY-MM-DD)`
 4. Add a fresh `## Unreleased` above it
-5. Push a `v3.5.1-rc.1` tag; let the RC workflow validate
-6. When confident, run the `Release Stable` workflow with version `3.5.1`
+5. Push a `v3.5.1-rc.1` tag; let the `Release` workflow (RC path) validate
+6. When confident, run the `Release` workflow (`workflow_dispatch`) with version `3.5.1`
 
 ---
 

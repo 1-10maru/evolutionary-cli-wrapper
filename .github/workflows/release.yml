@@ -1,0 +1,222 @@
+name: Release
+
+# Consolidated release workflow (RC + stable) that publishes to npm via OIDC
+# Trusted Publishing - no long-lived NPM_TOKEN.
+#
+# A package can have only ONE trusted publisher, matched by workflow filename,
+# so BOTH release channels must live in this single file:
+#   - RC:     push a tag  v<X.Y.Z>-rc.<N>       -> npm dist-tag "next",  GitHub prerelease
+#   - Stable: run manually (workflow_dispatch)  -> npm dist-tag "latest", GitHub latest release
+#
+# Register this file (workflow filename: release.yml) as the trusted publisher
+# on npmjs.com for the "evolutionary-cli-wrapper" package.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to release (without "v" prefix, e.g. 3.6.0)'
+        required: true
+        type: string
+
+# Least privilege by default; the publish job elevates what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('stable-{0}', inputs.version) || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: Resolve release parameters
+    runs-on: ubuntu-22.04
+    outputs:
+      mode: ${{ steps.p.outputs.mode }}
+      version: ${{ steps.p.outputs.version }}
+      dist_tag: ${{ steps.p.outputs.dist_tag }}
+      tag: ${{ steps.p.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve mode, version, dist-tag
+        id: p
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER='${{ inputs.version }}'
+            MODE=stable
+            DIST=latest
+          else
+            VER="${GITHUB_REF#refs/tags/v}"
+            MODE=rc
+            DIST=next
+          fi
+          {
+            echo "mode=${MODE}"
+            echo "version=${VER}"
+            echo "dist_tag=${DIST}"
+            echo "tag=v${VER}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: mode=${MODE} version=${VER} dist_tag=${DIST} tag=v${VER}"
+      - name: (stable) Reject if the tag already exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.p.outputs.tag }}"; then
+            echo "Tag ${{ steps.p.outputs.tag }} already exists - refusing to overwrite." >&2
+            exit 1
+          fi
+      - name: Reject if the release version mismatches package.json
+        # Both channels: npm publishes whatever package.json holds at this commit
+        # and the CHANGELOG notes are keyed to the tag version, so the two must
+        # agree. (For RC this enforces the "package.json == tag" contract; the
+        # legacy release-rc.yml relied on it implicitly.)
+        shell: bash
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [ "$PKG_VER" != "${{ steps.p.outputs.version }}" ]; then
+            echo "package.json says $PKG_VER, but the release version is ${{ steps.p.outputs.version }}. Bump package.json first." >&2
+            exit 1
+          fi
+
+  build-test:
+    name: Build + test
+    needs: setup
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+        node: [22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  smoke:
+    name: Smoke (install tarball + run)
+    needs: build-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack
+        run: npm pack --json | tee pack.json
+      - name: Install tarball globally
+        shell: bash
+        run: |
+          TARBALL=$(node -p "require('./pack.json')[0].filename" 2>/dev/null || ls evolutionary-cli-wrapper-*.tgz)
+          npm install -g "./$TARBALL"
+      - name: Smoke - evo --version
+        run: evo --version
+      - name: Smoke - evo doctor --json
+        shell: bash
+        run: |
+          evo doctor --json | node -e "
+            let d = '';
+            process.stdin.on('data', c => d += c);
+            process.stdin.on('end', () => {
+              const j = JSON.parse(d);
+              if (!j.versions) throw new Error('doctor JSON missing versions');
+              console.log('doctor JSON OK');
+            });
+          "
+
+  publish:
+    name: Publish to npm + GitHub Release
+    needs: [setup, smoke]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write   # push the stable tag + create the GitHub Release
+      id-token: write   # mint the OIDC token for npm Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Upgrade npm to a Trusted-Publishing-capable version (>= 11.5.1)
+        # The npm bundled with Node 22 is 10.x, which does not understand OIDC
+        # trusted publishing. 11.5.1+ is required.
+        run: npm install -g npm@latest
+      - name: Show tool versions
+        run: |
+          node --version
+          npm --version
+      - run: npm ci
+      - run: npm run build
+      - name: (stable) Create and push the release tag
+        if: needs.setup.outputs.mode == 'stable'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ needs.setup.outputs.tag }}"
+          git push origin "${{ needs.setup.outputs.tag }}"
+      - name: Publish to npm via OIDC Trusted Publishing
+        # Authentication is via the OIDC id-token - do NOT set NODE_AUTH_TOKEN or
+        # npm falls back to the legacy token path instead of trusted publishing.
+        # --provenance is kept explicitly (works with the id-token permission).
+        run: npm publish --tag ${{ needs.setup.outputs.dist_tag }} --provenance --access public
+      - name: Extract notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          VER='${{ needs.setup.outputs.version }}'
+          # Match "## v<VER>" optionally followed by whitespace + anything (e.g. a date).
+          # Anchor with [[:space:]]|$ so v3.4.4 does NOT match v3.4.40.
+          # ([[:space:]] is POSIX - gawk does not honor \s; \s would silently
+          # collapse to plain "s" and break the match.)
+          # Exit on the next "## v" OR "## Unreleased" boundary.
+          # Hard-fail if no section is found - no silent fallback to Unreleased.
+          # The whole point is to refuse releasing with wrong notes.
+          awk -v ver_anchor="^## v${VER}([[:space:]]|$)" '
+            $0 ~ ver_anchor { flag=1; next }
+            flag && /^## (v|Unreleased)/ { exit }
+            flag { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error::No CHANGELOG section found for v${VER}. Add a '## v${VER} (YYYY-MM-DD)' heading before releasing."
+            exit 1
+          fi
+          echo "Notes file:" && head -20 /tmp/release-notes.md
+      - name: Create GitHub Release (RC prerelease)
+        if: needs.setup.outputs.mode == 'rc'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.setup.outputs.tag }}" \
+            --title "${{ needs.setup.outputs.tag }} (RC)" \
+            --notes-file /tmp/release-notes.md \
+            --prerelease
+      - name: Create GitHub Release (stable latest)
+        if: needs.setup.outputs.mode == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.setup.outputs.tag }}" \
+            --title "${{ needs.setup.outputs.tag }}" \
+            --notes-file /tmp/release-notes.md \
+            --latest
