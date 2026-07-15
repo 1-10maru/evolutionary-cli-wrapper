@@ -45,7 +45,8 @@
     "dist/",
     "README.md",
     "LICENSE",
-    "statusline.py"
+    "statusline.py",
+    "scripts/token_statusline.py"
   ],
   "repository": {
     "type": "git",

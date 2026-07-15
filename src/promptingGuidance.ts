@@ -18,9 +18,36 @@ import * as path from "node:path";
 
 import guidanceData from "./data/prompting-guidance.json";
 
+/** Provenance of a statusline tip, used to render a `[…]` source tag so the
+ *  user can tell model-tuned advice from generic/official advice at a glance. */
+export type TipSource = "official" | "model" | "generic";
+
 export interface GuidanceTip {
   headline: string;
   detail: string;
+  /** "official" = Anthropic base best-practices docs; "model" = tuned to the
+   *  user's current model (see `audience`). */
+  source: TipSource;
+  /** Model label for `source === "model"` (e.g. "Fable 5"); drives `[<audience>向け]`. */
+  audience?: string;
+}
+
+/** Strip the "のコツ" suffix from a section label to get the bare model name. */
+export function guidanceAudienceFromLabel(label: string): string {
+  return label.replace(/のコツ$/u, "").trim();
+}
+
+/**
+ * Render the bracketed provenance tag for a tip line:
+ *   model    → `[<audience>向け]` (e.g. `[Fable 5向け]`)
+ *   official → `[公式]`
+ *   generic  → `[汎用]`
+ * Keeps model-tuned advice visually distinct from the static/official libraries.
+ */
+export function tipTag(source: TipSource, audience?: string): string {
+  if (source === "model" && audience) return `[${audience}向け]`;
+  if (source === "official") return "[公式]";
+  return "[汎用]";
 }
 
 interface GuidanceSection {
@@ -68,9 +95,10 @@ export function resolveModelSection(
 
 /**
  * Eligible tips for a model: base tips always, plus the model-specific section
- * when one matches. Model-specific headlines are prefixed with the section
- * label (e.g. "Fable 5のコツ: …") so the user can see which tips are tuned to
- * their model. Returns a fresh array; callers may reorder/rotate freely.
+ * when one matches. Headlines are kept CLEAN (no inline label prefix); the
+ * model/official provenance travels in the `source`/`audience` fields so the
+ * renderer can prepend a `[…]` tag (see `tipTag`). Returns a fresh array;
+ * callers may reorder/rotate freely.
  */
 export function getEligibleGuidanceTips(
   model: string | null | undefined,
@@ -78,15 +106,17 @@ export function getEligibleGuidanceTips(
   const out: GuidanceTip[] = [];
   const base = GUIDANCE.sections.base;
   if (base && Array.isArray(base.tips)) {
-    for (const t of base.tips) out.push({ headline: t.headline, detail: t.detail });
+    for (const t of base.tips) {
+      out.push({ headline: t.headline, detail: t.detail, source: "official" });
+    }
   }
   const sectionName = resolveModelSection(model);
   if (sectionName && sectionName !== "base") {
     const sec = GUIDANCE.sections[sectionName];
     if (sec && Array.isArray(sec.tips)) {
-      const prefix = sec.label ? `${sec.label}: ` : "";
+      const audience = sec.label ? guidanceAudienceFromLabel(sec.label) : undefined;
       for (const t of sec.tips) {
-        out.push({ headline: `${prefix}${t.headline}`, detail: t.detail });
+        out.push({ headline: t.headline, detail: t.detail, source: "model", audience });
       }
     }
   }

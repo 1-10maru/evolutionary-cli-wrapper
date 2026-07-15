@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Evo v3.0 statusline — Always-on, self-tracking. Works with or without proxy."""
-import json, sys, os, time
+import json, sys, os, time, re
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 data = json.load(sys.stdin)
@@ -664,6 +664,72 @@ def _pick_tip(tips_rotation, calls, signal):
         pool = tips_rotation
     return pool[calls % len(pool)] if pool else None
 
+# ──────────────────────────────────────────────
+# Width-aware truncation (mirrors src/cli/statusline.ts clip()).
+# East-Asian wide + emoji glyphs occupy 2 columns; the old fixed [:30] slices
+# cut through multi-column characters and produced meaningless fragments.
+# ──────────────────────────────────────────────
+_ADVICE_POINTER = ' → 続きは `evo advice`'
+_BOUNDARY_CHARS = '、。，．・:：/!?！？ \t'
+
+
+def _char_width(cp):
+    if (0x1100 <= cp <= 0x115f or 0x2e80 <= cp <= 0x303e or 0x3041 <= cp <= 0x33ff
+            or 0x3400 <= cp <= 0x4dbf or 0x4e00 <= cp <= 0x9fff or 0xa000 <= cp <= 0xa4cf
+            or 0xac00 <= cp <= 0xd7a3 or 0xf900 <= cp <= 0xfaff or 0xfe30 <= cp <= 0xfe4f
+            or 0xff00 <= cp <= 0xff60 or 0xffe0 <= cp <= 0xffe6
+            or 0x1f300 <= cp <= 0x1faff or 0x20000 <= cp <= 0x3fffd):
+        return 2
+    return 1
+
+
+def _display_width(s):
+    return sum(_char_width(ord(c)) for c in s)
+
+
+def _basename(p):
+    n = p.replace('\\', '/').rstrip('/')
+    i = n.rfind('/')
+    return n[i + 1:] if i >= 0 else n
+
+
+def _looks_like_path(s):
+    t = s.strip()
+    return bool(t) and re.search(r'\s', t) is None and ('/' in t or '\\' in t)
+
+
+def _truncate_to_width(s, max_cols):
+    w = 0
+    out = []
+    for c in s:
+        cw = _char_width(ord(c))
+        if w + cw > max_cols:
+            break
+        out.append(c)
+        w += cw
+    return ''.join(out)
+
+
+def _trim_to_boundary(s):
+    idx = -1
+    for i, c in enumerate(s):
+        if c in _BOUNDARY_CHARS:
+            idx = i
+    if idx >= 0 and _display_width(s[:idx + 1]) >= _display_width(s) * 0.5:
+        return s[:idx + 1].rstrip('、。，．・:： \t')
+    return s
+
+
+def _clip(s, max_cols, pointer=False):
+    if not s:
+        return s
+    st = _basename(s) if _looks_like_path(s) else s
+    if _display_width(st) <= max_cols:
+        return st
+    truncated = _trim_to_boundary(_truncate_to_width(st, max_cols))
+    return truncated + (_ADVICE_POINTER if pointer else '…')
+
+
 # ══════════════════════════════════════════════════════════════
 # Data source resolution: proxy > home fallback > self-tracking
 # ══════════════════════════════════════════════════════════════
@@ -678,75 +744,78 @@ _now_ms = time.time() * 1000
 # so the user still sees last-known state instead of EvoPet collapsing.
 _FRESH_WINDOW_MS = 300000  # 5 minutes
 
-# v3.4.0: prefer the per-session live-state file under
-# <cwd>/.evo/sessions/<session_id>.json so parallel Claude Code sessions in
-# the same cwd don't shadow each other. Fall back to the newest file in
-# sessions/ when Claude Code's payload omits session_id, then to the legacy
-# single-file dual targets.
+# v3.6: strict per-session binding. When a session id is known (from
+# session_id, else derived from the transcript_path filename stem), read ONLY
+# <cwd>/.evo/sessions/<sid>.json. A miss/stale renders a quiet placeholder
+# (below) — we never fall back to the shared sinks (.evo/live-state.json /
+# ~/.claude/.evo-live.json) that every parallel proxy in this cwd overwrites,
+# which is what made one pane render another pane's EvoPet state.
 _session_id = data.get('session_id')
-_candidates = []
-_sessions_dir = os.path.join(cwd, '.evo', 'sessions')
-if _session_id:
-    _candidates.append(os.path.join(_sessions_dir, f'{_session_id}.json'))
-# Fallback 1: newest mtime in sessions/ — handles cases where session_id is
-# absent from the payload but the proxy has written per-session files.
-if os.path.isdir(_sessions_dir):
-    try:
-        _entries = []
-        for _f in os.listdir(_sessions_dir):
-            if not _f.endswith('.json'):
-                continue
-            _full = os.path.join(_sessions_dir, _f)
-            try:
-                _entries.append((-os.path.getmtime(_full), _full))
-            except OSError:
-                pass
-        _entries.sort()
-        for _, _p in _entries:
-            if _p not in _candidates:
-                _candidates.append(_p)
-    except Exception:
-        pass
-# Fallback 2: legacy single-file dual targets (back-compat with pre-v3.4.0
-# proxies and statusline deploys that haven't migrated yet).
-_candidates.append(os.path.join(cwd, '.evo', 'live-state.json'))
-_candidates.append(os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'))
+_transcript = data.get('transcript_path')
+if not _session_id and isinstance(_transcript, str) and _transcript:
+    _stem = os.path.splitext(os.path.basename(_transcript))[0]
+    if _stem:
+        _session_id = _stem
 
-for _try_path in _candidates:
+_sessions_dir = os.path.join(cwd, '.evo', 'sessions')
+
+if _session_id:
+    _per_session = os.path.join(_sessions_dir, f'{_session_id}.json')
     try:
-        with open(_try_path, encoding='utf-8') as _f:
+        with open(_per_session, encoding='utf-8') as _f:
             _candidate = json.load(_f)
-        # v3.4.0: when session_id is supplied by Claude Code, prefer files
-        # whose embedded sessionId matches OR whose filename stem matches.
-        # If neither matches AND there are other candidates left to try,
-        # skip this one. The final legacy fallbacks (no session_id field)
-        # are accepted unconditionally so the statusline stays functional
-        # for pre-v3.4 proxies.
-        if _session_id:
-            _file_sid = _candidate.get('sessionId')
-            _stem = os.path.splitext(os.path.basename(_try_path))[0]
-            _is_per_session_file = os.path.dirname(_try_path).endswith(
-                os.path.join('.evo', 'sessions')
-            )
-            _matches = (
-                _file_sid == _session_id
-                or (_is_per_session_file and _stem == _session_id)
-            )
-            if not _matches and _is_per_session_file:
-                # A per-session file that's not for our session_id — skip it
-                # and keep looking. (Legacy non-per-session files are still
-                # eligible as last-resort fallback below.)
-                continue
         _age_ms = _now_ms - _candidate.get('updatedAt', 0)
         if _age_ms < _FRESH_WINDOW_MS:
             _evo = _candidate
             _evo_source = 'proxy' if _age_ms < 10000 else 'proxy_stale'
-            break
     except Exception:
         pass
+else:
+    # Sessionless legacy path: newest per-session file by mtime, then the
+    # legacy single-file dual targets (back-compat for harnesses that omit
+    # session_id and pre-v3.4 proxies).
+    _candidates = []
+    if os.path.isdir(_sessions_dir):
+        try:
+            _entries = []
+            for _f in os.listdir(_sessions_dir):
+                if not _f.endswith('.json'):
+                    continue
+                _full = os.path.join(_sessions_dir, _f)
+                try:
+                    _entries.append((-os.path.getmtime(_full), _full))
+                except OSError:
+                    pass
+            _entries.sort()
+            for _, _p in _entries:
+                _candidates.append(_p)
+        except Exception:
+            pass
+    _candidates.append(os.path.join(cwd, '.evo', 'live-state.json'))
+    _candidates.append(os.path.join(os.path.expanduser('~'), '.claude', '.evo-live.json'))
+    for _try_path in _candidates:
+        try:
+            with open(_try_path, encoding='utf-8') as _f:
+                _candidate = json.load(_f)
+            _age_ms = _now_ms - _candidate.get('updatedAt', 0)
+            if _age_ms < _FRESH_WINDOW_MS:
+                _evo = _candidate
+                _evo_source = 'proxy' if _age_ms < 10000 else 'proxy_stale'
+                break
+        except Exception:
+            pass
 
 # ── Self-tracking state ──
-_SELF_STATE_FILE = os.path.join(os.path.expanduser('~'), '.claude', '.evo-self-state.json')
+# v3.6: per-session self-state under ~/.claude/.evo-self/<sid>.json when a
+# session id is known, so parallel panes don't clobber each other's call
+# counter (which drove cross-pane count corruption). Sessionless invocations
+# keep the legacy global file.
+if _session_id:
+    _SELF_STATE_FILE = os.path.join(
+        os.path.expanduser('~'), '.claude', '.evo-self', f'{_session_id}.json'
+    )
+else:
+    _SELF_STATE_FILE = os.path.join(os.path.expanduser('~'), '.claude', '.evo-self-state.json')
 
 def _load_self():
     try:
@@ -757,6 +826,7 @@ def _load_self():
 
 def _save_self(s):
     try:
+        os.makedirs(os.path.dirname(_SELF_STATE_FILE), exist_ok=True)
         with open(_SELF_STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(s, f)
     except Exception:
@@ -821,13 +891,8 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
         _line1_bits.append(_dim_if_stale(f"{_gc}{BOLD}{_grade_label(_grade)}{R}"))
     else:
         _line1_bits.append(f"{DIM}\u8a55\u4fa1 \u2014{R}")
-    # Counter source: userMessages (real human-sent count) when proxy provides the field,
-    # else fall back to turns (legacy total-events count) for old proxy builds.
-    _conv_count = _user_msgs if 'userMessages' in _evo else _turns
-    if _conv_count > 0:
-        _line1_bits.append(_dim_if_stale(f"{BOLD}{_EVO_INFO}{_conv_count}\u56de\u76ee\u306e\u4f1a\u8a71{R}"))
-    else:
-        _line1_bits.append(f"{DIM}0\u56de\u76ee\u306e\u4f1a\u8a71{R}")
+    # v3.6: Line 1 essentials trimmed to grade / \u6307\u793a\u306e\u8cea / \u80b2\u6210\u5ea6 (max 3 chips).
+    # \u4f1a\u8a71\u56de\u6570 and combo were dropped from the cramped statusline; see `evo stats`.
     if _ps > 0:
         if _ps >= 80:
             _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_GREEN}{BOLD}\u6307\u793a\u306e\u8cea: \u3068\u3066\u3082\u826f\u3044!{R}"))
@@ -839,9 +904,6 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
             _line1_bits.append(_dim_if_stale(f"\U0001f4dd {_EVO_RED}{BOLD}\u6307\u793a\u306e\u8cea: \u66d6\u6627\u3059\u304e\u308b\u304b\u3082{R}"))
     else:
         _line1_bits.append(f"{DIM}\U0001f4dd \u6307\u793a\u306e\u8cea: \u8a08\u6e2c\u4e2d{R}")
-    if _combo >= 3:
-        _cc = _EVO_GOLD if _combo >= 10 else _EVO_ACCENT if _combo >= 5 else _EVO_GREEN
-        _line1_bits.append(_dim_if_stale(f"{_cc}{BOLD}{_combo}\u9023\u7d9a\u3044\u3044\u611f\u3058!{R}"))
     # \u80b2\u6210\u5ea6: prefer Ideal State Gauge (quality-based) when available; -1 = no data yet.
     # Falls back to legacy stage-EXP bond only when ISG hasn't been emitted yet.
     if _isg >= 0:
@@ -861,32 +923,35 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
     if _is_stale:
         _line1_bits.append(f"{DIM}(\u5f85\u6a5f\u4e2d){R}")
 
+    # v3.6: truncate by meaning (width-aware). Headline gets the `evo advice`
+    # pointer when elided; before/after collapse paths to basenames + clause
+    # boundary; detail is width-clipped. Keeps the block to ~2 lines.
+    _advice_c = _clip(_advice, 72, pointer=True)
+    _detail_c = _clip(_detail, 76)
+    _b = _clip(_before, 28)
+    _a = _clip(_after, 44)
     if _signal and _signal in ('prompt_too_vague', 'same_file_revisit', 'same_function_revisit',
                                 'scope_creep', 'no_success_criteria', 'approval_fatigue',
                                 'error_spiral', 'retry_loop', 'high_tool_ratio'):
         if _before and _after:
-            _b = _before[:30] + '...' if len(_before) > 30 else _before
-            _a = _after[:55] + '...' if len(_after) > 55 else _after
-            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
+            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice_c}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
         elif _advice:
-            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice}{R}"
+            _line2 = f"\u26a0\ufe0f {_EVO_WARN}{BOLD}{_advice_c}{R}"
             if _detail:
-                _line2 += f"\n   {BOLD}{_EVO_WARN}{_detail[:70]}{R}"
+                _line2 += f"\n   {BOLD}{_EVO_WARN}{_detail_c}{R}"
     elif _signal in ('good_structure', 'first_pass_success', 'improving_trend'):
-        _line2 = f"\u2728 {_EVO_GREEN}{BOLD}{_advice}{R}"
+        _line2 = f"\u2728 {_EVO_GREEN}{BOLD}{_advice_c}{R}"
         if _detail:
-            _line2 += f"\n   {BOLD}{_EVO_GREEN}{_detail[:70]}{R}"
+            _line2 += f"\n   {BOLD}{_EVO_GREEN}{_detail_c}{R}"
     elif _signal == 'tip' and _advice:
         if _before and _after:
-            _b = _before[:30] + '...' if len(_before) > 30 else _before
-            _a = _after[:55] + '...' if len(_after) > 55 else _after
-            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
+            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice_c}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_b}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_a}\"{R}"
         else:
-            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice}{R}"
+            _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_advice_c}{R}"
             if _detail:
-                _line2 += f"\n   {BOLD}{_EVO_INFO}{_detail[:80]}{R}"
+                _line2 += f"\n   {BOLD}{_EVO_INFO}{_detail_c}{R}"
     elif _advice:
-        _line2 = f"\U0001f4a1 {BOLD}{_EVO_INFO}{_advice}{R}"
+        _line2 = f"\U0001f4a1 {BOLD}{_EVO_INFO}{_advice_c}{R}"
 
     # v3.1: 5-band mood comment now appears in the proxy-active path too,
     # but only when no advice line is present (avoids info overload). Dim
@@ -903,8 +968,15 @@ if _evo and _evo_source in ('proxy', 'proxy_stale'):
         _self['last_signal'] = _signal
         _save_self(_self)
 
+elif _session_id:
+    # ═══ Known session, no fresh per-session state → quiet placeholder ═══
+    # Deliberately do NOT borrow the self-tracked tip rotation or the shared
+    # sinks here: a bound session with no data of its own renders only a
+    # neutral marker. Child/teammate sessions (no tracked file) land here.
+    _line1_bits = [f"\U0001f98a {BOLD}{_EVO_ACCENT}EvoPet{R}", f"{DIM}待機中{R}"]
+
 else:
-    # ═══ No proxy — self-tracked fallback ═══
+    # ═══ No session id — self-tracked fallback (sessionless legacy path) ═══
     _avatar = '\U0001f98a'
     _nick = 'EvoPet'
     _calls = _self.get('calls', 1)
@@ -928,13 +1000,14 @@ else:
     # signal category (persisted across cycles). Falls back to the full
     # tier-weighted rotation when no category match exists.
     _last_signal = _self.get('last_signal', '')
+    # v3.6: static-library tips are tagged [汎用]; width-clipped by meaning.
     _tip = _pick_tip(_TIPS_ROTATION, _calls, _last_signal)
-    _th = _tip['headline']
+    _th = _clip('[汎用] ' + _tip['headline'], 72, pointer=True)
     _tb = _tip.get('before')
     _ta = _tip.get('after')
     if _tb and _ta:
-        _tb_d = _tb[:30] + '...' if len(_tb) > 30 else _tb
-        _ta_d = _ta[:55] + '...' if len(_ta) > 55 else _ta
+        _tb_d = _clip(_tb, 28)
+        _ta_d = _clip(_ta, 44)
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}\n   {DIM}\u274c{R} {BOLD}{_EVO_RED}\"{_tb_d}\"{R} \u2192 {DIM}\u2705{R} {BOLD}{_EVO_GREEN}\"{_ta_d}\"{R}"
     else:
         _line2 = f"\U0001f4a1 {_EVO_INFO}{BOLD}{_th}{R}"

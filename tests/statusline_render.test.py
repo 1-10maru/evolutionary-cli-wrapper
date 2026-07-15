@@ -434,23 +434,23 @@ class TestStatuslineV33(unittest.TestCase):
         self.assertIn("(待機中)", plain)
 
     def test_proxy_stale_preserves_full_layout(self) -> None:
-        """v3.3.0: stale path must keep grade / 回目 / 指示の質 / 育成度
-        chips on line 1 (previously collapsed to avatar-only)."""
+        """v3.3.0/v3.6: stale path keeps the essentials chips on line 1
+        (grade / 指示の質 / 育成度). v3.6 dropped 会話回数 and combo from line 1."""
         write_live_state(self.cwd_dir, age_ms=30_000)  # 30 s old → stale
         out = run_statusline(self._stdin(), self.fake_home, self.cwd_dir)
         plain = strip_ansi(out)
-        # All four data chips must remain visible in stale render
-        self.assertIn("回目", plain)
+        # Essentials chips must remain visible in stale render.
         self.assertIn("指示の質", plain)
         self.assertIn("育成度", plain)
+        # v3.6: the 会話回数 chip ("N回目の会話") was removed from line 1.
+        self.assertNotIn("回目の会話", plain)
         # And the (待機中) suffix should be present at end of line 1
         self.assertIn("(待機中)", plain)
-        # Line 1 should have multiple separator chips (not just avatar+marker)
+        # Line 1 should still have multiple separator chips (not collapsed).
         line1 = next(
             (ln for ln in plain.split("\n") if "TestPet" in ln), ""
         )
-        # Expect at least 4 chips (avatar/name, grade, 回目, 育成度) joined by
-        # separator (middle-dot · in SEP).
+        # Expect at least 3 separators: name · grade · 指示の質 · 育成度 · (待機中).
         self.assertGreaterEqual(
             line1.count("·"),
             3,
@@ -546,14 +546,14 @@ class TestStatuslineV34PerSession(unittest.TestCase):
         self.assertIn("MyPet", plain)
         self.assertNotIn("OtherPet", plain)
 
-    def test_session_id_no_match_falls_back_to_newest_in_sessions_dir(self) -> None:
-        """When session_id has no matching file, fall through per-session
-        files entirely and use the legacy live-state.json (per-session files
-        for OTHER sessions must NOT shadow the current one)."""
-        # Two per-session files, neither matching
+    def test_session_id_no_match_renders_placeholder_not_other_state(self) -> None:
+        """v3.6: when session_id is known but has NO matching per-session file,
+        the renderer must show the quiet placeholder — never another session's
+        per-session file NOR the shared legacy live-state.json."""
+        # Two per-session files, neither matching our session_id
         self._write_session_file("sid-a", "PetA", age_ms=3_000)
         self._write_session_file("sid-b", "PetB", age_ms=1_000)
-        # Legacy file with a third nickname
+        # Legacy shared file with a third nickname
         evo_dir = self.cwd_dir / ".evo"
         legacy_payload = {
             "avatar": "🦊",
@@ -579,12 +579,12 @@ class TestStatuslineV34PerSession(unittest.TestCase):
             self._stdin(session_id="sid-not-in-dir"), self.fake_home, self.cwd_dir
         )
         plain = strip_ansi(out)
-        # The mismatched per-session files must be skipped — neither nickname
-        # should leak into the render.
+        # No other session's state — and NOT the shared legacy file — may leak.
         self.assertNotIn("PetA", plain)
         self.assertNotIn("PetB", plain)
-        # The legacy file is the fallback for unknown session_id.
-        self.assertIn("LegacyPet", plain)
+        self.assertNotIn("LegacyPet", plain)
+        # Instead: the quiet placeholder.
+        self.assertIn("待機中", plain)
 
     def test_no_session_id_picks_newest_in_sessions_dir(self) -> None:
         """When the payload omits session_id, the newest-mtime per-session
@@ -602,9 +602,11 @@ class TestStatuslineV34PerSession(unittest.TestCase):
         self.assertIn("NewPet", plain)
         self.assertNotIn("OldPet", plain)
 
-    def test_falls_back_to_legacy_when_sessions_dir_empty(self) -> None:
-        """Empty (or nonexistent) sessions/ dir → legacy live-state.json read."""
-        # Remove the empty dir so we exercise the os.path.isdir() == False branch
+    def test_known_session_ignores_legacy_sink_and_shows_placeholder(self) -> None:
+        """v3.6: a KNOWN session_id never reads the shared legacy live-state.json
+        (even when the sessions/ dir is empty). It renders the placeholder so a
+        bound session cannot borrow the shared sink that other panes clobber."""
+        # Remove the empty dir so we also exercise the missing-sessions-dir path.
         self.sessions_dir.rmdir()
         evo_dir = self.cwd_dir / ".evo"
         legacy_payload = {
@@ -629,7 +631,23 @@ class TestStatuslineV34PerSession(unittest.TestCase):
         )
         out = run_statusline(self._stdin(session_id="anything"), self.fake_home, self.cwd_dir)
         plain = strip_ansi(out)
-        self.assertIn("LegacyOnly", plain)
+        self.assertNotIn("LegacyOnly", plain)
+        self.assertIn("待機中", plain)
+
+    def test_known_session_with_matching_transcript_path_binds(self) -> None:
+        """v3.6: when session_id is absent but transcript_path is present, the
+        sid is derived from the transcript filename stem and binds strictly."""
+        self._write_session_file("sid-xfer", "XferPet", age_ms=2_000)
+        s = {
+            "model": {"display_name": "claude-opus-4-7"},
+            "cwd": str(self.cwd_dir),
+            "context_window": {"used_percentage": 25},
+            "rate_limits": {},
+            "transcript_path": "/home/u/.claude/projects/enc/sid-xfer.jsonl",
+        }
+        out = run_statusline(s, self.fake_home, self.cwd_dir)
+        plain = strip_ansi(out)
+        self.assertIn("XferPet", plain)
 
 
 if __name__ == "__main__":

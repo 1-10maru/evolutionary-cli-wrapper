@@ -37,24 +37,27 @@ describe("resolveModelSection", () => {
 describe("getEligibleGuidanceTips", () => {
   const base = getPromptingGuidance().sections.base.tips;
 
-  it("returns only base tips for an unknown model", () => {
+  it("returns only base (official) tips for an unknown model", () => {
     const tips = getEligibleGuidanceTips("claude-sonnet-5");
     expect(tips.length).toBe(base.length);
-    expect(tips.some((t) => t.headline.startsWith("Fable"))).toBe(false);
-    expect(tips.some((t) => t.headline.startsWith("Opus"))).toBe(false);
+    // No model-tuned tips; all base tips carry official provenance.
+    expect(tips.some((t) => t.source === "model")).toBe(false);
+    expect(tips.every((t) => t.source === "official")).toBe(true);
   });
 
-  it("layers label-prefixed fable tips for a fable model", () => {
+  it("layers model-tagged fable tips (clean headline + audience field)", () => {
     const tips = getEligibleGuidanceTips("claude-fable-5[1m]");
     expect(tips.length).toBeGreaterThan(base.length);
-    expect(tips.some((t) => t.headline.startsWith("Fable 5のコツ: "))).toBe(true);
-    expect(tips.some((t) => t.headline.startsWith("Opus"))).toBe(false);
+    expect(tips.some((t) => t.source === "model" && t.audience === "Fable 5")).toBe(true);
+    expect(tips.some((t) => t.audience === "Opus 4.8")).toBe(false);
+    // Headlines stay clean (provenance travels in the source/audience fields).
+    expect(tips.some((t) => t.headline.startsWith("Fable 5のコツ"))).toBe(false);
   });
 
-  it("layers label-prefixed opus tips for an opus model", () => {
+  it("layers model-tagged opus tips for an opus model", () => {
     const tips = getEligibleGuidanceTips("claude-opus-4-8");
-    expect(tips.some((t) => t.headline.startsWith("Opus 4.8のコツ: "))).toBe(true);
-    expect(tips.some((t) => t.headline.startsWith("Fable"))).toBe(false);
+    expect(tips.some((t) => t.source === "model" && t.audience === "Opus 4.8")).toBe(true);
+    expect(tips.some((t) => t.audience === "Fable 5")).toBe(false);
   });
 
   it("yields non-empty headline + detail for every eligible tip", () => {
@@ -147,23 +150,23 @@ describe("resolveProxyModel", () => {
 });
 
 describe("pickTip / pickTipForModel rotation", () => {
-  it("pickTip low indices stay backward-compatible with the static library", () => {
+  it("pickTip low indices carry the [汎用] tag on the static library headlines", () => {
     for (let i = 0; i < Math.min(5, TIPS_LIBRARY.length); i++) {
-      expect(pickTip(i).headline).toBe(TIPS_LIBRARY[i].headline);
+      expect(pickTip(i).headline).toBe(`[汎用] ${TIPS_LIBRARY[i].headline}`);
     }
   });
 
-  it("a fable model rotation surfaces at least one fable guidance tip and no opus tip", () => {
+  it("a fable model rotation surfaces at least one [Fable 5向け] tip and no opus tip", () => {
     const seen = new Set<string>();
     for (let i = 0; i < 400; i++) {
       seen.add(pickTipForModel(i, "claude-fable-5").headline);
     }
     const headlines = [...seen];
-    expect(headlines.some((h) => h.startsWith("Fable 5のコツ: "))).toBe(true);
-    expect(headlines.some((h) => h.startsWith("Opus 4.8のコツ: "))).toBe(false);
+    expect(headlines.some((h) => h.startsWith("[Fable 5向け] "))).toBe(true);
+    expect(headlines.some((h) => h.startsWith("[Opus 4.8向け] "))).toBe(false);
   });
 
-  it("an unknown model rotation never surfaces model-labeled tips", () => {
+  it("an unknown model rotation never surfaces model-tagged tips", () => {
     const seen = new Set<string>();
     for (let i = 0; i < 400; i++) {
       seen.add(pickTipForModel(i, "claude-sonnet-5").headline);
@@ -171,7 +174,7 @@ describe("pickTip / pickTipForModel rotation", () => {
     const headlines = [...seen];
     expect(
       headlines.some(
-        (h) => h.startsWith("Fable 5のコツ: ") || h.startsWith("Opus 4.8のコツ: "),
+        (h) => h.startsWith("[Fable 5向け] ") || h.startsWith("[Opus 4.8向け] "),
       ),
     ).toBe(false);
   });
