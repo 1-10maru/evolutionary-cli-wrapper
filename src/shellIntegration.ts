@@ -459,12 +459,17 @@ function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: SupportedCli, cwd:
   const configPath = path.join(cwd, ".evo", "config.json");
   const cmdBackup = `${cli}.evo-original.cmd`;
   const titleLabel = `${cli} [Evo ON]`;
+  // Nesting guard runs before the shellIntegration.enabled check below: a nested
+  // re-invocation must pass straight through to the real claude regardless of
+  // whether integration is enabled.
+  const nestingGuard = buildNestingGuardLines(kind, resolveOriginalForShimGuard(cwd, cli));
   if (kind === "cmd") {
     return [
       "@echo off",
       "setlocal",
       `set \"EVO_HOME=${cwd}\"`,
       `set \"EVO_CONFIG=${configPath}\"`,
+      ...nestingGuard,
       `if exist \"%~dp0${cmdBackup}\" (`,
       "  for /f \"usebackq delims=\" %%A in (`powershell -NoProfile -Command \"$cfg=Get-Content -Raw '%EVO_CONFIG%' | ConvertFrom-Json; if($cfg.shellIntegration.enabled){'1'}else{'0'}\"`) do set \"EVO_ENABLED=%%A\"",
       ") else (",
@@ -486,6 +491,7 @@ function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: SupportedCli, cwd:
       "#!/usr/bin/env pwsh",
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$evoConfig = '${escapePowerShellSingleQuotes(escapedConfig)}'`,
+      ...nestingGuard,
       "$evoEnabled = $true",
       "if (Test-Path $evoConfig) {",
       "  try {",
@@ -507,6 +513,7 @@ function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: SupportedCli, cwd:
     "#!/bin/sh",
     `EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
     `EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
+    ...nestingGuard,
     `if [ -f "$0.evo-original" ] && command -v node >/dev/null 2>&1; then`,
     `  if node -e "const fs=require('fs');const p=process.argv[1];try{const c=JSON.parse(fs.readFileSync(p,'utf8'));process.stdout.write(c.shellIntegration&&c.shellIntegration.enabled===false?'0':'1')}catch{process.stdout.write('1')}" "$EVO_CONFIG" | grep -q '^0$'; then`,
     `    exec "$0.evo-original" "$@"`,
@@ -578,6 +585,56 @@ function restoreCommandWrappers(_cwd: string): void {
  */
 const SHIM_PATH_FORBIDDEN = /['"`$;%&|<>^\n\r]/;
 
+/**
+ * Defense-in-depth nesting guard emitted into every generated shim. When the
+ * shim runs while `EVO_PROXY_ACTIVE=1` — i.e. claude re-invoked `claude` by name
+ * from inside an Evo proxy (a `/logout` re-auth flow, or the native updater
+ * relaunching itself) — it execs the real claude directly instead of opening a
+ * second `node dist/index.js proxy` session. The runtime guard in
+ * `src/index.ts` is the primary fix; this shim-level guard just avoids paying
+ * the Node startup on the nested hop and closes the window before Evo's own
+ * process is ever involved.
+ *
+ * Pure and side-effect free: the caller resolves the original command (skipping
+ * resolution entirely in EVO_TEST_MODE) and passes it in. Returns no guard lines
+ * when the original cannot be resolved or is unsafe to interpolate into this
+ * shim kind — in that case the runtime guard still handles the nested case.
+ */
+export function buildNestingGuardLines(kind: "sh" | "cmd" | "ps1", original: string | null): string[] {
+  if (!original || SHIM_PATH_FORBIDDEN.test(original)) return [];
+  if (kind === "cmd") {
+    return [
+      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" (`,
+      `  call \"${original}\" %*`,
+      "  exit /b %ERRORLEVEL%",
+      ")",
+    ];
+  }
+  if (kind === "ps1") {
+    return [
+      "if ($env:EVO_PROXY_ACTIVE -eq '1') {",
+      `  & '${escapePowerShellSingleQuotes(original)}' @args`,
+      "  exit $LASTEXITCODE",
+      "}",
+    ];
+  }
+  return [
+    `if [ \"$EVO_PROXY_ACTIVE\" = \"1\" ]; then`,
+    `  exec \"${original.replace(/\\/g, "/")}\" \"$@\"`,
+    "fi",
+  ];
+}
+
+/**
+ * Resolve the original command for shim-guard emission, skipping resolution in
+ * EVO_TEST_MODE (mirrors installCommandWrappers) so unit tests stay
+ * deterministic and never trigger a real `where` probe.
+ */
+function resolveOriginalForShimGuard(cwd: string, cli: SupportedCli): string | null {
+  if (process.env.EVO_TEST_MODE === "1") return null;
+  return resolveOriginalCommand(cwd, cli);
+}
+
 export function createProxyShims(cwd: string): string[] {
   if (SHIM_PATH_FORBIDDEN.test(cwd)) {
     throw new Error(
@@ -618,12 +675,15 @@ export function createProxyShims(cwd: string): string[] {
   created.push(cmdAutoRunPath);
 
   for (const cli of ["claude"] as const) {
+    const original = resolveOriginalForShimGuard(cwd, cli);
+
     const cmdShimPath = path.join(binDir, `${cli}.cmd`);
     const cmdContent = [
       "@echo off",
       "setlocal",
       `set "EVO_HOME=${cwd}"`,
       `set "EVO_CONFIG=${configPath}"`,
+      ...buildNestingGuardLines("cmd", original),
       `title ${cli} [Evo ON]`,
       `node "%~dp0..\\dist\\index.js" proxy --cli ${cli} -- %*`,
       "",
@@ -636,6 +696,7 @@ export function createProxyShims(cwd: string): string[] {
       "#!/usr/bin/env pwsh",
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
+      ...buildNestingGuardLines("ps1", original),
       `$Host.UI.RawUI.WindowTitle = '${escapePowerShellSingleQuotes(`${cli} [Evo ON]`)}'`,
       `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' proxy --cli ${cli} -- @args`,
       "exit $LASTEXITCODE",
@@ -649,6 +710,7 @@ export function createProxyShims(cwd: string): string[] {
       "#!/bin/sh",
       `export EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
       `export EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
+      ...buildNestingGuardLines("sh", original),
       `exec node "${path.join(cwd, "dist", "index.js").replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
       "",
     ].join("\n");
