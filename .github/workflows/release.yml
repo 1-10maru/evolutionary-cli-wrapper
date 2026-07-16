@@ -159,7 +159,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          # NO registry-url here: setup-node's registry-url writes an .npmrc
+          # with _authToken=${NODE_AUTH_TOKEN} and injects a placeholder token
+          # ("XXXXX-...") into the step env. npm >= 11.5 then prefers that
+          # legacy token path over OIDC and the publish dies with an
+          # E404-masked auth failure (observed on the v3.6.0-rc.3 run
+          # 29484845397). Trusted publishing needs NO registry auth config at
+          # all - npm autodetects the OIDC id-token.
       - name: Upgrade npm to a Trusted-Publishing-capable version (>= 11.5.1)
         # The npm bundled with Node 22 is 10.x, which does not understand OIDC
         # trusted publishing. 11.5.1+ is required.
