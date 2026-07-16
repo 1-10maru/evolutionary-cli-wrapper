@@ -45,6 +45,35 @@ function clamp(value: number, min: number, max: number): number {
 const dbLog = getLogger().child("db");
 
 /**
+ * Synchronous sleep (better-sqlite3 is synchronous, so the retry backoff must
+ * block the thread). Bounded to a few small waits.
+ */
+function sleepMs(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run a write against the shared DB, retrying only on `SQLITE_BUSY`. Each
+ * retried unit MUST be atomic (a single IMMEDIATE transaction) so a re-run
+ * cannot double-apply. Anything other than SQLITE_BUSY is rethrown immediately.
+ * This is a pragmatic backstop on top of `busy_timeout` + IMMEDIATE begins.
+ */
+function withBusyRetry<T>(fn: () => T): T {
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return fn();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "SQLITE_BUSY" || attempt >= maxAttempts) throw error;
+      dbLog.debug("SQLITE_BUSY — retrying write", { attempt, backoffMs: 50 * attempt });
+      sleepMs(50 * attempt);
+    }
+  }
+}
+
+/**
  * How long a connection waits for a lock before erroring SQLITE_BUSY. Concurrent
  * same-cwd proxies write to one WAL database; without this a second writer errors
  * immediately instead of waiting its short turn.
@@ -89,7 +118,15 @@ export class EvoDatabase {
     // can need a brief exclusive lock, which concurrent fresh-db launches
     // contend for — waiting there avoids a SQLITE_BUSY on the very first write.
     this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    this.db.pragma("journal_mode = WAL");
+    // The WAL-mode transition takes a brief EXCLUSIVE lock and, unlike ordinary
+    // writes, can return SQLITE_BUSY *immediately without invoking the busy
+    // handler* when two connections switch a brand-new db at the same instant —
+    // so busy_timeout does not cover it (QA: ~2/25 two-way fresh-db launches
+    // crashed here). Retry: on a second attempt the winner has finished and the
+    // db is already WAL, so the pragma returns "wal" with no contention. This is
+    // the last of the three multi-launch crash tiers (config #78, stats/migration
+    // #83, and this first WAL switch).
+    withBusyRetry(() => this.db.pragma("journal_mode = WAL"));
     this.initialize();
   }
 
@@ -456,7 +493,21 @@ export class EvoDatabase {
   private ensureColumn(table: string, column: string, definition: string): void {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (columns.some((item) => item.name === column)) return;
-    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    // This is check-then-act: two proxies first-opening the same unmigrated DB
+    // can both observe the column missing and both ALTER, and the loser throws
+    // SQLITE_ERROR "duplicate column name". The ALTER is idempotent in intent,
+    // so swallow that specific race (another process added the column) and
+    // rethrow anything else.
+    try {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/duplicate column name/i.test(message)) {
+        dbLog.debug("ensureColumn: column already added by a concurrent proxy", { table, column });
+        return;
+      }
+      throw error;
+    }
   }
 
   createEpisode(input: {
@@ -466,33 +517,36 @@ export class EvoDatabase {
     startedAt: string;
     promptProfile: PromptProfile;
   }): number {
-    const statement = this.db.prepare(`
+    const insertEpisode = this.db.prepare(`
       INSERT INTO episodes (cwd, cli, command, started_at, prompt_hash, prompt_preview)
       VALUES (@cwd, @cli, @command, @startedAt, @promptHash, @preview)
     `);
-    const info = statement.run({
-      cwd: input.cwd,
-      cli: input.cli,
-      command: JSON.stringify(input.command),
-      startedAt: input.startedAt,
-      promptHash: input.promptProfile.promptHash,
-      preview: this.capturePromptText ? input.promptProfile.preview : "",
-    });
-
-    this.db
-      .prepare(`
-        INSERT INTO prompt_profiles (
-          episode_id, prompt_hash, prompt_length, prompt_length_bucket, structure_score,
-          has_bullets, has_file_refs, has_symbol_refs, has_constraint_ref, has_acceptance_ref,
-          has_test_ref, target_specificity_score, preview
-        ) VALUES (
-          @episodeId, @promptHash, @promptLength, @promptLengthBucket, @structureScore,
-          @hasBullets, @hasFileRefs, @hasSymbolRefs, @hasConstraintRef, @hasAcceptanceRef,
-          @hasTestRef, @targetSpecificityScore, @preview
-        )
-      `)
-      .run({
-        episodeId: Number(info.lastInsertRowid),
+    const insertProfile = this.db.prepare(`
+      INSERT INTO prompt_profiles (
+        episode_id, prompt_hash, prompt_length, prompt_length_bucket, structure_score,
+        has_bullets, has_file_refs, has_symbol_refs, has_constraint_ref, has_acceptance_ref,
+        has_test_ref, target_specificity_score, preview
+      ) VALUES (
+        @episodeId, @promptHash, @promptLength, @promptLengthBucket, @structureScore,
+        @hasBullets, @hasFileRefs, @hasSymbolRefs, @hasConstraintRef, @hasAcceptanceRef,
+        @hasTestRef, @targetSpecificityScore, @preview
+      )
+    `);
+    // Both writes in ONE immediate transaction: atomic (a retry can never
+    // double-insert the episode) and it takes the write lock upfront, so two
+    // concurrent proxies serialize instead of upgrade-deadlocking.
+    const txn = this.db.transaction((): number => {
+      const info = insertEpisode.run({
+        cwd: input.cwd,
+        cli: input.cli,
+        command: JSON.stringify(input.command),
+        startedAt: input.startedAt,
+        promptHash: input.promptProfile.promptHash,
+        preview: this.capturePromptText ? input.promptProfile.preview : "",
+      });
+      const episodeId = Number(info.lastInsertRowid);
+      insertProfile.run({
+        episodeId,
         ...input.promptProfile,
         preview: this.capturePromptText ? input.promptProfile.preview : "",
         hasBullets: Number(input.promptProfile.hasBullets),
@@ -502,8 +556,9 @@ export class EvoDatabase {
         hasAcceptanceRef: Number(input.promptProfile.hasAcceptanceRef),
         hasTestRef: Number(input.promptProfile.hasTestRef),
       });
-
-    return Number(info.lastInsertRowid);
+      return episodeId;
+    });
+    return withBusyRetry(() => txn.immediate());
   }
 
   appendEvents(episodeId: number, events: EpisodeEvent[]): void {
@@ -522,7 +577,7 @@ export class EvoDatabase {
         });
       }
     });
-    transaction(events);
+    withBusyRetry(() => transaction.immediate(events));
   }
 
   saveWorkspaceSnapshot(episodeId: number, phase: "before" | "after", snapshot: WorkspaceSnapshot): void {
@@ -547,7 +602,7 @@ export class EvoDatabase {
         });
       }
     });
-    transaction();
+    withBusyRetry(() => transaction.immediate());
   }
 
   saveSymbolSnapshots(
@@ -576,7 +631,7 @@ export class EvoDatabase {
         }
       }
     });
-    transaction();
+    withBusyRetry(() => transaction.immediate());
   }
 
   saveSymbolChanges(episodeId: number, changes: SymbolChangeEvent[]): void {
@@ -592,7 +647,7 @@ export class EvoDatabase {
     const transaction = this.db.transaction((items: SymbolChangeEvent[]) => {
       for (const change of items) statement.run({ episodeId, ...change });
     });
-    transaction(changes);
+    withBusyRetry(() => transaction.immediate(changes));
   }
 
   saveUsageObservations(episodeId: number, observations: UsageObservation[]): void {
@@ -609,7 +664,7 @@ export class EvoDatabase {
     const transaction = this.db.transaction((items: UsageObservation[]) => {
       for (const item of items) statement.run({ episodeId, ...item });
     });
-    transaction(observations);
+    withBusyRetry(() => transaction.immediate(observations));
   }
 
   saveTurns(episodeId: number, turns: TurnRecord[], summaries: TurnSummary[]): void {
@@ -740,7 +795,7 @@ export class EvoDatabase {
         }
       }
     });
-    transaction();
+    withBusyRetry(() => transaction.immediate());
   }
 
   finishEpisode(episodeId: number, input: {
@@ -757,50 +812,51 @@ export class EvoDatabase {
       turnCount: input.summary.turnCount ?? 0,
       interventionMode: input.summary.interventionMode ?? "quiet",
     };
-    this.db
-      .prepare(`
-        UPDATE episodes
-        SET finished_at = @finishedAt,
-            exit_code = @exitCode,
-            exit_signal = @exitSignal,
-            termination_reason = @terminationReason
-        WHERE id = @episodeId
-      `)
-      .run({
+    const updateEpisode = this.db.prepare(`
+      UPDATE episodes
+      SET finished_at = @finishedAt,
+          exit_code = @exitCode,
+          exit_signal = @exitSignal,
+          termination_reason = @terminationReason
+      WHERE id = @episodeId
+    `);
+    const insertSummary = this.db.prepare(`
+      INSERT OR REPLACE INTO episode_summaries (
+        episode_id, surrogate_cost, files_read, lines_read_norm, symbol_revisits,
+        retry_count, failed_verifications, cross_file_spread, no_change_turns,
+        changed_files_count, changed_symbols_count, changed_lines_count, first_pass_green,
+        prompt_length_bucket, structure_score, scope_bucket, exploration_mode,
+        attention_entropy, attention_compression, novelty_ratio, expected_cost_confidence,
+        approval_count, approval_burst, tool_error_count, tool_retry_count, tool_failure_streak,
+        edit_failure_count, recovery_attempts, human_confirmation_burst, friction_score,
+        stop_and_reframe_signal, best_stop_turn, suggested_reframe,
+        fix_loop_occurred, search_loop_occurred, nice_guidance_awarded,
+        predicted_loss_rate, exp_awarded, turn_count, intervention_mode
+      ) VALUES (
+        @episodeId, @surrogateCost, @filesRead, @linesReadNorm, @symbolRevisits,
+        @retryCount, @failedVerifications, @crossFileSpread, @noChangeTurns,
+        @changedFilesCount, @changedSymbolsCount, @changedLinesCount, @firstPassGreen,
+        @promptLengthBucket, @structureScore, @scopeBucket, @explorationMode,
+        @attentionEntropy, @attentionCompression, @noveltyRatio, @expectedCostConfidence,
+        @approvalCount, @approvalBurst, @toolErrorCount, @toolRetryCount, @toolFailureStreak,
+        @editFailureCount, @recoveryAttempts, @humanConfirmationBurst, @frictionScore,
+        @stopAndReframeSignal, @bestStopTurn, @suggestedReframe,
+        @fixLoopOccurred, @searchLoopOccurred, @niceGuidanceAwarded,
+        @predictedLossRate, @expAwarded, @turnCount, @interventionMode
+      )
+    `);
+    // The episode UPDATE + summary upsert as one atomic IMMEDIATE transaction
+    // (takes the write lock upfront; the stats-bucket update below runs in its
+    // own IMMEDIATE transaction afterward).
+    const txn = this.db.transaction(() => {
+      updateEpisode.run({
         episodeId,
         finishedAt: input.finishedAt,
         exitCode: input.exitCode,
         exitSignal: input.exitSignal ?? null,
         terminationReason: input.terminationReason,
       });
-
-    this.db
-      .prepare(`
-        INSERT OR REPLACE INTO episode_summaries (
-          episode_id, surrogate_cost, files_read, lines_read_norm, symbol_revisits,
-          retry_count, failed_verifications, cross_file_spread, no_change_turns,
-          changed_files_count, changed_symbols_count, changed_lines_count, first_pass_green,
-          prompt_length_bucket, structure_score, scope_bucket, exploration_mode,
-          attention_entropy, attention_compression, novelty_ratio, expected_cost_confidence,
-          approval_count, approval_burst, tool_error_count, tool_retry_count, tool_failure_streak,
-          edit_failure_count, recovery_attempts, human_confirmation_burst, friction_score,
-          stop_and_reframe_signal, best_stop_turn, suggested_reframe,
-          fix_loop_occurred, search_loop_occurred, nice_guidance_awarded,
-          predicted_loss_rate, exp_awarded, turn_count, intervention_mode
-        ) VALUES (
-          @episodeId, @surrogateCost, @filesRead, @linesReadNorm, @symbolRevisits,
-          @retryCount, @failedVerifications, @crossFileSpread, @noChangeTurns,
-          @changedFilesCount, @changedSymbolsCount, @changedLinesCount, @firstPassGreen,
-          @promptLengthBucket, @structureScore, @scopeBucket, @explorationMode,
-          @attentionEntropy, @attentionCompression, @noveltyRatio, @expectedCostConfidence,
-          @approvalCount, @approvalBurst, @toolErrorCount, @toolRetryCount, @toolFailureStreak,
-          @editFailureCount, @recoveryAttempts, @humanConfirmationBurst, @frictionScore,
-          @stopAndReframeSignal, @bestStopTurn, @suggestedReframe,
-          @fixLoopOccurred, @searchLoopOccurred, @niceGuidanceAwarded,
-          @predictedLossRate, @expAwarded, @turnCount, @interventionMode
-        )
-      `)
-      .run({
+      insertSummary.run({
         episodeId,
         ...summary,
         firstPassGreen: Number(summary.firstPassGreen),
@@ -809,6 +865,8 @@ export class EvoDatabase {
         searchLoopOccurred: Number(summary.searchLoopOccurred),
         niceGuidanceAwarded: Number(summary.niceGuidanceAwarded),
       });
+    });
+    withBusyRetry(() => txn.immediate());
 
     this.updateStatsBuckets(summary);
     if (typeof input.observedTotalTokens === "number" && input.cli) {
@@ -910,56 +968,58 @@ export class EvoDatabase {
       }
     });
 
-    transaction();
+    withBusyRetry(() => transaction.immediate());
   }
 
   private updateTokenCalibration(cli: SupportedCli, surrogateCost: number, totalTokens: number): void {
-    const existing = this.db
-      .prepare(`
-        SELECT
-          sample_size AS sampleSize,
-          sum_surrogate_cost AS sumSurrogateCost,
-          sum_total_tokens AS sumTotalTokens,
-          sum_surrogate_sq AS sumSurrogateSq,
-          sum_cost_token AS sumCostToken
-        FROM token_calibration_models
-        WHERE cli = ?
-      `)
-      .get(cli) as
-      | {
-          sampleSize: number;
-          sumSurrogateCost: number;
-          sumTotalTokens: number;
-          sumSurrogateSq: number;
-          sumCostToken: number;
-        }
-      | undefined;
+    const selectExisting = this.db.prepare(`
+      SELECT
+        sample_size AS sampleSize,
+        sum_surrogate_cost AS sumSurrogateCost,
+        sum_total_tokens AS sumTotalTokens,
+        sum_surrogate_sq AS sumSurrogateSq,
+        sum_cost_token AS sumCostToken
+      FROM token_calibration_models
+      WHERE cli = ?
+    `);
+    const upsert = this.db.prepare(`
+      INSERT OR REPLACE INTO token_calibration_models (
+        cli, sample_size, sum_surrogate_cost, sum_total_tokens, sum_surrogate_sq,
+        sum_cost_token, slope, intercept, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    // Read-modify-write in ONE immediate transaction: taking the write lock
+    // before the read prevents both an upgrade-deadlock and a lost update when
+    // two proxies calibrate at once.
+    const txn = this.db.transaction(() => {
+      const existing = selectExisting.get(cli) as
+        | {
+            sampleSize: number;
+            sumSurrogateCost: number;
+            sumTotalTokens: number;
+            sumSurrogateSq: number;
+            sumCostToken: number;
+          }
+        | undefined;
 
-    const nextSampleSize = (existing?.sampleSize ?? 0) + 1;
-    const nextSumSurrogateCost = (existing?.sumSurrogateCost ?? 0) + surrogateCost;
-    const nextSumTotalTokens = (existing?.sumTotalTokens ?? 0) + totalTokens;
-    const nextSumSurrogateSq = (existing?.sumSurrogateSq ?? 0) + (surrogateCost * surrogateCost);
-    const nextSumCostToken = (existing?.sumCostToken ?? 0) + (surrogateCost * totalTokens);
+      const nextSampleSize = (existing?.sampleSize ?? 0) + 1;
+      const nextSumSurrogateCost = (existing?.sumSurrogateCost ?? 0) + surrogateCost;
+      const nextSumTotalTokens = (existing?.sumTotalTokens ?? 0) + totalTokens;
+      const nextSumSurrogateSq = (existing?.sumSurrogateSq ?? 0) + (surrogateCost * surrogateCost);
+      const nextSumCostToken = (existing?.sumCostToken ?? 0) + (surrogateCost * totalTokens);
 
-    const denominator =
-      (nextSampleSize * nextSumSurrogateSq) - (nextSumSurrogateCost * nextSumSurrogateCost);
-    const slope =
-      Math.abs(denominator) < 1e-9
-        ? 0
-        : ((nextSampleSize * nextSumCostToken) - (nextSumSurrogateCost * nextSumTotalTokens)) / denominator;
-    const intercept =
-      nextSampleSize === 0
-        ? 0
-        : (nextSumTotalTokens - (slope * nextSumSurrogateCost)) / nextSampleSize;
+      const denominator =
+        (nextSampleSize * nextSumSurrogateSq) - (nextSumSurrogateCost * nextSumSurrogateCost);
+      const slope =
+        Math.abs(denominator) < 1e-9
+          ? 0
+          : ((nextSampleSize * nextSumCostToken) - (nextSumSurrogateCost * nextSumTotalTokens)) / denominator;
+      const intercept =
+        nextSampleSize === 0
+          ? 0
+          : (nextSumTotalTokens - (slope * nextSumSurrogateCost)) / nextSampleSize;
 
-    this.db
-      .prepare(`
-        INSERT OR REPLACE INTO token_calibration_models (
-          cli, sample_size, sum_surrogate_cost, sum_total_tokens, sum_surrogate_sq,
-          sum_cost_token, slope, intercept, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
+      upsert.run(
         cli,
         nextSampleSize,
         nextSumSurrogateCost,
@@ -970,6 +1030,8 @@ export class EvoDatabase {
         intercept,
         new Date().toISOString(),
       );
+    });
+    withBusyRetry(() => txn.immediate());
   }
 
   lookupExpectedCost(promptProfile: PromptProfile, complexity: EpisodeComplexity): ExpectedCostEstimate {
@@ -1436,7 +1498,7 @@ export class EvoDatabase {
       }
     });
 
-    transaction();
+    withBusyRetry(() => transaction.immediate());
     return { importedBuckets: incoming.length };
   }
 
@@ -1552,7 +1614,7 @@ export class EvoDatabase {
         for (const statement of deleteStatements) statement.run(episodeId);
       }
     });
-    transaction(idsToCompact);
+    withBusyRetry(() => transaction.immediate(idsToCompact));
 
     // Truncating the WAL is opportunistic housekeeping. Under concurrent
     // same-cwd proxies it can lose a race with another proxy's finalize writes
