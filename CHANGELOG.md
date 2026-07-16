@@ -5,6 +5,14 @@
 ## Unreleased
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## v3.6.1-rc.1 (2026-07-17)
+
+### Added
 - Single-file executable. `evo` and the `claude` wrapper now launch from one self-contained file (`dist/evo.bundle.cjs`) that has every plain-JavaScript dependency baked in. Startup no longer depends on the many small dependency folders inside `node_modules` still being there.
 
 ### Changed
