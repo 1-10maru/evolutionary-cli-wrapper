@@ -240,3 +240,84 @@ describe("DB migration race: concurrent ensureColumn-style ALTER", () => {
     expect(cols.filter((c) => c.name === "extra").length).toBe(1);
   }, 30_000);
 });
+
+// The constructor's `PRAGMA journal_mode = WAL` (src/db.ts) takes a brief
+// EXCLUSIVE lock and, unlike ordinary writes, can return SQLITE_BUSY IMMEDIATELY
+// without invoking the busy handler when two connections switch a brand-new db
+// at the same instant — so busy_timeout does not cover it (QA saw ~2/25 two-way
+// fresh-db launches crash exactly here). This worker mirrors the constructor:
+// open, set busy_timeout, then the wrapped WAL switch. On retry the winner has
+// finished and the db is already WAL, so the pragma returns "wal" uncontended.
+const WAL_RACE_WORKER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const Database = require("better-sqlite3");
+// Mirror of src/db.ts withBusyRetry (kept in sync intentionally).
+function withBusyRetry(fn) {
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt++) {
+    try { return fn(); }
+    catch (e) {
+      const code = String((e && e.code) || "");
+      if (code !== "SQLITE_BUSY" || attempt >= maxAttempts) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * attempt);
+    }
+  }
+}
+const db = new Database(workerData.dbPath); // brand-new file -> rollback mode
+db.pragma("busy_timeout = 5000");
+parentPort.postMessage("ready");
+parentPort.on("message", (m) => {
+  if (m !== "go") return;
+  try {
+    withBusyRetry(() => db.pragma("journal_mode = WAL"));
+    const mode = db.pragma("journal_mode", { simple: true });
+    db.close();
+    parentPort.postMessage({ ok: true, mode: mode });
+  } catch (e) {
+    try { db.close(); } catch (_) {}
+    parentPort.postMessage({ ok: false, code: String(e && e.code), msg: String(e && e.message) });
+  }
+});
+`;
+
+function freshDbPath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evo-wal-"));
+  tempDirs.push(dir);
+  return path.join(dir, "fresh.db"); // does not exist yet: both workers create/open it
+}
+
+describe("DB WAL-switch race: concurrent first-open journal_mode=WAL", () => {
+  it("two connections switching a brand-new db to WAL both succeed (SQLITE_BUSY retried)", async () => {
+    // Hammer the fresh-db 2-way race many times: the collision is probabilistic
+    // (QA ~2/25), but WITH the retry every worker succeeds on every iteration.
+    const iterations = 25;
+    for (let i = 0; i < iterations; i += 1) {
+      const dbPath = freshDbPath();
+      const workers = [0, 1].map(() => new Worker(WAL_RACE_WORKER, { eval: true, workerData: { dbPath } }));
+      const results: Array<{ ok: boolean; mode?: string; code?: string; msg?: string }> = [];
+
+      await new Promise<void>((resolve, reject) => {
+        let ready = 0;
+        let done = 0;
+        for (const w of workers) {
+          w.on("error", reject);
+          w.on("message", (m: unknown) => {
+            if (m === "ready") {
+              ready += 1;
+              if (ready === workers.length) workers.forEach((x) => x.postMessage("go"));
+              return;
+            }
+            results.push(m as { ok: boolean });
+            done += 1;
+            if (done === workers.length) resolve();
+          });
+        }
+      });
+      await Promise.all(workers.map((w) => w.terminate()));
+
+      const failed = results.filter((r) => !r.ok);
+      expect(failed, `iteration ${i}: ${JSON.stringify(failed)}`).toEqual([]);
+      expect(results.every((r) => r.mode === "wal")).toBe(true);
+    }
+  }, 60_000);
+});

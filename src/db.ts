@@ -118,7 +118,15 @@ export class EvoDatabase {
     // can need a brief exclusive lock, which concurrent fresh-db launches
     // contend for — waiting there avoids a SQLITE_BUSY on the very first write.
     this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    this.db.pragma("journal_mode = WAL");
+    // The WAL-mode transition takes a brief EXCLUSIVE lock and, unlike ordinary
+    // writes, can return SQLITE_BUSY *immediately without invoking the busy
+    // handler* when two connections switch a brand-new db at the same instant —
+    // so busy_timeout does not cover it (QA: ~2/25 two-way fresh-db launches
+    // crashed here). Retry: on a second attempt the winner has finished and the
+    // db is already WAL, so the pragma returns "wal" with no contention. This is
+    // the last of the three multi-launch crash tiers (config #78, stats/migration
+    // #83, and this first WAL switch).
+    withBusyRetry(() => this.db.pragma("journal_mode = WAL"));
     this.initialize();
   }
 
