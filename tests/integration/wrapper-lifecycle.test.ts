@@ -2,9 +2,12 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../../src/config";
 import { killProcessTree } from "../../src/proxy/spawnCommand";
+import { disposeNodeAsClaude, nodeAsClaude } from "../fixtures/nodeAsClaude";
+
+afterAll(() => disposeNodeAsClaude());
 
 // ---------------------------------------------------------------------------
 // Wrapper lifecycle regression tests (defects C1 + C2).
@@ -77,7 +80,9 @@ function makeProjectDir(prefix: string): string {
       ...config.shellIntegration,
       originalCommandMap: {
         ...config.shellIntegration.originalCommandMap,
-        claude: process.execPath,
+        // A `claude`-named launcher that IS Node — a bare node.exe is now
+        // rejected as a claude mapping by resolveOriginalCommand.
+        claude: nodeAsClaude(),
       },
     },
     proxy: {

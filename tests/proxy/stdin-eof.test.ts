@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // FIX B unit guard: on the non-attach path (no TTY, no force-attach) the proxy
@@ -40,6 +40,9 @@ vi.mock("../../src/proxy/spawnCommand", async (importOriginal) => {
 
 import { ensureEvoConfig, updateEvoConfig } from "../../src/config";
 import { runProxySession } from "../../src/proxyRuntime";
+import { disposeNodeAsClaude, nodeAsClaude } from "../fixtures/nodeAsClaude";
+
+afterAll(() => disposeNodeAsClaude());
 
 const tempDirs: string[] = [];
 
@@ -68,8 +71,10 @@ function makeCwd(): string {
     ...config,
     shellIntegration: {
       ...config.shellIntegration,
-      // Any resolvable original — spawnInteractiveCommand is mocked anyway.
-      originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: process.execPath },
+      // A `claude`-named launcher that IS Node — resolveOriginalCommand still
+      // runs for real (spawnInteractiveCommand is mocked) and now rejects a bare
+      // node.exe, so it must resolve an acceptable name.
+      originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: nodeAsClaude() },
     },
     proxy: { ...config.proxy, turnIdleMs: 50, defaultMode: "active" },
   });

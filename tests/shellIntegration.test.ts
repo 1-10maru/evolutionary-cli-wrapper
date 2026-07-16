@@ -6,7 +6,9 @@ import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
   buildNestingGuardLines,
   createProxyShims,
+  followShimToExe,
   getShellStatus,
+  isUsableCommandCandidate,
   resolveOriginalCommand,
   setupShellIntegration,
   undoShellIntegration,
@@ -395,5 +397,160 @@ describe("resolveOriginalCommand — interpreter-shim follow-through (FIX A)", (
 
     // .js targets must be left alone — resolution stays on the shim.
     expect(resolveOriginalCommand(cwd, "claude")).toBe(cmdShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Interpreter denylist + positive constraint (regression for the stale-cache
+// -> node.exe poisoning). Fixture: an npm dir with live native-style
+// claude.cmd/.ps1 that target node_modules/.../bin/claude.exe (present), plus
+// the three stale cli.js-era backups (cli.js ABSENT).
+// ---------------------------------------------------------------------------
+const CLAUDE_EXE_REL = "node_modules/@anthropic-ai/claude-code/bin/claude.exe";
+const CLI_JS_REL_WIN = "node_modules\\@anthropic-ai\\claude-code\\cli.js";
+
+function writeStaleBackupCmd(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "@ECHO off",
+      "SETLOCAL",
+      "SET dp0=%~dp0",
+      `IF EXIST "%dp0%\\node.exe" ( SET "_prog=%dp0%\\node.exe" ) ELSE ( SET "_prog=node" )`,
+      `"%_prog%"  "%dp0%\\${CLI_JS_REL_WIN}" %*`,
+      "",
+    ].join("\r\n"),
+  );
+  return p;
+}
+
+function writeStaleBackupPs1(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "#!/usr/bin/env pwsh",
+      `& "$PSScriptRoot\\${CLI_JS_REL_WIN}" $args`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"),
+  );
+  return p;
+}
+
+function writeStaleBackupSh(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "#!/bin/sh",
+      'basedir=$(dirname "$0")',
+      'if [ -x "$basedir/node" ]; then',
+      '  exec "$basedir/node"  "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"',
+      "else",
+      '  exec node  "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"',
+      "fi",
+      "",
+    ].join("\n"),
+  );
+  return p;
+}
+
+describe("resolveOriginalCommand — interpreter denylist + positive constraint", () => {
+  function setup(prefix: string): string {
+    process.env.EVO_TEST_MODE = "1";
+    process.env.EVO_TEST_WHERE_STDOUT = "";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+    return cwd;
+  }
+
+  function mapClaudeTo(cwd: string, commandPath: string): void {
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: commandPath },
+      },
+    });
+  }
+
+  // Build the fixture npm dir; returns the live shims + the present bin/claude.exe.
+  function buildFixture(cwd: string, opts: { exePresent?: boolean } = {}) {
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    if (opts.exePresent !== false) writeFile(exePath, "MZ fake binary");
+    const liveCmd = writeClaudeCmdShim(npmDir, "claude.cmd", CLAUDE_EXE_REL);
+    const livePs1 = writeClaudePs1Shim(npmDir, CLAUDE_EXE_REL);
+    const backupCmd = writeStaleBackupCmd(npmDir, "claude.evo-original.cmd");
+    const backupPs1 = writeStaleBackupPs1(npmDir, "claude.evo-original.ps1");
+    const backupSh = writeStaleBackupSh(npmDir, "claude.evo-original");
+    return { npmDir, exePath, liveCmd, livePs1, backupCmd, backupPs1, backupSh };
+  }
+
+  it("(a) rejects a poisoned node.exe cache and resolves the live shim's real .exe, never node.exe", () => {
+    const cwd = setup("evo-deny-cache-node-");
+    const fx = buildFixture(cwd);
+    // Cached node.exe lives in a SEPARATE dir (like C:\Program Files\nodejs), so
+    // it is not a sibling of the live shims — reproducing the real bug where the
+    // cached interpreter (candidate order pos 2) beat the discovered shim (pos 3).
+    const nodejsDir = path.join(cwd, "nodejs");
+    const stalenode = path.join(nodejsDir, "node.exe");
+    writeFile(stalenode, "MZ node");
+    mapClaudeTo(cwd, stalenode);
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+
+    const resolved = resolveOriginalCommand(cwd, "claude");
+    expect(resolved).toBe(fx.exePath);
+    expect(resolved).not.toBe(stalenode);
+  });
+
+  it("(b) resolves to the real .exe from an empty cache with backups present", () => {
+    const cwd = setup("evo-deny-empty-");
+    const fx = buildFixture(cwd);
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(fx.exePath);
+  });
+
+  it("(c) never selects a stale backup even when it is the cached value", () => {
+    const cwd = setup("evo-deny-backup-cache-");
+    const fx = buildFixture(cwd);
+    mapClaudeTo(cwd, fx.backupCmd);
+    // No discovery — resolution self-heals off the backup to its live sibling.
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(fx.exePath);
+  });
+
+  it("(d) does not select a live shim whose node_modules target is missing", () => {
+    const cwd = setup("evo-deny-missing-target-");
+    const fx = buildFixture(cwd, { exePresent: false });
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+    // bin/claude.exe absent → shims not usable → nothing acceptable resolves.
+    expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
+  });
+
+  it("(e) followShimToExe never returns a path outside <shimdir>/node_modules", () => {
+    const cwd = setup("evo-deny-containment-");
+    const npmDir = path.join(cwd, "npm");
+    // A shim whose extracted target escapes node_modules via `..`.
+    const escaping = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules/../../evil.exe");
+    // Create the escaped target so only the containment guard can reject it.
+    writeFile(path.join(cwd, "evil.exe"), "MZ evil");
+    expect(followShimToExe(escaping)).toBe(escaping);
+
+    // A contained shim IS followed.
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake");
+    const contained = writeClaudeCmdShim(npmDir, "claude-good.cmd", CLAUDE_EXE_REL);
+    expect(followShimToExe(contained)).toBe(exePath);
+  });
+
+  it("(f) isUsableCommandCandidate rejects a bare node.exe", () => {
+    const cwd = setup("evo-deny-usable-node-");
+    const nodeExe = path.join(cwd, "node.exe");
+    writeFile(nodeExe, "MZ node");
+    expect(isUsableCommandCandidate(nodeExe)).toBe(false);
   });
 });
