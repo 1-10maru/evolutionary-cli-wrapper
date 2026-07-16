@@ -85,10 +85,11 @@ export class EvoDatabase {
     ensureDirectory(this.evoDir);
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
     this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
-    // Wait for a lock instead of erroring SQLITE_BUSY immediately, so concurrent
-    // same-cwd proxies serialize their short writes rather than one exiting 1.
+    // Set busy_timeout BEFORE switching to WAL: the journal-mode switch itself
+    // can need a brief exclusive lock, which concurrent fresh-db launches
+    // contend for — waiting there avoids a SQLITE_BUSY on the very first write.
     this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    this.db.pragma("journal_mode = WAL");
     this.initialize();
   }
 
@@ -1560,9 +1561,16 @@ export class EvoDatabase {
     try {
       this.db.pragma("wal_checkpoint(TRUNCATE)");
     } catch (error) {
-      dbLog.debug("wal_checkpoint(TRUNCATE) skipped", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const code = (error as NodeJS.ErrnoException).code;
+      const message = error instanceof Error ? error.message : String(error);
+      if (code === "SQLITE_BUSY") {
+        // Expected under concurrent same-cwd proxies; opportunistic, so skip.
+        dbLog.debug("wal_checkpoint(TRUNCATE) skipped on contention");
+      } else {
+        // Anything else is unexpected and must be visible — but checkpointing
+        // is still non-fatal, so we log at warn rather than rethrowing.
+        dbLog.warn("wal_checkpoint(TRUNCATE) failed", { message, code });
+      }
     }
     if (config.retention.vacuumOnCompact) {
       this.db.exec("VACUUM");
