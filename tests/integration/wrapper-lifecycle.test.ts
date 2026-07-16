@@ -110,6 +110,11 @@ function spawnWrapper(opts: {
   // process itself has exited (the thing under test) but `close` would be
   // delayed by the leaked handle, unrelated to the wrapper's own lifecycle.
   resolveOn?: "close" | "exit";
+  // Optional file the inner fake CLI writes right before exiting. On timeout
+  // the diagnostics report whether it exists: PRESENT means the inner CLI ran
+  // and exited (a stall above it = genuine interpreter/stdin wedge); ABSENT
+  // means the chain never reached the inner CLI (cold-start/contention).
+  markerPath?: string;
 }): Promise<RunResult> {
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const resolveOn = opts.resolveOn ?? "close";
@@ -138,10 +143,47 @@ function spawnWrapper(opts: {
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
 
     const timer = setTimeout(() => {
+      // Self-identifying diagnostics, gathered BEFORE killing the wrapper, so
+      // a CI failure distinguishes "genuine wedge" from "starved runner":
+      //   marker PRESENT + interpreters alive + wrapper alive  => real wedge
+      //   marker ABSENT / nothing alive                        => cold-start/contention
+      const wrapperState =
+        child.exitCode !== null || child.signalCode !== null
+          ? `already exited (code=${child.exitCode} signal=${child.signalCode}; only stdio close was pending)`
+          : "still running";
+      let markerState = "n/a (no markerPath)";
+      if (opts.markerPath) {
+        markerState = fs.existsSync(opts.markerPath)
+          ? "PRESENT (inner CLI ran and exited)"
+          : "ABSENT (chain never reached the inner CLI)";
+      }
+      let procSnapshot = "unavailable";
+      try {
+        const out = execFileSync(
+          "tasklist",
+          ["/fo", "csv", "/nh"],
+          { encoding: "utf8", timeout: 5_000, windowsHide: true },
+        );
+        const interesting = out
+          .split(/\r?\n/)
+          .filter((l) => /^"(pwsh|powershell|cmd|node)\.exe"/i.test(l))
+          .slice(0, 20);
+        procSnapshot = interesting.length > 0 ? interesting.join("\n") : "(none of pwsh/powershell/cmd/node alive)";
+      } catch {
+        // best-effort; non-Windows or tasklist unavailable
+      }
+      const tail = (s: string): string => (s.length > 1000 ? `…${s.slice(-1000)}` : s);
       child.kill("SIGKILL");
       reject(
         new Error(
-          `wrapper did not exit within ${timeoutMs}ms (regression of the /exit hang).\nstderr:\n${stderr}`,
+          [
+            `wrapper did not exit within ${timeoutMs}ms (regression of the /exit hang).`,
+            `wrapper process: ${wrapperState}`,
+            `inner-CLI marker: ${markerState}`,
+            `live processes at timeout:\n${procSnapshot}`,
+            `stdout tail:\n${tail(stdout)}`,
+            `stderr tail:\n${tail(stderr)}`,
+          ].join("\n"),
         ),
       );
     }, timeoutMs);
@@ -318,8 +360,14 @@ describe("interpreter-shim stdin wedge (Windows)", () => {
       const cwd = makeProjectDir("evo-ps1-wedge-");
       // A fast-exit-1 fake CLI the shim invokes. A .cmd stands in for the real
       // .exe (we can't mint a PE here); the wedge is in PowerShell's stdin
-      // handling and is independent of what the inner command is.
-      fs.writeFileSync(path.join(cwd, "fake-claude.cmd"), "@echo off\r\nexit /b 1\r\n");
+      // handling and is independent of what the inner command is. It drops a
+      // marker file just before exiting so the timeout diagnostics can tell
+      // "inner CLI ran" (wedge above it) from "never got there" (cold start).
+      const markerPath = path.join(cwd, ".fake-claude-exited");
+      fs.writeFileSync(
+        path.join(cwd, "fake-claude.cmd"),
+        '@echo off\r\necho.>"%~dp0.fake-claude-exited"\r\nexit /b 1\r\n',
+      );
       // Mirror npm's shim. The target is NOT under node_modules, so FIX A's
       // shim-follow-through deliberately does not apply here — this isolates the
       // stdin-EOF fix (FIX B) with the PowerShell layer actually in place.
@@ -347,10 +395,19 @@ describe("interpreter-shim stdin wedge (Windows)", () => {
 
       // spawnWrapper leaves the wrapper's own stdin OPEN, and the wrapper runs
       // non-attach (non-TTY) so it must close the PowerShell child's stdin.
-      const result = await spawnWrapper({ cwd, proxyArgs: ["--bad-flag-xyz"], timeoutMs: 15_000 });
+      // 25s budget: hosted-runner pwsh/cmd cold starts + suite contention were
+      // measured to stack past the old 15s on bad runs (local worst under a
+      // spawn-storm: 2.8s; CI cold-start estimates add 6-12s). A genuine wedge
+      // still fails — and the timeout diagnostics say which case it was.
+      const result = await spawnWrapper({
+        cwd,
+        proxyArgs: ["--bad-flag-xyz"],
+        timeoutMs: 25_000,
+        markerPath,
+      });
       expect(result.code).toBe(1);
     },
-    30_000,
+    40_000,
   );
 });
 
