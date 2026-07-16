@@ -673,6 +673,14 @@ program.parseAsync(process.argv).catch((error: unknown) => {
       message,
     });
   }
+  // Capture the full stack + any error code (e.g. SQLITE_BUSY and its failing
+  // statement) at debug so DB and other failures are diagnosable — the console
+  // still shows only the message.
+  getLogger().child("cli").debug("command failed", {
+    message,
+    code: (error as NodeJS.ErrnoException).code,
+    stack: error instanceof Error ? error.stack : undefined,
+  });
   console.error(message);
   process.exitCode = 1;
 });
