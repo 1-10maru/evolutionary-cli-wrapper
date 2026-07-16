@@ -168,8 +168,11 @@ jobs:
           # all - npm autodetects the OIDC id-token.
       - name: Upgrade npm to a Trusted-Publishing-capable version (>= 11.5.1)
         # The npm bundled with Node 22 is 10.x, which does not understand OIDC
-        # trusted publishing. 11.5.1+ is required.
-        run: npm install -g npm@latest
+        # trusted publishing. Pin to the 11.x line: 11.5.1+ is the documented
+        # trusted-publishing baseline, and the first rc.3 attempt on npm@12.0.1
+        # (fresh major) died ENEEDAUTH without even attempting the OIDC
+        # exchange (run 29485596433).
+        run: npm install -g npm@11
       - name: Show tool versions
         run: |
           node --version
@@ -185,11 +188,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "${{ needs.setup.outputs.tag }}"
           git push origin "${{ needs.setup.outputs.tag }}"
+      - name: OIDC diagnostics (id-token availability)
+        # If these vars are absent, the job never received the id-token grant
+        # and the npm OIDC exchange cannot happen at all.
+        run: |
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_URL: present"; else echo "ACTIONS_ID_TOKEN_REQUEST_URL: MISSING"; fi
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: present"; else echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: MISSING"; fi
       - name: Publish to npm via OIDC Trusted Publishing
         # Authentication is via the OIDC id-token - do NOT set NODE_AUTH_TOKEN or
         # npm falls back to the legacy token path instead of trusted publishing.
         # --provenance is kept explicitly (works with the id-token permission).
-        run: npm publish --tag ${{ needs.setup.outputs.dist_tag }} --provenance --access public
+        # --loglevel http surfaces the token-exchange calls so a registry-side
+        # trusted-publisher mismatch is visible in the log instead of a bare
+        # ENEEDAUTH.
+        run: npm publish --tag ${{ needs.setup.outputs.dist_tag }} --provenance --access public --loglevel http
       - name: Extract notes from CHANGELOG
         id: notes
         shell: bash
