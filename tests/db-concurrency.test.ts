@@ -105,3 +105,71 @@ describe("DB concurrency: deferred deadlock vs immediate", () => {
     expect(value).toBe(iters * 2);
   }, 30_000);
 });
+
+// ensureColumn is check-then-act (PRAGMA table_info -> ALTER TABLE ADD COLUMN).
+// Two proxies first-opening the same UNMIGRATED db both observe the column
+// missing and both ALTER; the loser throws SQLITE_ERROR "duplicate column name".
+// The guard swallows exactly that race. This worker mirrors ensureColumn's guard
+// and a barrier ('ready' -> 'go') forces both connections to ALTER concurrently.
+const MIGRATE_RACE_WORKER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const Database = require("better-sqlite3");
+const db = new Database(workerData.dbPath);
+db.pragma("busy_timeout = 5000");
+db.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER)");
+// Check phase (before the barrier), so BOTH connections decide "missing".
+const cols = db.prepare("PRAGMA table_info(t)").all();
+const missing = !cols.some((c) => c.name === "extra");
+parentPort.postMessage("ready");
+parentPort.on("message", (m) => {
+  if (m !== "go") return;
+  let result;
+  try {
+    if (missing) db.exec("ALTER TABLE t ADD COLUMN extra TEXT");
+    result = { ok: true, altered: !!missing };
+  } catch (e) {
+    if (/duplicate column name/i.test(String(e.message))) result = { ok: true, raced: true };
+    else result = { ok: false, err: String(e.message), code: e.code };
+  }
+  db.close();
+  parentPort.postMessage(result);
+});
+`;
+
+describe("DB migration race: concurrent ensureColumn-style ALTER", () => {
+  it("two connections racing the same ADD COLUMN both succeed (duplicate-column swallowed)", async () => {
+    const dbPath = makeKvDb(); // fresh db; table `t` has no `extra` column yet
+
+    const workers = [0, 1].map(() => new Worker(MIGRATE_RACE_WORKER, { eval: true, workerData: { dbPath } }));
+    const results: Array<{ ok: boolean; altered?: boolean; raced?: boolean; err?: string }> = [];
+
+    await new Promise<void>((resolve, reject) => {
+      let ready = 0;
+      let done = 0;
+      for (const w of workers) {
+        w.on("error", reject);
+        w.on("message", (m: unknown) => {
+          if (m === "ready") {
+            ready += 1;
+            if (ready === workers.length) workers.forEach((x) => x.postMessage("go"));
+            return;
+          }
+          results.push(m as { ok: boolean });
+          done += 1;
+          if (done === workers.length) resolve();
+        });
+      }
+    });
+    await Promise.all(workers.map((w) => w.terminate()));
+
+    // Neither connection threw; exactly one added the column, the other raced.
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(results.some((r) => r.altered)).toBe(true);
+
+    // The column exists exactly once.
+    const db = new Database(dbPath);
+    const cols = db.prepare("PRAGMA table_info(t)").all() as Array<{ name: string }>;
+    db.close();
+    expect(cols.filter((c) => c.name === "extra").length).toBe(1);
+  }, 30_000);
+});

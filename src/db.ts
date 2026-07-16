@@ -485,7 +485,21 @@ export class EvoDatabase {
   private ensureColumn(table: string, column: string, definition: string): void {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (columns.some((item) => item.name === column)) return;
-    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    // This is check-then-act: two proxies first-opening the same unmigrated DB
+    // can both observe the column missing and both ALTER, and the loser throws
+    // SQLITE_ERROR "duplicate column name". The ALTER is idempotent in intent,
+    // so swallow that specific race (another process added the column) and
+    // rethrow anything else.
+    try {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/duplicate column name/i.test(message)) {
+        dbLog.debug("ensureColumn: column already added by a concurrent proxy", { table, column });
+        return;
+      }
+      throw error;
+    }
   }
 
   createEpisode(input: {
