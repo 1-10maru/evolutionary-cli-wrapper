@@ -11,7 +11,7 @@ import {
   NudgeSeverity,
   PromptProfile,
 } from "./types";
-import { getEligibleGuidanceTips } from "./promptingGuidance";
+import { getEligibleGuidanceTips, tipTag, TipSource } from "./promptingGuidance";
 
 // ── Signal detection from turn-level data ──
 
@@ -314,8 +314,11 @@ interface BeforeAfterPair {
 
 function generateBeforeAfter(signal: AdviceSignal): BeforeAfterPair | null {
   const ctx = signal.context;
-  const lastFile = typeof ctx.lastFile === "string" ? ctx.lastFile : "";
-  const file = typeof ctx.file === "string" ? ctx.file : lastFile;
+  // Shorten absolute paths to a repo-relative basename so the before/after
+  // examples never embed the user's full filesystem path (matches the headline).
+  const lastFileRaw = typeof ctx.lastFile === "string" ? ctx.lastFile : "";
+  const fileRaw = typeof ctx.file === "string" ? ctx.file : lastFileRaw;
+  const file = fileRaw ? shortPath(fileRaw) : fileRaw;
   const symbol = typeof ctx.symbol === "string" ? ctx.symbol : "";
   const touchCount = typeof ctx.touchCount === "number" ? ctx.touchCount : 0;
 
@@ -411,7 +414,7 @@ function signalHeadline(signal: AdviceSignal): string {
 
 function signalDetail(signal: AdviceSignal): string {
   const ctx = signal.context;
-  const file = typeof ctx.file === "string" ? ctx.file : "";
+  const file = typeof ctx.file === "string" ? shortPath(ctx.file) : "";
   const touchCount = typeof ctx.touchCount === "number" ? ctx.touchCount : 0;
 
   switch (signal.kind) {
@@ -635,12 +638,19 @@ interface TipEntry {
   detail: string;
   beforeExample?: string;
   afterExample?: string;
+  /** Provenance for the `[…]` statusline tag. Defaults to "generic". */
+  source?: TipSource;
+  /** Model label when source==="model" (e.g. "Fable 5"). */
+  audience?: string;
 }
 
 function tipToAdvice(tip: TipEntry): ActionableAdvice {
+  // Prepend the provenance tag so the tip's source travels through the
+  // live-state advice string and both renderers show it verbatim.
+  const tag = tipTag(tip.source ?? "generic", tip.audience);
   return {
     signal: { kind: "first_pass_success", confidence: 0, severity: "low", context: {} },
-    headline: tip.headline,
+    headline: `${tag} ${tip.headline}`,
     detail: tip.detail,
     beforeExample: tip.beforeExample,
     afterExample: tip.afterExample,
@@ -652,9 +662,18 @@ function tipToAdvice(tip: TipEntry): ActionableAdvice {
  * Build the tip rotation pool for a given model: the static hand-written
  * library first (so existing low-index rotation is unchanged), then the
  * model-aware official-doc tips (base always, model-specific when it matches).
+ * The static library is tagged "generic" ([汎用]); guidance tips carry their
+ * own official/model provenance.
  */
 function buildTipPool(model?: string | null): TipEntry[] {
-  return [...TIPS_LIBRARY, ...getEligibleGuidanceTips(model)];
+  const staticTips: TipEntry[] = TIPS_LIBRARY.map((t) => ({ ...t, source: "generic" }));
+  const guidanceTips: TipEntry[] = getEligibleGuidanceTips(model).map((t) => ({
+    headline: t.headline,
+    detail: t.detail,
+    source: t.source,
+    audience: t.audience,
+  }));
+  return [...staticTips, ...guidanceTips];
 }
 
 /**

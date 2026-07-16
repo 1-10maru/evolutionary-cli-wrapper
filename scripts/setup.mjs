@@ -44,14 +44,20 @@ if (shellSetup.status !== 0) {
   process.exit(shellSetup.status ?? 1);
 }
 
-// Deploy statusline.py to ~/.claude/base_statusline.py
-const statuslineSrc = path.join(projectRoot, "statusline.py");
+// Deploy the TOKEN-ONLY statusline to ~/.claude/base_statusline.py.
+//
+// base_statusline.py must render ONLY the model/context/cwd line. The EvoPet
+// block is rendered separately by `evo statusline`. A statusline wrapper runs
+// both on the same stdin, so deploying the FULL repo statusline.py here (which
+// also renders EvoPet) produced two EvoPet blocks. Deploy the token-only
+// script instead.
+const statuslineSrc = path.join(projectRoot, "scripts", "token_statusline.py");
 const claudeDir = path.join(os.homedir(), ".claude");
 const statuslineDst = path.join(claudeDir, "base_statusline.py");
 if (existsSync(statuslineSrc)) {
   mkdirSync(claudeDir, { recursive: true });
   copyFileSync(statuslineSrc, statuslineDst);
-  console.log(`Deployed statusline.py → ${statuslineDst}`);
+  console.log(`Deployed token-only statusline → ${statuslineDst}`);
 }
 
 if (existsSync(path.join(projectRoot, ".evo", "config.json"))) {

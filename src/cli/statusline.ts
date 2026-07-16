@@ -26,7 +26,7 @@ import {
   pickMoodPool,
 } from "./statusline-data";
 import { getUpdateNotice } from "../updateCheck";
-import { getEligibleGuidanceTips } from "../promptingGuidance";
+import { getEligibleGuidanceTips, tipTag } from "../promptingGuidance";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -122,8 +122,117 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function clip(s: string, _n: number): string {
+// ── Width-aware truncation ────────────────────────────────────────────────
+// East-Asian wide + emoji code points occupy 2 terminal columns. A single-byte
+// slice (the old `s[:30]`) cut through multi-column glyphs and left examples
+// meaningless, so truncation is now measured in display columns.
+
+const ADVICE_POINTER = " → 続きは `evo advice`";
+
+function charWidth(cp: number): number {
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0x303e) || // CJK radicals / Kangxi / punctuation
+    (cp >= 0x3041 && cp <= 0x33ff) || // Hiragana, Katakana, CJK symbols
+    (cp >= 0x3400 && cp <= 0x4dbf) || // CJK Ext A
+    (cp >= 0x4e00 && cp <= 0x9fff) || // CJK Unified
+    (cp >= 0xa000 && cp <= 0xa4cf) || // Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compat ideographs
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compat forms
+    (cp >= 0xff00 && cp <= 0xff60) || // Fullwidth forms
+    (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth signs
+    (cp >= 0x1f300 && cp <= 0x1faff) || // Emoji / symbols
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK Ext B+
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+export function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += charWidth(ch.codePointAt(0)!);
+  return w;
+}
+
+function basenameOf(p: string): string {
+  const norm = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const idx = norm.lastIndexOf("/");
+  return idx >= 0 ? norm.slice(idx + 1) : norm;
+}
+
+/** A whole-string filesystem path: a path token with no whitespace. */
+function looksLikePath(s: string): boolean {
+  const t = s.trim();
+  return t.length > 0 && !/\s/u.test(t) && /[/\\]/.test(t);
+}
+
+function truncateToWidth(s: string, maxCols: number): string {
+  let w = 0;
+  let out = "";
+  for (const ch of s) {
+    const cw = charWidth(ch.codePointAt(0)!);
+    if (w + cw > maxCols) break;
+    out += ch;
+    w += cw;
+  }
+  return out;
+}
+
+/** Back off to the last clause/word boundary, if that keeps most of the text. */
+function trimToBoundary(s: string): string {
+  const m = s.match(/^(.*[、。，．・:：/!?！？\s])[^、。，．・:：/!?！？\s]*$/u);
+  if (m && displayWidth(m[1]) >= displayWidth(s) * 0.5) {
+    return m[1].replace(/[\s、。，．・:：]+$/u, "");
+  }
   return s;
+}
+
+/**
+ * Truncate `s` by MEANING to at most `maxCols` display columns:
+ *   - a whole-string filesystem path collapses to its basename;
+ *   - overflow is cut at the last clause/word boundary;
+ *   - when content was elided, append the `evo advice` pointer (pointer:true)
+ *     or a single ellipsis, instead of a mid-glyph hard cut.
+ */
+export function clip(s: string, maxCols: number, opts?: { pointer?: boolean }): string {
+  if (!s) return s;
+  const str = looksLikePath(s) ? basenameOf(s) : s;
+  if (displayWidth(str) <= maxCols) return str;
+  const truncated = trimToBoundary(truncateToWidth(str, maxCols));
+  return opts?.pointer ? truncated + ADVICE_POINTER : truncated + "…";
+}
+
+// Absolute hard total-block cap (final safety net). Even with per-field clip,
+// an unclipped field (e.g. a crafted nickname) or a future code path could
+// flood the statusline; this bounds the VISIBLE length of the WHOLE assembled
+// EvoPet block no matter what. ANSI escape sequences pass through uncounted (so
+// colors stay intact); a hard cut appends a reset + the `evo advice` pointer.
+// Measured in code points (emoji = 1). The newline between line 1 and line 2
+// counts as one visible unit.
+export const EVOPET_BLOCK_MAX_CHARS = 500;
+
+export function hardCapVisible(s: string, maxVisible: number): string {
+  const cps = Array.from(s);
+  let out = "";
+  let visible = 0;
+  let i = 0;
+  while (i < cps.length) {
+    if (cps[i] === "\x1b") {
+      // Copy a CSI/SGR escape verbatim: ESC [ <params> <final letter>.
+      out += cps[i++];
+      if (i < cps.length && cps[i] === "[") out += cps[i++];
+      while (i < cps.length && !/[A-Za-z]/.test(cps[i])) out += cps[i++];
+      if (i < cps.length) out += cps[i++];
+      continue;
+    }
+    if (visible >= maxVisible) break;
+    out += cps[i++];
+    visible++;
+  }
+  if (i < cps.length) out += `${ANSI.R}${ADVICE_POINTER}`;
+  return out;
 }
 
 // Resolve the model from the statusline stdin payload. Claude Code sends it as
@@ -180,6 +289,19 @@ export async function runStatuslineCommand(): Promise<void> {
     asString((data as Record<string, unknown>).session_id) ||
     asString((data as Record<string, unknown>).sessionId);
 
+  // Strict session identity: prefer the explicit session_id, else derive it
+  // from the transcript filename stem (Claude Code sends transcript_path like
+  // …/<session-id>.jsonl). When `sid` is known we bind to the per-session
+  // live-state file ONLY — never the shared global sinks that every parallel
+  // proxy clobbers.
+  const transcriptPath = asString(
+    (data as Record<string, unknown>).transcript_path,
+  );
+  const sidFromTranscript = transcriptPath
+    ? path.basename(transcriptPath).replace(/\.jsonl$/i, "")
+    : "";
+  const sid = sessionId || sidFromTranscript;
+
   // Model from the stdin payload (authoritative for this session) — drives the
   // model-aware tip rotation in the self-tracked fallback below.
   const modelId = resolveStatuslineModel(data);
@@ -235,30 +357,46 @@ export async function runStatuslineCommand(): Promise<void> {
   }
 
   // ── Proxy data resolution ──
-  // Try cwd-local first, then home fallback. Only accept if updatedAt is
-  // within the freshness window (10s — matches Python source).
+  // Only accept data within the freshness window (10s — matches the proxy's
+  // 10s heartbeat and the Python renderer's fresh cutoff).
   let evo: ProxyData | null = null;
   let evoSource: "proxy" | null = null;
   const FRESH_MS = 10000;
-  for (const tryPath of [
-    path.join(cwd, ".evo", "live-state.json"),
-    path.join(os.homedir(), ".claude", ".evo-live.json"),
-  ]) {
-    const candidate = safeReadJson<ProxyData>(tryPath);
-    if (!candidate) continue;
-    const updatedAt = asNumberOr(candidate.updatedAt, 0) as number;
-    if (nowMs - updatedAt < FRESH_MS) {
-      evo = candidate;
-      evoSource = "proxy";
-      break;
+  if (sid) {
+    // Strict per-session binding: read ONLY <cwd>/.evo/sessions/<sid>.json.
+    // A miss/stale here renders NOTHING (handled below) — we never fall back
+    // to the shared sinks, which any parallel proxy in this cwd overwrites.
+    const perSessionPath = path.join(cwd, ".evo", "sessions", `${sid}.json`);
+    const candidate = safeReadJson<ProxyData>(perSessionPath);
+    if (candidate) {
+      const updatedAt = asNumberOr(candidate.updatedAt, 0) as number;
+      if (nowMs - updatedAt < FRESH_MS) {
+        evo = candidate;
+        evoSource = "proxy";
+      }
     }
-  }
-
-  // Suppress proxy data for the first two ticks of a session — its cumulative
-  // state from prior sessions is meaningless on a fresh start.
-  if (evo && evoSource === "proxy" && (selfState.calls ?? 0) <= 2) {
-    evo = null;
-    evoSource = null;
+  } else {
+    // Sessionless legacy path: read the shared sinks, newest cwd-local first.
+    for (const tryPath of [
+      path.join(cwd, ".evo", "live-state.json"),
+      path.join(os.homedir(), ".claude", ".evo-live.json"),
+    ]) {
+      const candidate = safeReadJson<ProxyData>(tryPath);
+      if (!candidate) continue;
+      const updatedAt = asNumberOr(candidate.updatedAt, 0) as number;
+      if (nowMs - updatedAt < FRESH_MS) {
+        evo = candidate;
+        evoSource = "proxy";
+        break;
+      }
+    }
+    // Suppress shared-sink data for the first two ticks of a session — its
+    // cumulative state from a prior session is meaningless on a fresh start.
+    // (Per-session files are session-scoped, so this only applies here.)
+    if (evo && (selfState.calls ?? 0) <= 2) {
+      evo = null;
+      evoSource = null;
+    }
   }
 
   const { R, DIM, BOLD, EVO_ACCENT, EVO_INFO, EVO_WARN, EVO_GREEN, EVO_RED, EVO_GOLD } = ANSI;
@@ -270,14 +408,12 @@ export async function runStatuslineCommand(): Promise<void> {
   if (evo && evoSource === "proxy") {
     // ═══ Full proxy data ═══
     const avatar = (typeof evo.avatar === "string" && evo.avatar) || "🐣";
-    const nick = (typeof evo.nickname === "string" && evo.nickname) || "EvoPet";
-    const userMsgs = asNumberOr(evo.userMessages, 0) as number;
+    const nick = clip((typeof evo.nickname === "string" && evo.nickname) || "EvoPet", 24);
     const bond = asNumberOr(evo.bond, 0) as number;
     const isg =
       evo.idealStateGauge === null || evo.idealStateGauge === undefined
         ? -1
         : (asNumberOr(evo.idealStateGauge, -1) as number);
-    const combo = asNumberOr(evo.comboCount, 0) as number;
     const grade = asString(evo.sessionGrade);
     const ps = asNumberOr(evo.promptScore, 0) as number;
     const signal = asString(evo.signalKind);
@@ -293,18 +429,9 @@ export async function runStatuslineCommand(): Promise<void> {
       line1Bits.push(`${gc}${BOLD}${gradeLabel(grade)}${R}`);
     }
 
-    // Counter source: prefer proxy userMessages when reasonable, else self.calls
-    const selfCalls = (selfState.calls ?? 1) as number;
-    let convCount: number;
-    if ("userMessages" in evo && userMsgs <= selfCalls + 2) {
-      convCount = userMsgs;
-    } else {
-      convCount = selfCalls;
-    }
-    if (convCount > 0) {
-      line1Bits.push(`${BOLD}${EVO_INFO}${convCount}回目の会話${R}`);
-    }
-
+    // Line 1 essentials only: grade / 指示の質 / 育成度 (max 3 chips after the
+    // name). 会話回数 and combo were dropped from the cramped statusline; they
+    // remain available in `evo stats`.
     if (ps > 0) {
       if (ps >= 80) {
         line1Bits.push(`📝 ${EVO_GREEN}${BOLD}指示の質: とても良い!${R}`);
@@ -315,11 +442,6 @@ export async function runStatuslineCommand(): Promise<void> {
       } else {
         line1Bits.push(`📝 ${EVO_RED}${BOLD}指示の質: 曖昧すぎるかも${R}`);
       }
-    }
-
-    if (combo >= 3) {
-      const cc = combo >= 10 ? EVO_GOLD : combo >= 5 ? EVO_ACCENT : EVO_GREEN;
-      line1Bits.push(`${cc}${BOLD}${combo}連続いい感じ!${R}`);
     }
 
     // Growth: prefer ISG when available; -1 = no data yet (show "測定中")
@@ -345,38 +467,44 @@ export async function runStatuslineCommand(): Promise<void> {
     ]);
     const POS_SET = new Set(["good_structure", "first_pass_success", "improving_trend"]);
 
+    // Truncate by meaning: headline/detail to a line budget (pointer when the
+    // headline is elided), before/after examples to tight column budgets so
+    // the EvoPet block stays at ~2 lines instead of wrapping into noise.
+    const adviceC = clip(advice, 72, { pointer: true });
+    const detailC = clip(detail, 76);
+    const b = clip(before, 28);
+    const a = clip(after, 44);
+
     if (signal && NEG_SET.has(signal)) {
       if (before && after) {
-        const b = clip(before, 30);
-        const a = clip(after, 55);
-        line2 = `⚠️ ${EVO_WARN}${BOLD}${advice}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+        line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
       } else if (advice) {
-        line2 = `⚠️ ${EVO_WARN}${BOLD}${advice}${R}`;
+        line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}`;
         if (detail) {
-          line2 += `\n   ${BOLD}${detail}${R}`;
+          line2 += `\n   ${BOLD}${detailC}${R}`;
         }
       }
     } else if (POS_SET.has(signal)) {
-      line2 = `✨ ${EVO_GREEN}${BOLD}${advice}${R}`;
+      line2 = `✨ ${EVO_GREEN}${BOLD}${adviceC}${R}`;
       if (detail) {
-        line2 += `\n   ${BOLD}${detail}${R}`;
+        line2 += `\n   ${BOLD}${detailC}${R}`;
       }
     } else if (signal === "tip" && advice) {
       if (before && after) {
-        const b = clip(before, 30);
-        const a = clip(after, 55);
-        line2 = `💡 ${EVO_INFO}${BOLD}${advice}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+        line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
       } else {
-        line2 = `💡 ${EVO_INFO}${BOLD}${advice}${R}`;
+        line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}`;
         if (detail) {
-          line2 += `\n   ${BOLD}${detail}${R}`;
+          line2 += `\n   ${BOLD}${detailC}${R}`;
         }
       }
     } else if (advice) {
-      line2 = `💡 ${BOLD}${EVO_INFO}${advice}${R}`;
+      line2 = `💡 ${BOLD}${EVO_INFO}${adviceC}${R}`;
     }
-  } else {
-    // ═══ No proxy — self-tracked fallback ═══
+  } else if (!sid) {
+    // ═══ No proxy — self-tracked fallback (sessionless legacy path only) ═══
+    // When a sid IS known but has no fresh per-session state we deliberately
+    // fall through to render nothing (guard below) instead of this fallback.
     const avatar = "🦊";
     const nick = "EvoPet";
     const calls = (selfState.calls ?? 1) as number;
@@ -395,31 +523,50 @@ export async function runStatuslineCommand(): Promise<void> {
 
     line1Bits.push(`${DIM}${calls}回目${R}`);
 
-    // Tip rotation — merge the static library with model-aware guidance tips
-    // (base always eligible; model-specific tips when the stdin model matches).
+    // Tip rotation — merge the static library ([汎用]) with model-aware
+    // guidance tips ([公式] base / [<model>向け] model-specific). Each tip
+    // headline is prefixed with its provenance tag so the user can tell
+    // model-tuned advice from the generic/official libraries.
     const guidanceTips = getEligibleGuidanceTips(modelId);
     const tipPool: Array<{
       headline: string;
+      tag: string;
       before?: string | null;
       after?: string | null;
       detail?: string;
     }> = [
-      ...TIPS.map((t) => ({ headline: t.headline, before: t.before, after: t.after })),
-      ...guidanceTips.map((t) => ({ headline: t.headline, detail: t.detail })),
+      ...TIPS.map((t) => ({
+        headline: t.headline,
+        tag: tipTag("generic"),
+        before: t.before,
+        after: t.after,
+      })),
+      ...guidanceTips.map((t) => ({
+        headline: t.headline,
+        tag: tipTag(t.source, t.audience),
+        detail: t.detail,
+      })),
     ];
     const tip = tipPool[calls % tipPool.length];
-    const th = tip.headline;
+    const th = clip(`${tip.tag} ${tip.headline}`, 72, { pointer: true });
     const tb = tip.before;
     const ta = tip.after;
     if (tb && ta) {
-      const tbD = clip(tb, 30);
-      const taD = clip(ta, 55);
+      const tbD = clip(tb, 28);
+      const taD = clip(ta, 44);
       line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${tbD}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${taD}"${R}`;
     } else if (tip.detail) {
-      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${BOLD}${tip.detail}${R}`;
+      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${BOLD}${clip(tip.detail, 76)}${R}`;
     } else {
       line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}`;
     }
+  }
+
+  // Strict per-session binding: a KNOWN session with no fresh per-session state
+  // renders nothing at all (never another session's state, never a boost/tip).
+  // Child/teammate sessions have no tracked file → they naturally render empty.
+  if (!evo && sid) {
+    return;
   }
 
   // Session-start: override line2 with a boost message
@@ -431,12 +578,15 @@ export async function runStatuslineCommand(): Promise<void> {
   // ── Emit ──
   // Output: line1 (joined with SEP), optional line2 on next line.
   // Never emit the token/model/cwd line — that's ClaudeConfig's job.
+  // Assemble the EvoPet block (line 1 + optional line 2), then enforce the
+  // absolute hard total-block cap on the joined output as the final backstop.
+  const blockLines: string[] = [];
+  if (line1Bits.length > 0) blockLines.push(line1Bits.join(SEP));
+  if (line2) blockLines.push(line2);
+
   const out: string[] = [];
-  if (line1Bits.length > 0) {
-    out.push(line1Bits.join(SEP));
-  }
-  if (line2) {
-    out.push(line2);
+  if (blockLines.length > 0) {
+    out.push(hardCapVisible(blockLines.join("\n"), EVOPET_BLOCK_MAX_CHARS));
   }
 
   // Append (last line) an update-available notice when npm has a newer

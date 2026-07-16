@@ -16,6 +16,7 @@ import { runLogsCommand } from "./cli/logs";
 import { runDoctor } from "./cli/doctor";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
+import { runAdviceCommand } from "./cli/advice";
 import { runInstallStatusline } from "./cli/installStatusline";
 import { maybeRunFirstRunPrompt } from "./firstRunPrompt";
 import {
@@ -585,6 +586,14 @@ program
   .description("Render EvoPet portion of the Claude Code statusline (reads JSON from stdin).")
   .action(async () => {
     await runStatuslineCommand();
+  });
+
+program
+  .command("advice")
+  .description("Print the full EvoPet advice (untruncated) for the most recently active session in this directory.")
+  .option("--cwd <path>", "Project directory that owns the .evo live-state.", process.cwd())
+  .action((options: Record<string, unknown>) => {
+    runAdviceCommand({ cwd: String(options.cwd) });
   });
 
 program
