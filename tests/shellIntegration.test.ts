@@ -93,6 +93,45 @@ describe("shell integration", () => {
     expect(status.enabled).toBe(true);
   });
 
+  it("generated claude shims launch the bundle and carry a launch fallback", () => {
+    process.env.EVO_TEST_MODE = "1";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-bundle-"));
+    tempDirs.push(cwd);
+
+    createProxyShims(cwd);
+
+    const sh = fs.readFileSync(path.join(cwd, "bin", "claude"), "utf8");
+    const cmd = fs.readFileSync(path.join(cwd, "bin", "claude.cmd"), "utf8");
+    const ps1 = fs.readFileSync(path.join(cwd, "bin", "claude.ps1"), "utf8");
+
+    // The executable entry is the self-contained bundle, not the plain tsc output.
+    for (const body of [sh, cmd, ps1]) {
+      expect(body).toContain("evo.bundle.cjs");
+      expect(body).not.toContain("dist\\index.js");
+      expect(body).not.toContain("dist/index.js");
+      // Native addons cannot be bundled — the fallback verifies each is present.
+      expect(body).toContain("better-sqlite3");
+      expect(body).toContain("tree-sitter-python");
+      // ...as are the pure-JS loader helpers those native addons require at
+      // DB-open / parser-init time (measured native runtime closure).
+      expect(body).toContain("bindings");
+      expect(body).toContain("file-uri-to-path");
+      expect(body).toContain("node-gyp-build");
+    }
+
+    // Launch-fallback guard markers per shell kind.
+    expect(sh).toContain("_evo_ok");
+    expect(sh).toContain("command -v node");
+    expect(cmd).toContain("EVO_OK");
+    expect(cmd).toContain("where node");
+    expect(ps1).toContain("$evoOk");
+    expect(ps1).toContain("Get-Command node");
+
+    // The evo dev shim also points at the bundle.
+    expect(fs.readFileSync(path.join(cwd, "bin", "evo.cmd"), "utf8")).toContain("evo.bundle.cjs");
+    expect(fs.readFileSync(path.join(cwd, "bin", "evo.ps1"), "utf8")).toContain("evo.bundle.cjs");
+  });
+
   it("removes the managed PowerShell profile block", () => {
     process.env.EVO_TEST_MODE = "1";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-undo-"));
