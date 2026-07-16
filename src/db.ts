@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
+import { getLogger } from "./logger";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import {
   EpisodeComplexity,
@@ -41,6 +42,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+const dbLog = getLogger().child("db");
+
+/**
+ * How long a connection waits for a lock before erroring SQLITE_BUSY. Concurrent
+ * same-cwd proxies write to one WAL database; without this a second writer errors
+ * immediately instead of waiting its short turn.
+ */
+const BUSY_TIMEOUT_MS = 5000;
+
 /** Max chars of wrapped-CLI input persisted to the local DB (privacy cap). */
 const INPUT_TEXT_CAP = 500;
 
@@ -68,6 +78,7 @@ export class EvoDatabase {
     if (shouldUseLightweightTracking(cwd)) {
       this.dbPath = ":memory:";
       this.db = new Database(this.dbPath);
+      this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.initialize();
       return;
     }
@@ -75,6 +86,9 @@ export class EvoDatabase {
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
     this.db = new Database(this.dbPath);
     this.db.pragma("journal_mode = WAL");
+    // Wait for a lock instead of erroring SQLITE_BUSY immediately, so concurrent
+    // same-cwd proxies serialize their short writes rather than one exiting 1.
+    this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.initialize();
   }
 
@@ -1539,7 +1553,17 @@ export class EvoDatabase {
     });
     transaction(idsToCompact);
 
-    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    // Truncating the WAL is opportunistic housekeeping. Under concurrent
+    // same-cwd proxies it can lose a race with another proxy's finalize writes
+    // and raise SQLITE_BUSY — never worth failing a compaction (let alone a
+    // session) over. Skip it on contention; the WAL is truncated on a later run.
+    try {
+      this.db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch (error) {
+      dbLog.debug("wal_checkpoint(TRUNCATE) skipped", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (config.retention.vacuumOnCompact) {
       this.db.exec("VACUUM");
     }
