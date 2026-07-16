@@ -173,6 +173,24 @@ When the statusline is rendered through the `evo` CLI (`evo statusline`), it per
 
 </details>
 
+## Privacy / Data at rest
+
+Evo scores your collaboration **locally**. Nothing is sent anywhere — the only network call is the optional npm update check (disable with `EVO_NO_UPDATE_CHECK=1`).
+
+**What is stored.** Per turn, a **capped preview of the input** you sent the wrapped CLI (at most 500 characters), a **sha256 hash and length** of the full input (so repeated prompts can be recognized without keeping the text), a short **output preview** (~160 characters), plus derived metrics (detected file paths, token counts, friction/complexity scores).
+
+**Where.** Under `<project>/.evo/` — the SQLite database `.evo/evolutionary.db`, redacted logs in `.evo/logs/`, and per-session counters in `.evo/sessions/`. A small live-status file is also written to `~/.claude/.evo-live.json` for the statusline.
+
+**Retention.** Logs older than 7 days are pruned automatically; the database is compacted on a size/age policy (`evo storage` shows the footprint, `evo compact` archives old raw episodes into rollups).
+
+**How to disable prompt-text capture.** Set `capture.promptText` to `false` in `<project>/.evo/config.json`. Evo then stores **only** the sha256 hash and length of your input — no input text, no input previews, and no output previews (the wrapped CLI's output can echo your input back, so it is covered too).
+
+```json
+{ "capture": { "promptText": false } }
+```
+
+**How to purge.** `evo forget` deletes the local `.evo/` history for the current project; `evo uninstall --purge-data` removes the shell integration and deletes the project's `.evo/` data.
+
 ## The Pet
 
 EvoPet is what makes this a *companion* and not just another linter. It has an identity that reacts to how you drive Claude Code.

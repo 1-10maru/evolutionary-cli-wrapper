@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
@@ -40,15 +41,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+/** Max chars of wrapped-CLI input persisted to the local DB (privacy cap). */
+const INPUT_TEXT_CAP = 500;
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 export class EvoDatabase {
   readonly db: Database.Database;
   readonly cwd: string;
   readonly evoDir: string;
   readonly dbPath: string;
+  /** Privacy: when false, no wrapped-CLI input text and no input/output previews are persisted. */
+  private readonly capturePromptText: boolean;
 
   constructor(cwd: string) {
     this.cwd = cwd;
     this.evoDir = getEvoDir(cwd);
+    // Reading the config also creates/merges it (for a real project dir); for a
+    // lightweight dir it short-circuits to defaults. capture.promptText defaults
+    // to true.
+    this.capturePromptText = ensureEvoConfig(cwd).capture.promptText;
     // Lightweight tracking: skip per-project .evo/ creation; use an in-memory
     // SQLite database so the proxy still functions without disk artifacts.
     if (shouldUseLightweightTracking(cwd)) {
@@ -59,7 +73,6 @@ export class EvoDatabase {
     }
     ensureDirectory(this.evoDir);
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
-    ensureEvoConfig(cwd);
     this.db = new Database(this.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.initialize();
@@ -235,6 +248,8 @@ export class EvoDatabase {
         prompt_hash TEXT NOT NULL,
         prompt_preview TEXT NOT NULL,
         input_text TEXT NOT NULL,
+        input_text_sha256 TEXT NOT NULL DEFAULT '',
+        input_text_length INTEGER NOT NULL DEFAULT 0,
         output_preview TEXT NOT NULL,
         UNIQUE (episode_id, turn_index),
         FOREIGN KEY (episode_id) REFERENCES episodes(id)
@@ -378,6 +393,8 @@ export class EvoDatabase {
     this.ensureColumn("archived_episodes", "novelty_ratio", "REAL NOT NULL DEFAULT 1");
     this.ensureColumn("archived_episodes", "expected_cost_confidence", "REAL NOT NULL DEFAULT 0.2");
     this.ensureColumn("usage_observations", "turn_index", "INTEGER");
+    this.ensureColumn("turns", "input_text_sha256", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("turns", "input_text_length", "INTEGER NOT NULL DEFAULT 0");
 
     // v3.0: achievements table
     this.db.exec(`
@@ -444,7 +461,7 @@ export class EvoDatabase {
       command: JSON.stringify(input.command),
       startedAt: input.startedAt,
       promptHash: input.promptProfile.promptHash,
-      preview: input.promptProfile.preview,
+      preview: this.capturePromptText ? input.promptProfile.preview : "",
     });
 
     this.db
@@ -462,6 +479,7 @@ export class EvoDatabase {
       .run({
         episodeId: Number(info.lastInsertRowid),
         ...input.promptProfile,
+        preview: this.capturePromptText ? input.promptProfile.preview : "",
         hasBullets: Number(input.promptProfile.hasBullets),
         hasFileRefs: Number(input.promptProfile.hasFileRefs),
         hasSymbolRefs: Number(input.promptProfile.hasSymbolRefs),
@@ -584,9 +602,11 @@ export class EvoDatabase {
 
     const turnStatement = this.db.prepare(`
       INSERT OR REPLACE INTO turns (
-        episode_id, turn_index, started_at, finished_at, prompt_hash, prompt_preview, input_text, output_preview
+        episode_id, turn_index, started_at, finished_at, prompt_hash, prompt_preview,
+        input_text, input_text_sha256, input_text_length, output_preview
       ) VALUES (
-        @episodeId, @turnIndex, @startedAt, @finishedAt, @promptHash, @promptPreview, @inputText, @outputPreview
+        @episodeId, @turnIndex, @startedAt, @finishedAt, @promptHash, @promptPreview,
+        @inputText, @inputTextSha256, @inputTextLength, @outputPreview
       )
     `);
     const eventStatement = this.db.prepare(`
@@ -625,15 +645,24 @@ export class EvoDatabase {
 
     const transaction = this.db.transaction(() => {
       for (const turn of turns) {
+        // Privacy: always store the sha256 + length of the FULL input (so
+        // observers can dedupe/measure without the text), but cap the stored
+        // text to INPUT_TEXT_CAP — or store nothing (and blank the preview)
+        // when capture.promptText is disabled.
+        const fullInput = turn.inputText ?? "";
         turnStatement.run({
           episodeId,
           turnIndex: turn.turnIndex,
           startedAt: turn.startedAt,
           finishedAt: turn.finishedAt,
           promptHash: turn.promptProfile.promptHash,
-          promptPreview: turn.promptProfile.preview,
-          inputText: turn.inputText,
-          outputPreview: turn.outputPreview,
+          promptPreview: this.capturePromptText ? turn.promptProfile.preview : "",
+          inputText: this.capturePromptText ? fullInput.slice(0, INPUT_TEXT_CAP) : "",
+          inputTextSha256: sha256Hex(fullInput),
+          inputTextLength: fullInput.length,
+          // The output preview is free text from the wrapped CLI (it can echo
+          // sensitive input back), so the "no previews" promise covers it too.
+          outputPreview: this.capturePromptText ? turn.outputPreview : "",
         });
         for (const event of turn.events) {
           eventStatement.run({

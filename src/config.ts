@@ -40,6 +40,9 @@ const DEFAULT_CONFIG: EvoConfig = {
     scopeCreepEntropyThreshold: 0.85,
     showBeforeAfterExamples: true,
   },
+  capture: {
+    promptText: true,
+  },
 };
 
 export function getEvoDir(cwd: string): string {
@@ -175,6 +178,10 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
     advice: {
       ...nextDefaults.advice,
       ...(parsed.advice ?? {}),
+    },
+    capture: {
+      ...nextDefaults.capture,
+      ...(parsed.capture ?? {}),
     },
   };
   atomicWriteFileSync(configPath, JSON.stringify(config, null, 2), log);

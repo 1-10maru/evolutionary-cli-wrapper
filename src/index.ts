@@ -4,6 +4,7 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { Command } from "commander";
 import path from "node:path";
+import { assertSafeCommandPath, quoteArgForCmd } from "./proxy/spawnCommand";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { readIssueIntake } from "./issueIntake";
@@ -137,20 +138,32 @@ async function runTransparentPassthrough(
     process.stderr.write(formatMissingOriginalCommandMessage(cli));
     process.exit(1);
   }
+  // Quote arguments identically to the proxy path: for a .cmd/.bat original,
+  // use cmd.exe-aware per-arg quoting (quoteArgForCmd) with
+  // windowsVerbatimArguments + a safety check on the command path, so embedded
+  // " & | < > ^ reach the child verbatim instead of being interpreted by
+  // cmd.exe (mangling / command injection). Non-shell originals pass the argv
+  // array directly (shell:false), which needs no quoting.
   const ext = path.extname(originalCommand).toLowerCase();
   const needsShell = ext === ".cmd" || ext === ".bat";
-  const child = needsShell
-    ? spawn(`"${originalCommand}" ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`, {
-        cwd,
-        shell: true,
-        stdio: "inherit",
-        env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-      })
-    : spawn(originalCommand, args, {
-        cwd,
-        stdio: "inherit",
-        env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-      });
+  const passthroughEnv = { ...process.env, EVO_PROXY_ACTIVE: "1" };
+  let child;
+  if (needsShell) {
+    assertSafeCommandPath(originalCommand);
+    child = spawn(originalCommand, args.map(quoteArgForCmd), {
+      cwd,
+      shell: true,
+      windowsVerbatimArguments: true,
+      stdio: "inherit",
+      env: passthroughEnv,
+    });
+  } else {
+    child = spawn(originalCommand, args, {
+      cwd,
+      stdio: "inherit",
+      env: passthroughEnv,
+    });
+  }
   const code = await new Promise<number>((resolve) => {
     child.on("error", () => resolve(1));
     child.on("close", (c) => resolve(c ?? 1));
