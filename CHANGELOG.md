@@ -5,6 +5,18 @@
 ## Unreleased
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## v3.6.0 (2026-07-17)
+
+_First stable release of the 3.6 line, promoted from `v3.6.0-rc.3` after two clean QA rounds; it consolidates everything from rc.1 through rc.3. Highlights: the `/logout` and `/exit` terminal-hang fixes (and the interpreter-shim / stdin-EOF and nested-proxy edge cases behind them), compatibility with Claude Code's native auto-updater, statusline determinism (a single session-bound EvoPet block, meaning-based truncation, provenance tags, and a hard size cap), multi-window stability under concurrent same-directory sessions (atomic config/mascot writes plus SQLite `IMMEDIATE`-transaction / first-open migration / WAL-switch hardening), a lean package published tokenlessly through npm OIDC trusted publishing, and privacy controls for prompt-text capture at rest (`capture.promptText`)._
+
+### Added
+- Model-aware prompting tips: the statusline and the proxy's end-of-episode comments now layer model-tuned guidance on top of the base best-practices — Claude Fable / Mythos map to the Fable prompting doc, Opus to the Opus doc, and every other model falls back to the base tips. Backed by a new bundled `src/data/prompting-guidance.json` and `src/promptingGuidance.ts`.
+- Weekly rule-based (zero-LLM) sync of Anthropic's Japanese prompt-engineering docs into the bundled guidance, via `scripts/sync-claude-docs.mjs` and the `sync-claude-docs.yml` workflow, with `scripts/validate-guidance.mjs` guarding the data shape.
 - `capture.promptText` config flag (default `true`). Prompt-text capture at rest is now bounded: each turn stores at most a 500-character preview of the wrapped CLI's input alongside a sha256 hash and length of the full input. Setting `capture.promptText: false` in `<project>/.evo/config.json` stores **only** the hash and length — no input text, no input previews, and no output previews (CLI output can echo the input back, so it is covered too). New README "Privacy / Data at rest" section (English + Japanese) documents what is stored, where, retention, and how to disable/purge.
 - `evo advice` prints the full (untruncated) EvoPet advice — headline, detail, and before/after example — for the most recently active session in the directory (it points here from the truncated statusline).
 - Provenance tags on statusline tip lines: `[公式]` for Anthropic base best-practice tips, `[<model>向け]` (e.g. `[Fable 5向け]`) for model-tuned tips, and `[汎用]` for the static libraries, so model-specific advice is distinguishable from generic advice.
@@ -43,6 +55,9 @@
 
 ### Internal
 - Declared `engines.node >= 20`.
+
+### Documentation
+- Hero-branded README overhaul (English `README.md` + new `README.ja.md`) with new banner and icon assets under `assets/`, a `docs/` index, and refreshed `package.json` `keywords` and `homepage`.
 
 ## v3.6.0-rc.3 (2026-07-16)
 
