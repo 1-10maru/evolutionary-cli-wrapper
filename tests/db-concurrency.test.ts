@@ -82,13 +82,80 @@ async function runTwoWorkers(
   return Promise.all([spawn(), spawn()]);
 }
 
+// Deterministic upgrade-deadlock harness. Each worker holds a DEFERRED
+// transaction open ACROSS message turns (manual BEGIN/COMMIT, not db.transaction,
+// which would run to completion synchronously), so the parent can latch the exact
+// interleaving: both take a read snapshot at the same db version, then one commits
+// and the other upgrades from its now-stale snapshot. That second upgrade fails
+// with SQLITE_BUSY_SNAPSHOT every time — SQLite bypasses the busy handler for it,
+// which is precisely why busy_timeout does not save a DEFERRED read-then-write.
+const DEADLOCK_WORKER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const Database = require("better-sqlite3");
+const db = new Database(workerData.dbPath);
+db.pragma("busy_timeout = 5000");
+const read = db.prepare("SELECT v FROM kv WHERE k = ?");
+const write = db.prepare("INSERT INTO kv (k, v) VALUES (@k, 1) ON CONFLICT(k) DO UPDATE SET v = v + 1");
+parentPort.on("message", (cmd) => {
+  try {
+    if (cmd === "read") {
+      db.exec("BEGIN DEFERRED");
+      read.get("shared"); // establishes the read snapshot
+      parentPort.postMessage({ ev: "read-done" });
+    } else if (cmd === "write") {
+      write.run({ k: "shared" }); // upgrade read -> write
+      db.exec("COMMIT");
+      parentPort.postMessage({ ev: "write-done", busy: false });
+    }
+  } catch (e) {
+    const code = String((e && e.code) || "");
+    const busy = code.indexOf("SQLITE_BUSY") === 0 || /database is locked|snapshot/i.test(String(e && e.message));
+    try { db.exec("ROLLBACK"); } catch (_) {}
+    parentPort.postMessage({ ev: "write-done", busy: busy, code: code, msg: String(e && e.message) });
+  }
+});
+`;
+
+function nextMessage(w: Worker, pred: (m: any) => boolean): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const onMsg = (m: any) => {
+      if (!pred(m)) return;
+      w.off("message", onMsg);
+      w.off("error", reject);
+      resolve(m);
+    };
+    w.on("message", onMsg);
+    w.on("error", reject);
+  });
+}
+
 describe("DB concurrency: deferred deadlock vs immediate", () => {
-  it("DEFERRED read-then-write transactions cross-deadlock (SQLITE_BUSY) — the bug", async () => {
+  it("DEFERRED read-then-write deterministically deadlocks (SQLITE_BUSY) when a writer commits in between — the bug", async () => {
     const dbPath = makeKvDb();
-    const [a, b] = await runTwoWorkers(dbPath, "deferred", 400);
-    // With deferred begins, the crossed upgrade deterministically raises
-    // SQLITE_BUSY under this contention.
-    expect(a.busy + b.busy).toBeGreaterThan(0);
+    const committer = new Worker(DEADLOCK_WORKER, { eval: true, workerData: { dbPath } });
+    const victim = new Worker(DEADLOCK_WORKER, { eval: true, workerData: { dbPath } });
+
+    try {
+      // 1. Both open a DEFERRED transaction and read at the SAME db version.
+      victim.postMessage("read");
+      await nextMessage(victim, (m) => m.ev === "read-done");
+      committer.postMessage("read");
+      await nextMessage(committer, (m) => m.ev === "read-done");
+
+      // 2. The committer upgrades its read to a write and COMMITs — no contender
+      //    has written since its snapshot, so this one always wins.
+      committer.postMessage("write");
+      const c = await nextMessage(committer, (m) => m.ev === "write-done");
+      expect(c.busy).toBe(false);
+
+      // 3. The victim now upgrades from its now-stale snapshot: deterministic
+      //    upgrade-deadlock. busy_timeout is bypassed, so it fails immediately.
+      victim.postMessage("write");
+      const v = await nextMessage(victim, (m) => m.ev === "write-done");
+      expect(v.busy).toBe(true);
+    } finally {
+      await Promise.all([committer.terminate(), victim.terminate()]);
+    }
   }, 30_000);
 
   it("IMMEDIATE read-then-write transactions never raise SQLITE_BUSY and lose no updates", async () => {
