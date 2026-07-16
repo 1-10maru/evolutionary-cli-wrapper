@@ -4,6 +4,7 @@ import path from "node:path";
 import { getLogger } from "./logger";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import { EvoConfig } from "./types";
+import { atomicWriteFileSync, readJsonFileWithRetrySync } from "./utils/atomicFile";
 
 const log = getLogger().child("config");
 
@@ -117,7 +118,7 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
   };
 
   if (!fs.existsSync(configPath)) {
-    fs.writeFileSync(configPath, JSON.stringify(nextDefaults, null, 2));
+    atomicWriteFileSync(configPath, JSON.stringify(nextDefaults, null, 2), log);
     log.debug("merged config", {
       configSnapshot: {
         defaultMode: nextDefaults.proxy.defaultMode,
@@ -128,8 +129,27 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
     return nextDefaults;
   }
 
-  const raw = fs.readFileSync(configPath, "utf8");
-  const parsed = JSON.parse(raw) as Partial<EvoConfig>;
+  // Guarded read: a concurrent same-cwd proxy may be mid-write. Retry a
+  // transient torn read; never crash the proxy over a config read.
+  let parsed: Partial<EvoConfig>;
+  try {
+    parsed = readJsonFileWithRetrySync<Partial<EvoConfig>>(configPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      // Vanished between existsSync and read — genuinely absent, heal-write.
+      atomicWriteFileSync(configPath, JSON.stringify(nextDefaults, null, 2), log);
+      return nextDefaults;
+    }
+    // Present but unparseable after retries. Do NOT overwrite — another process
+    // may have a valid config mid-write, and clobbering it with defaults would
+    // lose their settings. Fall back to defaults in memory only.
+    log.warn("config.json unreadable after retries; using in-memory defaults (file left intact)", {
+      path: configPath,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return nextDefaults;
+  }
   const config: EvoConfig = {
     formatVersion: nextDefaults.formatVersion,
     retention: {
@@ -157,7 +177,7 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
       ...(parsed.advice ?? {}),
     },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2), log);
   log.debug("merged config", {
     configSnapshot: {
       defaultMode: config.proxy.defaultMode,
@@ -170,7 +190,7 @@ export function ensureEvoConfig(cwd: string): EvoConfig {
 export function updateEvoConfig(cwd: string, nextConfig: EvoConfig): void {
   const evoDir = getEvoDir(cwd);
   fs.mkdirSync(evoDir, { recursive: true });
-  fs.writeFileSync(getConfigPath(cwd), JSON.stringify(nextConfig, null, 2));
+  atomicWriteFileSync(getConfigPath(cwd), JSON.stringify(nextConfig, null, 2), log);
 }
 
 export function getDefaultConfig(): EvoConfig {

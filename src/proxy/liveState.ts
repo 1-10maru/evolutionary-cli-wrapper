@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getLogger } from "../logger";
+import { atomicWriteFileSync } from "../utils/atomicFile";
 
 const proxyLiveStateLog = getLogger().child("proxy.livestate");
 
@@ -43,31 +44,14 @@ export function sessionLiveStatePath(cwd: string, sessionId: string): string {
   return path.join(sessionsDir(cwd), `${sessionId}.json`);
 }
 
+/**
+ * Atomic tmp-file + rename write. Thin wrapper over the shared
+ * `atomicWriteFileSync` helper (extracted so config.json / mascot.json share
+ * one implementation); the shared helper additionally uses a per-process-unique
+ * tmp name so parallel writers to the same target don't collide on it.
+ */
 export function atomicWrite(target: string, json: string): void {
-  const tmp = `${target}.tmp`;
-  try {
-    fs.writeFileSync(tmp, json);
-    fs.renameSync(tmp, target);
-  } catch (err) {
-    const n = normalizeErr(err);
-    proxyLiveStateLog.warn("atomic rename failed, falling back to direct write", {
-      path: target,
-      errno: n.code,
-      message: n.message,
-    });
-    // Best-effort cleanup of stale tmp file
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-    try {
-      fs.writeFileSync(target, json);
-    } catch (writeErr) {
-      const wn = normalizeErr(writeErr);
-      proxyLiveStateLog.warn("live-state write failed", {
-        path: target,
-        errno: wn.code,
-        message: wn.message,
-      });
-    }
-  }
+  atomicWriteFileSync(target, json, proxyLiveStateLog);
 }
 
 export interface WriteLiveStateOptions {
