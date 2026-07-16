@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
+import { getLogger } from "./logger";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import {
   EpisodeComplexity,
@@ -41,6 +42,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+const dbLog = getLogger().child("db");
+
+/**
+ * How long a connection waits for a lock before erroring SQLITE_BUSY. Concurrent
+ * same-cwd proxies write to one WAL database; without this a second writer errors
+ * immediately instead of waiting its short turn.
+ */
+const BUSY_TIMEOUT_MS = 5000;
+
 /** Max chars of wrapped-CLI input persisted to the local DB (privacy cap). */
 const INPUT_TEXT_CAP = 500;
 
@@ -68,12 +78,17 @@ export class EvoDatabase {
     if (shouldUseLightweightTracking(cwd)) {
       this.dbPath = ":memory:";
       this.db = new Database(this.dbPath);
+      this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.initialize();
       return;
     }
     ensureDirectory(this.evoDir);
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
     this.db = new Database(this.dbPath);
+    // Set busy_timeout BEFORE switching to WAL: the journal-mode switch itself
+    // can need a brief exclusive lock, which concurrent fresh-db launches
+    // contend for — waiting there avoids a SQLITE_BUSY on the very first write.
+    this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.db.pragma("journal_mode = WAL");
     this.initialize();
   }
@@ -1539,7 +1554,24 @@ export class EvoDatabase {
     });
     transaction(idsToCompact);
 
-    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    // Truncating the WAL is opportunistic housekeeping. Under concurrent
+    // same-cwd proxies it can lose a race with another proxy's finalize writes
+    // and raise SQLITE_BUSY — never worth failing a compaction (let alone a
+    // session) over. Skip it on contention; the WAL is truncated on a later run.
+    try {
+      this.db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const message = error instanceof Error ? error.message : String(error);
+      if (code === "SQLITE_BUSY") {
+        // Expected under concurrent same-cwd proxies; opportunistic, so skip.
+        dbLog.debug("wal_checkpoint(TRUNCATE) skipped on contention");
+      } else {
+        // Anything else is unexpected and must be visible — but checkpointing
+        // is still non-fatal, so we log at warn rather than rethrowing.
+        dbLog.warn("wal_checkpoint(TRUNCATE) failed", { message, code });
+      }
+    }
     if (config.retention.vacuumOnCompact) {
       this.db.exec("VACUUM");
     }
