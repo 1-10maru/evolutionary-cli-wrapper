@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getGlobalEvoDir } from "./config";
+import { getLogger } from "./logger";
+import { atomicWriteFileSync, readJsonFileWithRetrySync } from "./utils/atomicFile";
 import { migrateMascotFromCwd } from "./mascotMigration";
 import {
   EpisodeSummary,
@@ -15,6 +17,8 @@ import {
   TurnSummary,
 } from "./types";
 import { colorize, dim, formatPanel } from "./terminalUi";
+
+const mascotLog = getLogger().child("mascot");
 
 const MASCOT_FILE = "mascot.json";
 
@@ -245,16 +249,33 @@ export function loadMascotProfile(cwd: string): MascotProfile {
   const filePath = mascotPath(cwd);
   if (!fs.existsSync(filePath)) {
     const profile = defaultMascot();
-    fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+    atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
     return profile;
   }
 
-  let parsed: Partial<MascotProfile> = {};
+  // Guarded read: a concurrent same-cwd proxy may be mid-write. Retry a
+  // transient torn read instead of silently resetting the EvoPet to defaults
+  // (the old try/catch caused data loss on a torn read).
+  let parsed: Partial<MascotProfile>;
   try {
-    parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<MascotProfile>;
+    parsed = readJsonFileWithRetrySync<Partial<MascotProfile>>(filePath);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[evopet] mascot.json read/parse failed (${msg}); falling back to defaults\n`);
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      // Vanished between existsSync and read — write a fresh default.
+      const profile = defaultMascot();
+      atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
+      return profile;
+    }
+    // Present but unparseable after retries. Return defaults IN MEMORY without
+    // overwriting — a concurrent writer may have a valid mascot mid-write, and
+    // clobbering it would silently reset the user's EvoPet progress. The next
+    // saveMascotProfile heals a genuinely corrupt file.
+    mascotLog.warn("mascot.json unreadable after retries; using in-memory defaults (file left intact)", {
+      path: filePath,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return defaultMascot();
   }
   const profile: MascotProfile = {
     ...defaultMascot(),
@@ -264,13 +285,13 @@ export function loadMascotProfile(cwd: string): MascotProfile {
     bestCombo: parsed.bestCombo ?? 0,
     recentEpisodes: parsed.recentEpisodes ?? [],
   };
-  fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+  atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
   return profile;
 }
 
 export function saveMascotProfile(cwd: string, profile: MascotProfile): void {
   ensureMascotDir(cwd);
-  fs.writeFileSync(mascotPath(cwd), JSON.stringify(profile, null, 2));
+  atomicWriteFileSync(mascotPath(cwd), JSON.stringify(profile, null, 2), mascotLog);
 }
 
 export function renderMascotState(profile: MascotProfile): MascotRenderState {
