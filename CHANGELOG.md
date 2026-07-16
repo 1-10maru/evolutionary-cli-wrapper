@@ -5,7 +5,7 @@
 ## Unreleased
 
 ### Added
-- `capture.promptText` config flag (default `true`). Prompt-text capture at rest is now bounded: each turn stores at most a 500-character preview of the wrapped CLI's input alongside a sha256 hash and length of the full input. Setting `capture.promptText: false` in `<project>/.evo/config.json` stores **only** the hash and length — no input text and no previews. New README "Privacy / Data at rest" section (English + Japanese) documents what is stored, where, retention, and how to disable/purge.
+- `capture.promptText` config flag (default `true`). Prompt-text capture at rest is now bounded: each turn stores at most a 500-character preview of the wrapped CLI's input alongside a sha256 hash and length of the full input. Setting `capture.promptText: false` in `<project>/.evo/config.json` stores **only** the hash and length — no input text, no input previews, and no output previews (CLI output can echo the input back, so it is covered too). New README "Privacy / Data at rest" section (English + Japanese) documents what is stored, where, retention, and how to disable/purge.
 
 ### Changed
 - Lean release build: publishing now runs `build:release` (via `tsconfig.build.json`), which omits source maps and `.d.ts` declaration files. The published tarball drops ~360 kB of dead-weight `*.js.map`/`*.d.ts` (dev builds are unchanged via `npm run build`). `prepublishOnly` and the release workflow's publish/smoke jobs build the lean artifact.

@@ -40,10 +40,11 @@ function readTurn(db: EvoDatabase, episodeId: number): {
   input_text_sha256: string;
   input_text_length: number;
   prompt_preview: string;
+  output_preview: string;
 } {
   return db.db
     .prepare(
-      "SELECT input_text, input_text_sha256, input_text_length, prompt_preview FROM turns WHERE episode_id = ? AND turn_index = 0",
+      "SELECT input_text, input_text_sha256, input_text_length, prompt_preview, output_preview FROM turns WHERE episode_id = ? AND turn_index = 0",
     )
     .get(episodeId) as never;
 }
@@ -91,6 +92,9 @@ describe("prompt-capture privacy", () => {
     const row = readTurn(db, episodeId);
     expect(row.input_text).toBe("");
     expect(row.prompt_preview).toBe("");
+    // The output preview is covered by the promise too (CLI output can echo
+    // the input back).
+    expect(row.output_preview).toBe("");
     // Hash + length of the full input are still retained.
     expect(row.input_text_length).toBe(secret.length);
     expect(row.input_text_sha256).toBe(sha(secret));

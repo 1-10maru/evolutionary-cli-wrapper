@@ -183,7 +183,7 @@ Evo scores your collaboration **locally**. Nothing is sent anywhere — the only
 
 **Retention.** Logs older than 7 days are pruned automatically; the database is compacted on a size/age policy (`evo storage` shows the footprint, `evo compact` archives old raw episodes into rollups).
 
-**How to disable prompt-text capture.** Set `capture.promptText` to `false` in `<project>/.evo/config.json`. Evo then stores **only** the sha256 hash and length of your input — no input text and no previews.
+**How to disable prompt-text capture.** Set `capture.promptText` to `false` in `<project>/.evo/config.json`. Evo then stores **only** the sha256 hash and length of your input — no input text, no input previews, and no output previews (the wrapped CLI's output can echo your input back, so it is covered too).
 
 ```json
 { "capture": { "promptText": false } }

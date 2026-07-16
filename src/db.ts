@@ -53,7 +53,7 @@ export class EvoDatabase {
   readonly cwd: string;
   readonly evoDir: string;
   readonly dbPath: string;
-  /** Privacy: when false, no wrapped-CLI input text or previews are persisted. */
+  /** Privacy: when false, no wrapped-CLI input text and no input/output previews are persisted. */
   private readonly capturePromptText: boolean;
 
   constructor(cwd: string) {
@@ -660,7 +660,9 @@ export class EvoDatabase {
           inputText: this.capturePromptText ? fullInput.slice(0, INPUT_TEXT_CAP) : "",
           inputTextSha256: sha256Hex(fullInput),
           inputTextLength: fullInput.length,
-          outputPreview: turn.outputPreview,
+          // The output preview is free text from the wrapped CLI (it can echo
+          // sensitive input back), so the "no previews" promise covers it too.
+          outputPreview: this.capturePromptText ? turn.outputPreview : "",
         });
         for (const event of turn.events) {
           eventStatement.run({
