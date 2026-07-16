@@ -732,6 +732,146 @@ function resolveOriginalForShimGuard(cwd: string, cli: SupportedCli): string | n
   return resolveOriginalCommand(cwd, cli);
 }
 
+/**
+ * The published executable entry is the self-contained esbuild bundle, not the
+ * plain tsc output. All pure-JS runtime deps are inlined into it, so thinning
+ * node_modules (an external process on this dev box periodically deletes
+ * transitive packages) can no longer break `claude` startup with
+ * ERR_MODULE_NOT_FOUND. Launched as `node <cwd>/dist/evo.bundle.cjs`.
+ */
+const EVO_BUNDLE_REL_POSIX = "dist/evo.bundle.cjs";
+
+/**
+ * Native addons that CANNOT be bundled — they load platform-specific `.node`
+ * binaries and stay external, required from node_modules at runtime. The
+ * generated launch fallback checks that each is present before launching the
+ * bundle; if any is missing (or the bundle itself is gone, or node is
+ * unavailable) the shim execs the real CLI directly so the user is never
+ * blocked. Keep in sync with NATIVE_ADDON_EXTERNALS in scripts/bundle.mjs.
+ */
+const NATIVE_ADDON_EXTERNALS = [
+  "better-sqlite3",
+  "tree-sitter",
+  "tree-sitter-javascript",
+  "tree-sitter-python",
+  "tree-sitter-typescript",
+] as const;
+
+/**
+ * The full set of node_modules packages the bundle still needs present at
+ * runtime: the native addons above PLUS the pure-JS loader helpers those addons
+ * `require` from node_modules when the DB is opened / the parser loads. These
+ * were measured empirically against a thinned node_modules:
+ *   - better-sqlite3 -> `bindings` -> `file-uri-to-path` (loaded on DB open)
+ *   - tree-sitter    -> `node-gyp-build`                 (loaded on parser init)
+ * If any of these is missing the bundle cannot open its DB / load a parser, so
+ * the launch fallback execs the real CLI instead. Everything the MAIN package
+ * depends on (commander, chokidar, strip-ansi, ansi-regex, ...) is inlined into
+ * the bundle and is intentionally NOT listed here — its deletion can no longer
+ * break startup, which is the whole point of the bundle.
+ */
+const NATIVE_RUNTIME_DEP_DIRS = [
+  ...NATIVE_ADDON_EXTERNALS,
+  "bindings",
+  "file-uri-to-path",
+  "node-gyp-build",
+] as const;
+
+/**
+ * Launch-fallback lines for a generated proxy shim, emitted after the nesting
+ * guard and before the normal bundle launch. The guarantee: a missing bundle,
+ * a missing native dependency, or an unavailable node must not leave the user
+ * without their CLI. When the original command is resolvable the fallback execs
+ * it directly; otherwise it prints the one-line bypass hint and exits.
+ */
+function buildLaunchFallbackLines(
+  kind: "sh" | "cmd" | "ps1",
+  cli: SupportedCli,
+  cwd: string,
+  original: string | null,
+): string[] {
+  const deps = NATIVE_RUNTIME_DEP_DIRS;
+  const hasSafeOriginal = !!original && !SHIM_PATH_FORBIDDEN.test(original);
+  if (kind === "cmd") {
+    const bundle = `%~dp0..\\${EVO_BUNDLE_REL_POSIX.replace(/\//g, "\\")}`;
+    const lines = [
+      `set "EVO_BUNDLE=${bundle}"`,
+      "set \"EVO_OK=1\"",
+      "where node >nul 2>nul || set \"EVO_OK=0\"",
+      `if not exist "%EVO_BUNDLE%" set "EVO_OK=0"`,
+      ...deps.map((d) => `if not exist "%~dp0..\\node_modules\\${d}\\" set "EVO_OK=0"`),
+    ];
+    if (hasSafeOriginal) {
+      lines.push(
+        `if "%EVO_OK%"=="0" echo evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo. 1>&2`,
+        `if "%EVO_OK%"=="0" call "${original}" %*`,
+        `if "%EVO_OK%"=="0" exit /b %ERRORLEVEL%`,
+      );
+    } else {
+      lines.push(
+        `if "%EVO_OK%"=="0" echo evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo. 1>&2`,
+        `if "%EVO_OK%"=="0" exit /b 1`,
+      );
+    }
+    return lines;
+  }
+  if (kind === "ps1") {
+    const bundle = path.join(cwd, "dist", "evo.bundle.cjs");
+    const nmDir = path.join(cwd, "node_modules");
+    const lines = [
+      `$evoBundle = '${escapePowerShellSingleQuotes(bundle)}'`,
+      "$evoOk = $true",
+      "if (-not (Get-Command node -ErrorAction SilentlyContinue)) { $evoOk = $false }",
+      "if (-not (Test-Path -LiteralPath $evoBundle)) { $evoOk = $false }",
+      ...deps.map(
+        (d) =>
+          `if (-not (Test-Path -LiteralPath '${escapePowerShellSingleQuotes(path.join(nmDir, d))}')) { $evoOk = $false }`,
+      ),
+      "if (-not $evoOk) {",
+    ];
+    if (hasSafeOriginal) {
+      lines.push(
+        `  [Console]::Error.WriteLine('evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo.')`,
+        `  & '${escapePowerShellSingleQuotes(original as string)}' @args`,
+        "  exit $LASTEXITCODE",
+      );
+    } else {
+      lines.push(
+        `  [Console]::Error.WriteLine('evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo.')`,
+        "  exit 1",
+      );
+    }
+    lines.push("}");
+    return lines;
+  }
+  // sh
+  const bundle = path.join(cwd, "dist", "evo.bundle.cjs").replace(/\\/g, "/");
+  const nmDir = path.join(cwd, "node_modules").replace(/\\/g, "/");
+  const lines = [
+    `EVO_BUNDLE="${bundle}"`,
+    "_evo_ok=1",
+    "command -v node >/dev/null 2>&1 || _evo_ok=0",
+    `[ -r "$EVO_BUNDLE" ] || _evo_ok=0`,
+    `for _evo_dep in ${deps.join(" ")}; do`,
+    `  [ -e "${nmDir}/$_evo_dep" ] || _evo_ok=0`,
+    "done",
+    `if [ "$_evo_ok" = "0" ]; then`,
+  ];
+  if (hasSafeOriginal) {
+    lines.push(
+      `  echo "evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo." 1>&2`,
+      `  exec "${(original as string).replace(/\\/g, "/")}" "$@"`,
+    );
+  } else {
+    lines.push(
+      `  echo "evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo." 1>&2`,
+      "  exit 1",
+    );
+  }
+  lines.push("fi");
+  return lines;
+}
+
 export function createProxyShims(cwd: string): string[] {
   if (SHIM_PATH_FORBIDDEN.test(cwd)) {
     throw new Error(
@@ -749,7 +889,7 @@ export function createProxyShims(cwd: string): string[] {
   const evoShimPath = path.join(binDir, "evo.cmd");
   fs.writeFileSync(
     evoShimPath,
-    `@echo off\r\nsetlocal\r\nset "EVO_HOME=${cwd}"\r\nset "EVO_CONFIG=${configPath}"\r\nnode "%~dp0..\\dist\\index.js" %*\r\n`,
+    `@echo off\r\nsetlocal\r\nset "EVO_HOME=${cwd}"\r\nset "EVO_CONFIG=${configPath}"\r\nnode "%~dp0..\\${EVO_BUNDLE_REL_POSIX.replace(/\//g, "\\")}" %*\r\n`,
   );
   created.push(evoShimPath);
 
@@ -760,7 +900,7 @@ export function createProxyShims(cwd: string): string[] {
       "#!/usr/bin/env pwsh",
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
-      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' @args`,
+      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "evo.bundle.cjs"))}' @args`,
       "exit $LASTEXITCODE",
       "",
     ].join("\r\n"),
@@ -781,8 +921,9 @@ export function createProxyShims(cwd: string): string[] {
       `set "EVO_HOME=${cwd}"`,
       `set "EVO_CONFIG=${configPath}"`,
       ...buildNestingGuardLines("cmd", original),
+      ...buildLaunchFallbackLines("cmd", cli, cwd, original),
       `title ${cli} [Evo ON]`,
-      `node "%~dp0..\\dist\\index.js" proxy --cli ${cli} -- %*`,
+      `node "%EVO_BUNDLE%" proxy --cli ${cli} -- %*`,
       "",
     ].join("\r\n");
     fs.writeFileSync(cmdShimPath, cmdContent);
@@ -794,8 +935,9 @@ export function createProxyShims(cwd: string): string[] {
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
       ...buildNestingGuardLines("ps1", original),
+      ...buildLaunchFallbackLines("ps1", cli, cwd, original),
       `$Host.UI.RawUI.WindowTitle = '${escapePowerShellSingleQuotes(`${cli} [Evo ON]`)}'`,
-      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' proxy --cli ${cli} -- @args`,
+      `& node $evoBundle proxy --cli ${cli} -- @args`,
       "exit $LASTEXITCODE",
       "",
     ].join("\r\n");
@@ -808,7 +950,8 @@ export function createProxyShims(cwd: string): string[] {
       `export EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
       `export EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
       ...buildNestingGuardLines("sh", original),
-      `exec node "${path.join(cwd, "dist", "index.js").replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
+      ...buildLaunchFallbackLines("sh", cli, cwd, original),
+      `exec node "$EVO_BUNDLE" proxy --cli ${cli} -- "$@"`,
       "",
     ].join("\n");
     fs.writeFileSync(shShimPath, shContent);
