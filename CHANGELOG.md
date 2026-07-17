@@ -10,6 +10,20 @@
 
 ### Fixed
 
+## v3.6.1 (2026-07-17)
+
+_Patch release promoted from `v3.6.1-rc.1`. It makes `claude` resilient to a dev-box problem where an external process repeatedly deleted dependency folders out of `node_modules`, which had been stopping `claude` from starting. The launcher now ships as one self-contained bundle with every plain-JavaScript dependency baked in, and the generated `claude`/`codex` wrappers fall back to running the real CLI directly if the bundle or a native component is ever missing._
+
+### Added
+- Single-file executable. `evo` and the `claude` wrapper now launch from one self-contained file (`dist/evo.bundle.cjs`) that has every plain-JavaScript dependency baked in. Startup no longer depends on the many small dependency folders inside `node_modules` still being there.
+
+### Changed
+- The build now produces the bundled executable as part of `npm run build` and the release build, and the published package launches from it.
+
+### Fixed
+- `claude` could fail to start with a "Cannot find module …" error when something on the machine trimmed files out of `node_modules` (this happened repeatedly on one dev PC, deleting ~25 dependency packages). Because the launcher's plain-JavaScript dependencies are now baked into the single bundle, deleting them from `node_modules` can no longer stop `claude` from starting.
+- Launch safety net. If the bundle is missing, Node isn't available, or one of the few native components the wrapper still needs has been deleted, the `claude` wrapper now runs the real `claude` directly instead of failing — so `claude` always launches. It also prints the one-line way to bypass the wrapper entirely (`EVO_PROXY_ACTIVE=1`). The existing bypass behavior is unchanged.
+
 ## v3.6.1-rc.1 (2026-07-17)
 
 ### Added
