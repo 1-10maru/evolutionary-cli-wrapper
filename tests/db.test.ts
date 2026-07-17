@@ -232,9 +232,17 @@ describe("turn text redaction", () => {
       input_text_length: number;
       output_preview: string;
     };
+    // createEpisode persists the prompt preview into BOTH episodes and
+    // prompt_profiles — assert those are masked too.
+    const episodeRow = raw
+      .prepare("SELECT prompt_preview FROM episodes WHERE id = ?")
+      .get(episodeId) as { prompt_preview: string };
+    const profileRow = raw
+      .prepare("SELECT preview FROM prompt_profiles WHERE episode_id = ?")
+      .get(episodeId) as { preview: string };
     raw.close();
 
-    // Stored text is masked …
+    // Stored turn text is masked …
     expect(row.input_text).toContain("[REDACTED]");
     expect(row.input_text).not.toContain(secret);
     expect(row.output_preview).not.toContain(secret);
@@ -244,5 +252,10 @@ describe("turn text redaction", () => {
     expect(row.input_text_sha256).toBe(
       createHash("sha256").update(rawInput, "utf8").digest("hex"),
     );
+    // … and the episode-level preview is masked in both tables.
+    expect(episodeRow.prompt_preview).toContain("[REDACTED]");
+    expect(episodeRow.prompt_preview).not.toContain(secret);
+    expect(profileRow.preview).toContain("[REDACTED]");
+    expect(profileRow.preview).not.toContain(secret);
   });
 });

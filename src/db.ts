@@ -558,13 +558,15 @@ export class EvoDatabase {
         command: JSON.stringify(input.command),
         startedAt: input.startedAt,
         promptHash: input.promptProfile.promptHash,
-        preview: this.capturePromptText ? input.promptProfile.preview : "",
+        // Secret-mask the persisted preview (same policy as saveTurns): the
+        // prompt's first ~160 chars can contain a pasted token/key.
+        preview: this.capturePromptText ? redactSecretText(input.promptProfile.preview) : "",
       });
       const episodeId = Number(info.lastInsertRowid);
       insertProfile.run({
         episodeId,
         ...input.promptProfile,
-        preview: this.capturePromptText ? input.promptProfile.preview : "",
+        preview: this.capturePromptText ? redactSecretText(input.promptProfile.preview) : "",
         hasBullets: Number(input.promptProfile.hasBullets),
         hasFileRefs: Number(input.promptProfile.hasFileRefs),
         hasSymbolRefs: Number(input.promptProfile.hasSymbolRefs),
