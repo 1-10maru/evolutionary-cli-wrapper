@@ -4,6 +4,7 @@ import * as readline from "node:readline";
 import * as zlib from "node:zlib";
 import * as crypto from "node:crypto";
 import { buildReport } from "./doctor";
+import { redactSecrets } from "../redact";
 
 export interface LogsCommandOptions {
   tail?: number;
@@ -19,51 +20,14 @@ const SENSITIVE_LINE_RE = /originalCmdAutoRun/i;
 // Match Windows-style user paths: C:/Users/<name>/... or C:\Users\<name>\...
 const WIN_USER_PATH_RE = /([Cc]:[/\\][Uu]sers[/\\])([^/\\]+)([/\\])/g;
 
-/**
- * Pattern 1 — JSON-style: `"KEY":"value"` or `"KEY": "value"`.
- * Captures the key (with surrounding quotes) and the value-opening quote so
- * the replacement preserves the syntactic structure.
- */
-const SECRET_JSON_RE = /("(?:\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*)"\s*:\s*)"([^"]*)"/gi;
-/**
- * Pattern 2 — quoted bare assignment: `KEY="multi word value"`.
- * Reads through to the closing quote so multi-word values are fully masked
- * (the old `\S+` pattern stopped at the first whitespace and leaked the tail).
- */
-const SECRET_QUOTED_RE = /(\b\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*\s*=\s*)"([^"]*)"/gi;
-/**
- * Pattern 3 — unquoted assignment: `KEY=value` or `KEY: value` (no quotes).
- * Value is a non-whitespace, non-quote run. The leading `(?!["'])` lookahead
- * prevents this pattern from eating quoted values (those belong to Pattern 1
- * or Pattern 2). Without it, `KEY="abc def"` would be matched as
- * `KEY=` + `"abc` and leak the rest.
- */
-const SECRET_BARE_RE = /(\b\w*(?:TOKEN|KEY|SECRET|PASSWORD)\w*\s*[:=]\s*)(?!["'])([^\s"']+)/gi;
-
 function hashUsername(name: string): string {
   return crypto.createHash("sha1").update(name).digest("hex").slice(0, 10);
 }
 
-/**
- * Redact secret values in a single log line. Applies three patterns in order
- * from most-specific to least-specific so a single value is only masked once:
- *   1. JSON-style `"KEY":"value"` → `"KEY":"[REDACTED]"`
- *   2. quoted bare `KEY="value"` → `KEY="[REDACTED]"`
- *   3. unquoted `KEY=value` / `KEY: value` → `KEY=[REDACTED]`
- *
- * Exported for unit testing.
- */
-export function redactSecrets(line: string): string {
-  let out = line;
-  // Pattern 1: JSON-quoted (most specific) — must run first so the quoted
-  // value isn't matched by Pattern 3 as `"value"` (non-whitespace run).
-  out = out.replace(SECRET_JSON_RE, '$1"[REDACTED]"');
-  // Pattern 2: quoted bare assignment (KEY="value with spaces")
-  out = out.replace(SECRET_QUOTED_RE, '$1"[REDACTED]"');
-  // Pattern 3: unquoted (KEY=value, no surrounding quotes)
-  out = out.replace(SECRET_BARE_RE, '$1[REDACTED]');
-  return out;
-}
+// The assignment-style secret patterns live in ../redact (shared with the turn
+// store). Re-export so existing `import { redactSecrets } from "…/logs"` sites
+// and unit tests keep resolving.
+export { redactSecrets };
 
 function redactLine(line: string): string {
   // Drop lines with sensitive registry paths

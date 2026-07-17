@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
 import { getLogger } from "./logger";
+import { redactSecretText } from "./redact";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
 import {
   EpisodeComplexity,
@@ -733,7 +734,10 @@ export class EvoDatabase {
         // Privacy: always store the sha256 + length of the FULL input (so
         // observers can dedupe/measure without the text), but cap the stored
         // text to INPUT_TEXT_CAP — or store nothing (and blank the preview)
-        // when capture.promptText is disabled.
+        // when capture.promptText is disabled. The sha256/length are computed
+        // over the raw input so dedupe/metrics stay exact; only the stored TEXT
+        // is secret-masked. Redact BEFORE slicing so a secret straddling the
+        // cap can't leave an unmasked fragment in the stored slice.
         const fullInput = turn.inputText ?? "";
         turnStatement.run({
           episodeId,
@@ -741,13 +745,14 @@ export class EvoDatabase {
           startedAt: turn.startedAt,
           finishedAt: turn.finishedAt,
           promptHash: turn.promptProfile.promptHash,
-          promptPreview: this.capturePromptText ? turn.promptProfile.preview : "",
-          inputText: this.capturePromptText ? fullInput.slice(0, INPUT_TEXT_CAP) : "",
+          promptPreview: this.capturePromptText ? redactSecretText(turn.promptProfile.preview) : "",
+          inputText: this.capturePromptText ? redactSecretText(fullInput).slice(0, INPUT_TEXT_CAP) : "",
           inputTextSha256: sha256Hex(fullInput),
           inputTextLength: fullInput.length,
           // The output preview is free text from the wrapped CLI (it can echo
-          // sensitive input back), so the "no previews" promise covers it too.
-          outputPreview: this.capturePromptText ? turn.outputPreview : "",
+          // sensitive input back), so the "no previews" promise — and secret
+          // masking — covers it too.
+          outputPreview: this.capturePromptText ? redactSecretText(turn.outputPreview) : "",
         });
         for (const event of turn.events) {
           eventStatement.run({
