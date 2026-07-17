@@ -82,14 +82,18 @@ processes) are invisible to a non-interactive `--version` / `doctor --json` smok
 **Do not run the stable `workflow_dispatch` until you have run the full matrix
 below against the exact commit you are about to promote and recorded a PASS for
 every row.** Run it by launching the real `claude` through the freshly built
-wrapper (`env -u EVO_PROXY_ACTIVE bin/claude …` on the promotion commit), not a
-mock.
+wrapper (on the promotion commit), not a mock — with `EVO_PROXY_ACTIVE` unset so
+the wrapper actually proxies:
+
+- POSIX / Git Bash: `env -u EVO_PROXY_ACTIVE bin/claude …`
+- PowerShell: `$env:EVO_PROXY_ACTIVE=$null; .\bin\claude …`
+- cmd.exe: `set "EVO_PROXY_ACTIVE=" && bin\claude …`
 
 | # | Behavior | How to check | PASS criteria |
 |---|---|---|---|
 | 1 | Rendering / streaming parity | Run an interactive `claude` session through the wrapper; type a prompt, watch a streamed reply | Output is byte-for-byte what raw `claude` renders — no doubled/missing lines, no corrupted ANSI, no swallowed characters |
-| 2 | Large-burst output | Trigger a large (~2 MB) burst of child output | Delivered intact, no truncation, no CPU peg / stream stall |
-| 3 | `Ctrl+C` interrupt | Send `Ctrl+C` mid-response | The child handles the first interrupt; a forced second signal tears down the whole child tree with **0 orphaned processes** |
+| 2 | Large-burst output | Drive ~2 MB of child stdout through the wrapper and watch resource use while it streams. Interactive: ask `claude` for a long reply (e.g. "print 3000 numbered lines"). Deterministic: temporarily point the resolved command at a bursting stub — set `shellIntegration.originalCommandMap.claude` in `.evo/config.json` to a script running `node -e "process.stdout.write('x'.repeat(2000000)+'\n')"`, then run `node dist/evo.bundle.cjs proxy --cli claude --`. Monitor with `Get-Process node` (PowerShell) / `top` (POSIX). | Delivered intact, no truncation, no CPU peg / stream stall |
+| 3 | `Ctrl+C` interrupt | Start an interactive `claude` session through the wrapper, press `Ctrl+C` mid-response (a second time if the child keeps running), exit, then check for leftovers: `Get-Process claude,node -ErrorAction SilentlyContinue` (PowerShell) / `tasklist \| findstr /i "claude node"` (cmd) / `pgrep -fl claude` (POSIX). | The child handles the first interrupt; a forced second signal tears down the whole child tree with **0 orphaned processes** left from the session |
 | 4 | `/exit` (clean exit) | Exit `claude` normally | Wrapper propagates the child's exit code and returns promptly — **no hang** on lingering handles |
 | 5 | `/logout` (re-invoke) | Trigger a `/logout` (claude re-invokes `claude` by name) | The nested invocation passes straight through (no nested proxy), no freeze |
 | 6 | Update passthrough | `claude update` / `claude --update` | Bypasses the proxy entirely; the native updater owns its own children |
