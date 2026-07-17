@@ -65,6 +65,21 @@ which -a evo  # Unix
 
 ソース側 (`<repo>/bin/evo`) が npm グローバル側より先に来ているか確認する。
 
+## ライブツリー規律（AI・自動開発時の厳守・ハードルール）
+
+ユーザーのライブ `claude` は **この実 repo の `dist/`**（`bin/claude` 経由）から起動する。
+つまり実 repo の `dist/` を書き換えると、ユーザーが次に打つ `claude` がその中身で動く。
+
+**AI / 自動化されたエージェントが開発する間は、以下を厳守する:**
+
+- **feature/fix ブランチ上で実 repo の `dist/` を絶対に再ビルドしない**（`npm run build` / `build:release` を実 repo で走らせない）。ブランチのコードでユーザーのライブ `claude` を差し替えてしまう。
+- **開発ビルド・検証はすべてサンドボックスのコピーで行う**（`git archive <commit>` で対象ツリーを取り出し、`node_modules` はコピーで用意する。junction/symlink は使わない）。
+- **実 repo の `dist/` を再ビルドしてよいのは、リリース直後に released `main` からだけ**。それ以外のタイミングで実 repo の `dist/` を触らない。
+- **作業ツリーを feature ブランチに置いたまま放置しない**。作業後は必ず `main`（= リリース済みコード）へ戻す。
+- 上の「ソースを編集 → `npm run build`」サイクルは**人間のオーナーが npm link で対話開発する場合の説明**であり、AI エージェントの自動開発には適用しない（エージェントは上のサンドボックス規律に従う）。
+
+**事故（2026-07-17）**: レビュー用ビルドが実 repo の `dist/` をブランチコードで上書きし、ユーザーのライブ `claude` が未リリースコードで動く状態になった。コーディネーターが公開済み 3.6.1 の tarball（リリース済みバイト列）から `dist/` を復元して復旧。実 repo の `dist/` はリリース済みコードで「休ませる」のが原則。
+
 ## リリース手順
 - 公開は単一ワークフロー `.github/workflows/release.yml` が npm OIDC Trusted Publishing で実行（`NPM_TOKEN` 不要）
 - **RC channel**: `git tag v3.6.0-rc.2 && git push origin v3.6.0-rc.2` → `release.yml`（RC 経路）が走り `@next` で公開
