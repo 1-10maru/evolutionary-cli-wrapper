@@ -18,6 +18,7 @@ import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
 import { runAdviceCommand } from "./cli/advice";
 import { runInstallStatusline } from "./cli/installStatusline";
+import { quickHealthReport } from "./health";
 import { maybeRunFirstRunPrompt } from "./firstRunPrompt";
 import {
   getShellStatus,
@@ -128,7 +129,7 @@ async function runTransparentPassthrough(
   cwd: string,
   cli: "claude",
   args: string[],
-  reason: "subcommand" | "update" | "nested",
+  reason: "subcommand" | "update" | "nested" | "self-check",
 ): Promise<void> {
   const originalCommand = resolveOriginalCommand(cwd, cli);
   if (!originalCommand) {
@@ -291,6 +292,28 @@ program
     // Native subcommands like `claude review` bypass Evo entirely.
     if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
       await runTransparentPassthrough(cwd, cli, args, "subcommand");
+      return;
+    }
+
+    // Wrapper self-health-check (never silent again). Before we hand the
+    // terminal to the tracked proxy — which loads the native addons and opens
+    // the DB — verify the wrapper can actually run: bundle present, native
+    // runtime closure present, natives loadable. On failure, print ONE clear
+    // warning and run the real claude directly, so a broken Evo install can
+    // never leave the user without claude (nor crash/hang silently). The
+    // generated shim does a cheap file-presence check too; this additionally
+    // catches present-but-unloadable natives (ABI mismatch, corrupt .node) that
+    // a file check cannot see, because native loading is now lazy.
+    const health = quickHealthReport();
+    if (!health.ok) {
+      const failed = health.checks.filter((c) => !c.ok);
+      const summary = failed.map((c) => `${c.name}: ${c.detail ?? "failed"}`).join("; ");
+      cliResolveLog.error("wrapper self-check failed; falling back to real claude", { summary });
+      process.stderr.write(
+        `evo: self-check failed (${summary}); running claude directly. ` +
+          `Run 'evo doctor --quick' for details, or set EVO_PROXY_ACTIVE=1 to always bypass Evo.\n`,
+      );
+      await runTransparentPassthrough(cwd, cli, args, "self-check");
       return;
     }
 
@@ -569,8 +592,9 @@ program
   .command("doctor")
   .description("Print a one-page health report (versions, env, file checks, recent errors, live-state freshness).")
   .option("--json", "Emit machine-readable JSON output instead of formatted text")
+  .option("--quick", "Fast self-check only (bundle, native deps, native load, claude resolvable); exits 1 on any failure")
   .option("--cwd <dir>", "Working dir to resolve .evo/ state from", process.cwd())
-  .action(async (options: { json?: boolean; cwd?: string }) => {
+  .action(async (options: { json?: boolean; quick?: boolean; cwd?: string }) => {
     await runDoctor(options);
   });
 

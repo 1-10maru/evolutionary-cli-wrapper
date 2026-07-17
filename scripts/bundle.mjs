@@ -16,7 +16,8 @@
 // NATIVE_ADDON_EXTERNALS).
 //
 // Keep NATIVE_ADDON_EXTERNALS below in sync with the same list in
-// src/shellIntegration.ts.
+// src/health.ts (the runtime single source of truth). This build script runs as
+// a plain .mjs and cannot import the TS module, hence the duplicated list.
 import { build } from "esbuild";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -102,6 +102,7 @@ Commands most users touch:
 | `evo pet choose <id>` | Set your pet species (e.g. `evo pet choose cat`). |
 | `evo display [mode]` | Toggle the statusline layout: `minimum`, `expansion`, or `toggle`. No arg prints the current mode. |
 | `evo doctor` | Print a one-page health report — versions, environment, file checks, recent errors, and live-state freshness (`--json` for machine-readable output). |
+| `evo doctor --quick` | Fast self-check only — bundle present, native dependencies present, native components loadable, and the real `claude` resolvable. Exits non-zero on any failure; handy for diagnosing a broken wrapper or as a pre-release check. |
 | `evo logs [--tail N] [--since 30m] [--bundle]` | Tail recent Evo log lines, or `--bundle` a redacted zip of the last 7 days of logs + doctor output for a bug report. |
 
 Developer / power-user commands (mostly relevant after `npm run setup` from a clone):
