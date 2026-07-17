@@ -4,6 +4,18 @@ evopet uses a two-channel release process: `next` (release-candidate) and `lates
 
 > **Prerequisite**: the `evo doctor` command must exist in the published package for the smoke gate to pass. It was added in v3.5.0+ (see PR-1.2). Do not push a release tag (RC or stable) until at least v3.5.0 has been published to npm via the legacy `publish-on-merge.yml` flow, OR PR-1.2 has been merged and this workflow has produced its first release. Pushing a tag before then will fail the smoke step with `evo: command not found` or `unknown command 'doctor'`.
 
+## Risk-tiered gates
+
+The verification ceremony scales to the change's risk. Classify each change by the **highest-risk** file it touches, then apply that tier. Accumulate Tier-1/Tier-2 items and ship them on **one** release train rather than cutting a release per small batch (unless something is urgent).
+
+| Tier | Change class | Gate |
+|---|---|---|
+| **1** | docs, tests, data-sync (e.g. `scripts/sync-claude-docs`), CHANGELOG | CI green + implementer self-check only. No review agent, no matrix, no RC soak — rides the next train. |
+| **2** | minor behavior patches (privacy/masking, a bounded fix, a small CLI flag) | **One** independent review + a **targeted** matrix (only the H-rows the diff touches + a ~2-minute A-row smoke) + RC publish. Promotion step = **diff-verify only**: `git diff <gate-SHA> <promotion-SHA> -- src/ scripts/` empty ⇒ no full matrix re-run; a `--version` + `doctor --quick` smoke suffices. |
+| **3** | startup path, native deps, major dependency bumps, proxy internals, session binding | Full ceremony: independent review + full behavioral matrix (incl. native-closure drift guard + bundle rebuild + sandbox smoke) at both the gate SHA and the promotion SHA. |
+
+The npm **OIDC Publish job on the RC is a hard gate for any tier**: never dispatch a stable release unless the RC's Publish job was green (this is what caught, and cleared, the `setup-node@v7` bump). Gate handoffs are direct (implementer ⇄ reviewer/QA); the coordinator observes via CC and intervenes only on FAIL / anomaly / design fork.
+
 ## Trusted publishing setup (one-time, on npmjs.com)
 
 npm allows only **one** trusted publisher per package, keyed by workflow filename — which is why RC and stable both live in `release.yml`. On <https://www.npmjs.com> → the `evolutionary-cli-wrapper` package → **Settings → Trusted Publisher**, register a GitHub Actions publisher with:
