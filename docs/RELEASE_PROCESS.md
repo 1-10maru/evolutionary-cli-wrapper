@@ -62,7 +62,49 @@ Before running the workflow:
 1. `package.json` `version` field matches the version you are about to release
 2. `CHANGELOG.md` has a `## v<version>` section with meaningful notes
 3. Tag `v<version>` does **not** yet exist in the repository
-4. At least one RC (`v<version>-rc.N`) has been validated in production by a real user
+4. At least one RC (`v<version>-rc.N`) has been published to `@next` and validated
+5. **The interactive behavioral matrix below has been run on the exact commit being promoted and every row PASSED** (see the next section — this is a hard gate, not a suggestion)
+
+### Pre-promotion gate: interactive behavioral matrix (MANDATORY)
+
+CI build+test and the tarball smoke test are necessary but **not sufficient** to
+promote to `latest`. They do not exercise the interactive terminal behaviors that
+the wrapper exists to manage, and where past regressions have actually shipped:
+the wrapper is a real-time passthrough for an interactive TTY child, and several
+failure modes (console rendering corruption, teardown hangs, orphaned child
+processes) are invisible to a non-interactive `--version` / `doctor --json` smoke.
+
+> **Origin (2026-07-17):** the `claude` wrapper broke — and later a console-display
+> symptom appeared — with **zero automated detection**, because nothing exercised
+> the interactive path before promotion. This gate exists so that never happens
+> silently again.
+
+**Do not run the stable `workflow_dispatch` until you have run the full matrix
+below against the exact commit you are about to promote and recorded a PASS for
+every row.** Run it by launching the real `claude` through the freshly built
+wrapper (`env -u EVO_PROXY_ACTIVE bin/claude …` on the promotion commit), not a
+mock.
+
+| # | Behavior | How to check | PASS criteria |
+|---|---|---|---|
+| 1 | Rendering / streaming parity | Run an interactive `claude` session through the wrapper; type a prompt, watch a streamed reply | Output is byte-for-byte what raw `claude` renders — no doubled/missing lines, no corrupted ANSI, no swallowed characters |
+| 2 | Large-burst output | Trigger a large (~2 MB) burst of child output | Delivered intact, no truncation, no CPU peg / stream stall |
+| 3 | `Ctrl+C` interrupt | Send `Ctrl+C` mid-response | The child handles the first interrupt; a forced second signal tears down the whole child tree with **0 orphaned processes** |
+| 4 | `/exit` (clean exit) | Exit `claude` normally | Wrapper propagates the child's exit code and returns promptly — **no hang** on lingering handles |
+| 5 | `/logout` (re-invoke) | Trigger a `/logout` (claude re-invokes `claude` by name) | The nested invocation passes straight through (no nested proxy), no freeze |
+| 6 | Update passthrough | `claude update` / `claude --update` | Bypasses the proxy entirely; the native updater owns its own children |
+| 7 | Statusline strictness | Inspect the statusline during a session | Exactly one session-bound EvoPet block, deterministic, within the hard size cap |
+| 8 | Multi-window isolation | Launch concurrent sessions in the same directory | No `SQLITE_BUSY` crashes, no cross-session statusline bleed |
+| 9 | `EVO_PROXY_ACTIVE=1` bypass | Run `EVO_PROXY_ACTIVE=1 claude --version` | Byte-exact with raw `claude`; Evo adds nothing |
+| 10 | Launch fallback | Simulate a missing native dep / bundle (sandbox copy) | Wrapper prints one clear warning line and runs the real `claude` directly — never a bare `ERR_MODULE_NOT_FOUND` |
+
+Record the matrix result (date, commit SHA, PASS/FAIL per row) in the release PR
+or the promotion notes. A single FAIL blocks promotion until fixed and re-run.
+
+Rows 1–9 are manual/interactive for now. Row 10 and the load-time preconditions
+are also covered non-interactively by `evo doctor --quick` (see the README), which
+should be run on the promotion commit as a fast first pass — but it does **not**
+replace the interactive rows above.
 
 ### What the workflow does
 
