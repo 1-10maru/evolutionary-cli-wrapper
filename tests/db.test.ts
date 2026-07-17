@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import { EvoDatabase } from "../src/db";
@@ -182,5 +184,78 @@ describe("database retention", () => {
       scopeBucket: "1|1|1-20",
     }).sampleSize).toBeGreaterThan(0);
     targetDb.close();
+  });
+});
+
+describe("turn text redaction", () => {
+  it("secret-masks stored turn input/output text but hashes the RAW input", () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-redact-"));
+    tempDirs.push(cwd);
+
+    const db = new EvoDatabase(cwd);
+    const secret = "sk-ant-" + "a".repeat(40);
+    const rawInput = `deploy with token ${secret} then run tests`;
+    const promptProfile = extractPromptProfile(rawInput);
+    const episodeId = db.createEpisode({
+      cwd,
+      cli: "claude",
+      command: ["echo", "hello"],
+      startedAt: new Date(2026, 0, 1).toISOString(),
+      promptProfile,
+    });
+    db.saveTurns(
+      episodeId,
+      [
+        {
+          turnIndex: 0,
+          startedAt: new Date(2026, 0, 1).toISOString(),
+          finishedAt: new Date(2026, 0, 1, 0, 0, 1).toISOString(),
+          promptProfile,
+          inputText: rawInput,
+          outputPreview: `echoing ${secret} back`,
+          events: [],
+        },
+      ],
+      [],
+    );
+    const dbPath = db.dbPath;
+    db.close();
+
+    const raw = new Database(dbPath, { readonly: true });
+    const row = raw
+      .prepare(
+        "SELECT input_text, input_text_sha256, input_text_length, output_preview FROM turns WHERE episode_id = ? AND turn_index = 0",
+      )
+      .get(episodeId) as {
+      input_text: string;
+      input_text_sha256: string;
+      input_text_length: number;
+      output_preview: string;
+    };
+    // createEpisode persists the prompt preview into BOTH episodes and
+    // prompt_profiles — assert those are masked too.
+    const episodeRow = raw
+      .prepare("SELECT prompt_preview FROM episodes WHERE id = ?")
+      .get(episodeId) as { prompt_preview: string };
+    const profileRow = raw
+      .prepare("SELECT preview FROM prompt_profiles WHERE episode_id = ?")
+      .get(episodeId) as { preview: string };
+    raw.close();
+
+    // Stored turn text is masked …
+    expect(row.input_text).toContain("[REDACTED]");
+    expect(row.input_text).not.toContain(secret);
+    expect(row.output_preview).not.toContain(secret);
+    // … but the hash and length are computed over the RAW input so dedupe and
+    // metrics are unaffected by masking.
+    expect(row.input_text_length).toBe(rawInput.length);
+    expect(row.input_text_sha256).toBe(
+      createHash("sha256").update(rawInput, "utf8").digest("hex"),
+    );
+    // … and the episode-level preview is masked in both tables.
+    expect(episodeRow.prompt_preview).toContain("[REDACTED]");
+    expect(episodeRow.prompt_preview).not.toContain(secret);
+    expect(profileRow.preview).toContain("[REDACTED]");
+    expect(profileRow.preview).not.toContain(secret);
   });
 });

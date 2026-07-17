@@ -10,6 +10,7 @@ const log = getLogger().child("episode");
 import { diffSymbolSnapshots } from "./ast";
 import { EvoDatabase } from "./db";
 import { extractPromptProfile } from "./promptProfile";
+import { redactSecretText } from "./redact";
 import {
   buildEpisodeComplexity,
   buildEpisodeSummary,
@@ -102,7 +103,8 @@ export async function runEpisode(options: RunOptions): Promise<{
     createEvent("prompt_submitted", "wrapper", {
       promptHash: promptProfile.promptHash,
       promptLength: promptProfile.promptLength,
-      promptPreview: promptProfile.preview,
+      // Secret-mask before this preview is persisted into episode_events.details_json.
+      promptPreview: redactSecretText(promptProfile.preview),
     }),
   ];
   const usageObservations: UsageObservation[] = [];

@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../../src/config";
 import { __resetLoggerForTests, getLogger } from "../../src/logger";
 import { runProxySession } from "../../src/proxyRuntime";
+import { disposeNodeAsClaude, nodeAsClaude } from "../fixtures/nodeAsClaude";
+
+afterAll(() => disposeNodeAsClaude());
 
 // ---------------------------------------------------------------------------
 // Scope reduction (documented for future maintainers):
@@ -151,9 +154,10 @@ async function runProxyWithMock(opts: {
       ...config.shellIntegration,
       originalCommandMap: {
         ...config.shellIntegration.originalCommandMap,
-        // Map "claude" -> Node so resolveOriginalCommand returns Node and
-        // our argv[0] (FIXTURE_PATH) is the script Node runs.
-        claude: process.execPath,
+        // Map "claude" -> a `claude`-named launcher that IS Node, so
+        // resolveOriginalCommand accepts it (a bare node.exe is now rejected)
+        // and our argv[0] (FIXTURE_PATH) is the script Node runs.
+        claude: nodeAsClaude(),
       },
     },
     proxy: {

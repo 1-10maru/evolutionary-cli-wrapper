@@ -11,7 +11,16 @@ const USAGE_PATTERNS = [
   /total tokens:\s*(?<total>\d+)/i,
 ];
 
-const FILE_PATH_RE = /(?<path>[\w./\\-]+\.(?:ts|tsx|js|jsx|py|json|md|log|txt|sh|yaml|yml|toml))/i;
+// Bounded quantifier (`{1,512}` rather than `+`): a real file-path token never
+// approaches 512 chars, and the bound caps per-position backtracking so a long
+// run of word chars can no longer make this regex backtrack quadratically.
+const FILE_PATH_RE = /(?<path>[\w./\\-]{1,512}\.(?:ts|tsx|js|jsx|py|json|md|log|txt|sh|yaml|yml|toml))/i;
+
+// Only scan the head of a line for a file path. Combined with the bounded
+// quantifier this makes path detection linear regardless of line length, so a
+// child emitting megabytes of newline-sparse garbage can never peg the CPU and
+// stall the stream (which previously prevented the wrapper from tearing down).
+const MAX_PATH_SCAN = 4096;
 
 function buildEvent(
   type: EpisodeEvent["type"],
@@ -63,7 +72,8 @@ export function extractEventsFromLine(line: string): EpisodeEvent[] {
   if (!cleanLine) return [];
 
   const events: EpisodeEvent[] = [];
-  const fileMatch = FILE_PATH_RE.exec(cleanLine)?.groups?.path ?? null;
+  const pathScanLine = cleanLine.length > MAX_PATH_SCAN ? cleanLine.slice(0, MAX_PATH_SCAN) : cleanLine;
+  const fileMatch = FILE_PATH_RE.exec(pathScanLine)?.groups?.path ?? null;
 
   if (/(?:read|open|view|get-content|cat)\b/i.test(cleanLine) && fileMatch) {
     events.push(buildEvent("file_read", { path: fileMatch }));

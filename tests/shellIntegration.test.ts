@@ -4,8 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import {
+  buildNestingGuardLines,
   createProxyShims,
+  followShimToExe,
   getShellStatus,
+  isTempResidentTarget,
+  isUsableCommandCandidate,
   resolveOriginalCommand,
   setupShellIntegration,
   undoShellIntegration,
@@ -90,6 +94,45 @@ describe("shell integration", () => {
     expect(status.enabled).toBe(true);
   });
 
+  it("generated claude shims launch the bundle and carry a launch fallback", () => {
+    process.env.EVO_TEST_MODE = "1";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-bundle-"));
+    tempDirs.push(cwd);
+
+    createProxyShims(cwd);
+
+    const sh = fs.readFileSync(path.join(cwd, "bin", "claude"), "utf8");
+    const cmd = fs.readFileSync(path.join(cwd, "bin", "claude.cmd"), "utf8");
+    const ps1 = fs.readFileSync(path.join(cwd, "bin", "claude.ps1"), "utf8");
+
+    // The executable entry is the self-contained bundle, not the plain tsc output.
+    for (const body of [sh, cmd, ps1]) {
+      expect(body).toContain("evo.bundle.cjs");
+      expect(body).not.toContain("dist\\index.js");
+      expect(body).not.toContain("dist/index.js");
+      // Native addons cannot be bundled — the fallback verifies each is present.
+      expect(body).toContain("better-sqlite3");
+      expect(body).toContain("tree-sitter-python");
+      // ...as are the pure-JS loader helpers those native addons require at
+      // DB-open / parser-init time (measured native runtime closure).
+      expect(body).toContain("bindings");
+      expect(body).toContain("file-uri-to-path");
+      expect(body).toContain("node-gyp-build");
+    }
+
+    // Launch-fallback guard markers per shell kind.
+    expect(sh).toContain("_evo_ok");
+    expect(sh).toContain("command -v node");
+    expect(cmd).toContain("EVO_OK");
+    expect(cmd).toContain("where node");
+    expect(ps1).toContain("$evoOk");
+    expect(ps1).toContain("Get-Command node");
+
+    // The evo dev shim also points at the bundle.
+    expect(fs.readFileSync(path.join(cwd, "bin", "evo.cmd"), "utf8")).toContain("evo.bundle.cjs");
+    expect(fs.readFileSync(path.join(cwd, "bin", "evo.ps1"), "utf8")).toContain("evo.bundle.cjs");
+  });
+
   it("removes the managed PowerShell profile block", () => {
     process.env.EVO_TEST_MODE = "1";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "evo-shell-undo-"));
@@ -121,8 +164,9 @@ describe("shell integration", () => {
 
     const npmDir = path.join(cwd, "npm");
     const legacyShim = writeClaudeCmdShim(npmDir, "claude.evo-original.cmd", "node_modules\\@anthropic-ai\\claude-code\\cli.js");
-    const liveShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
-    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "binary");
 
     const config = ensureEvoConfig(cwd);
     updateEvoConfig(cwd, {
@@ -139,8 +183,10 @@ describe("shell integration", () => {
     const resolved = resolveOriginalCommand(cwd, "claude");
     const updatedConfig = ensureEvoConfig(cwd);
 
-    expect(resolved).toBe(liveShim);
-    expect(updatedConfig.shellIntegration.originalCommandMap.claude).toBe(liveShim);
+    // Self-heals off the legacy backup to the live claude.cmd sibling, which is
+    // then followed through to the real .exe it targets (FIX A).
+    expect(resolved).toBe(exePath);
+    expect(updatedConfig.shellIntegration.originalCommandMap.claude).toBe(exePath);
   });
 
   it("prefers the Windows-native claude.cmd over the extensionless shim from PATH", () => {
@@ -150,15 +196,20 @@ describe("shell integration", () => {
     process.env.EVO_HOME = cwd;
 
     const npmDir = path.join(cwd, "npm");
-    const shShim = writeClaudeShShim(npmDir, "node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+    // Point the two shims at DIFFERENT exes so the resolved path reveals which
+    // shim won the ranking — each is now followed through to its own .exe.
+    const shShim = writeClaudeShShim(npmDir, "node_modules/@anthropic-ai/claude-code/bin/claude-posix.exe");
     const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
-    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "binary");
+    const cmdExe = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(cmdExe, "binary");
+    writeFile(path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude-posix.exe"), "binary");
     process.env.EVO_TEST_WHERE_STDOUT = `${shShim}\r\n${cmdShim}\r\n`;
 
     const resolved = resolveOriginalCommand(cwd, "claude");
 
-    expect(resolved).toBe(cmdShim);
-    expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdShim);
+    // The .cmd outranks the extensionless sh shim, and is followed to its exe.
+    expect(resolved).toBe(cmdExe);
+    expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(cmdExe);
   });
 
   it("rejects broken shims whose packaged target no longer exists", () => {
@@ -186,6 +237,43 @@ describe("shell integration", () => {
 
     expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
     expect(ensureEvoConfig(cwd).shellIntegration.originalCommandMap.claude).toBe(legacyShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildNestingGuardLines — EVO_PROXY_ACTIVE=1 shim guard (defense-in-depth)
+// ---------------------------------------------------------------------------
+describe("buildNestingGuardLines", () => {
+  it("cmd guard propagates the real nested exit code (no parse-time masking)", () => {
+    const lines = buildNestingGuardLines("cmd", "C:\\npm\\claude.cmd");
+    // Must NOT wrap `exit /b %ERRORLEVEL%` in a `( ... )` block — cmd.exe would
+    // expand %ERRORLEVEL% at parse time (before the call), always yielding 0
+    // and swallowing the nested claude's non-zero exit code.
+    expect(lines.some((l) => l.includes("("))).toBe(false);
+    expect(lines.some((l) => l.trim() === ")")).toBe(false);
+    // The exit must be a standalone `if` line so %ERRORLEVEL% is expanded only
+    // after the call line has executed.
+    expect(lines).toContain('if "%EVO_PROXY_ACTIVE%"=="1" call "C:\\npm\\claude.cmd" %*');
+    expect(lines).toContain('if "%EVO_PROXY_ACTIVE%"=="1" exit /b %ERRORLEVEL%');
+  });
+
+  it("ps1 guard forwards args and propagates $LASTEXITCODE", () => {
+    const lines = buildNestingGuardLines("ps1", "C:\\npm\\claude.cmd");
+    expect(lines.join("\n")).toContain("$env:EVO_PROXY_ACTIVE -eq '1'");
+    expect(lines).toContain("  & 'C:\\npm\\claude.cmd' @args");
+    expect(lines).toContain("  exit $LASTEXITCODE");
+  });
+
+  it("sh guard execs the resolved original", () => {
+    const lines = buildNestingGuardLines("sh", "/usr/local/bin/claude");
+    expect(lines.join("\n")).toContain('[ "$EVO_PROXY_ACTIVE" = "1" ]');
+    expect(lines).toContain('  exec "/usr/local/bin/claude" "$@"');
+  });
+
+  it("emits nothing when the original is missing or unsafe to interpolate", () => {
+    expect(buildNestingGuardLines("cmd", null)).toEqual([]);
+    // Contains cmd metacharacters (& and |) rejected by SHIM_PATH_FORBIDDEN.
+    expect(buildNestingGuardLines("cmd", "C:\\bad & path|x\\claude.cmd")).toEqual([]);
   });
 });
 
@@ -272,5 +360,272 @@ describe("createProxyShims path injection guard", () => {
       const msg = err instanceof Error ? err.message : String(err);
       expect(msg).not.toContain("shell metacharacters");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveOriginalCommand — follow an npm interpreter shim through to the .exe
+// (FIX A). Cross-platform: EVO_TEST_MODE fixtures, no real `where` probe.
+// ---------------------------------------------------------------------------
+function writeClaudePs1Shim(rootDir: string, target: string): string {
+  const shimPath = path.join(rootDir, "claude.ps1");
+  writeFile(
+    shimPath,
+    [
+      "#!/usr/bin/env pwsh",
+      `if ($MyInvocation.ExpectingInput) { $input | & \"$PSScriptRoot\\${target.replace(/\//g, "\\")}\" $args }`,
+      `else { & \"$PSScriptRoot\\${target.replace(/\//g, "\\")}\" $args }`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"),
+  );
+  return shimPath;
+}
+
+describe("resolveOriginalCommand — interpreter-shim follow-through (FIX A)", () => {
+  function setup(prefix: string): string {
+    process.env.EVO_TEST_MODE = "1";
+    process.env.EVO_TEST_WHERE_STDOUT = "";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+    return cwd;
+  }
+
+  function mapClaudeTo(cwd: string, commandPath: string): void {
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: commandPath },
+      },
+    });
+  }
+
+  const EXE_REL = "node_modules/@anthropic-ai/claude-code/bin/claude.exe";
+
+  it("follows a .cmd shim through to the real .exe it targets", () => {
+    const cwd = setup("evo-shim-cmd-exe-");
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake binary");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", EXE_REL);
+    mapClaudeTo(cwd, cmdShim);
+
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(exePath);
+  });
+
+  it("follows a .ps1 shim through to the real .exe it targets", () => {
+    const cwd = setup("evo-shim-ps1-exe-");
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake binary");
+    const ps1Shim = writeClaudePs1Shim(npmDir, EXE_REL);
+    mapClaudeTo(cwd, ps1Shim);
+
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(exePath);
+  });
+
+  it("does NOT redirect a shim that targets a .js launcher (leaves node shims alone)", () => {
+    const cwd = setup("evo-shim-cmd-js-");
+    const npmDir = path.join(cwd, "npm");
+    const jsTarget = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    writeFile(jsTarget, "console.log('hi')");
+    const cmdShim = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules/@anthropic-ai/claude-code/cli.js");
+    mapClaudeTo(cwd, cmdShim);
+
+    // .js targets must be left alone — resolution stays on the shim.
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(cmdShim);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Interpreter denylist + positive constraint (regression for the stale-cache
+// -> node.exe poisoning). Fixture: an npm dir with live native-style
+// claude.cmd/.ps1 that target node_modules/.../bin/claude.exe (present), plus
+// the three stale cli.js-era backups (cli.js ABSENT).
+// ---------------------------------------------------------------------------
+const CLAUDE_EXE_REL = "node_modules/@anthropic-ai/claude-code/bin/claude.exe";
+const CLI_JS_REL_WIN = "node_modules\\@anthropic-ai\\claude-code\\cli.js";
+
+function writeStaleBackupCmd(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "@ECHO off",
+      "SETLOCAL",
+      "SET dp0=%~dp0",
+      `IF EXIST "%dp0%\\node.exe" ( SET "_prog=%dp0%\\node.exe" ) ELSE ( SET "_prog=node" )`,
+      `"%_prog%"  "%dp0%\\${CLI_JS_REL_WIN}" %*`,
+      "",
+    ].join("\r\n"),
+  );
+  return p;
+}
+
+function writeStaleBackupPs1(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "#!/usr/bin/env pwsh",
+      `& "$PSScriptRoot\\${CLI_JS_REL_WIN}" $args`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"),
+  );
+  return p;
+}
+
+function writeStaleBackupSh(rootDir: string, fileName: string): string {
+  const p = path.join(rootDir, fileName);
+  writeFile(
+    p,
+    [
+      "#!/bin/sh",
+      'basedir=$(dirname "$0")',
+      'if [ -x "$basedir/node" ]; then',
+      '  exec "$basedir/node"  "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"',
+      "else",
+      '  exec node  "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"',
+      "fi",
+      "",
+    ].join("\n"),
+  );
+  return p;
+}
+
+describe("resolveOriginalCommand — interpreter denylist + positive constraint", () => {
+  function setup(prefix: string): string {
+    process.env.EVO_TEST_MODE = "1";
+    process.env.EVO_TEST_WHERE_STDOUT = "";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(cwd);
+    process.env.EVO_HOME = cwd;
+    return cwd;
+  }
+
+  function mapClaudeTo(cwd: string, commandPath: string): void {
+    const config = ensureEvoConfig(cwd);
+    updateEvoConfig(cwd, {
+      ...config,
+      shellIntegration: {
+        ...config.shellIntegration,
+        originalCommandMap: { ...config.shellIntegration.originalCommandMap, claude: commandPath },
+      },
+    });
+  }
+
+  // Build the fixture npm dir; returns the live shims + the present bin/claude.exe.
+  function buildFixture(cwd: string, opts: { exePresent?: boolean } = {}) {
+    const npmDir = path.join(cwd, "npm");
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    if (opts.exePresent !== false) writeFile(exePath, "MZ fake binary");
+    const liveCmd = writeClaudeCmdShim(npmDir, "claude.cmd", CLAUDE_EXE_REL);
+    const livePs1 = writeClaudePs1Shim(npmDir, CLAUDE_EXE_REL);
+    const backupCmd = writeStaleBackupCmd(npmDir, "claude.evo-original.cmd");
+    const backupPs1 = writeStaleBackupPs1(npmDir, "claude.evo-original.ps1");
+    const backupSh = writeStaleBackupSh(npmDir, "claude.evo-original");
+    return { npmDir, exePath, liveCmd, livePs1, backupCmd, backupPs1, backupSh };
+  }
+
+  it("(a) rejects a poisoned node.exe cache and resolves the live shim's real .exe, never node.exe", () => {
+    const cwd = setup("evo-deny-cache-node-");
+    const fx = buildFixture(cwd);
+    // Cached node.exe lives in a SEPARATE dir (like C:\Program Files\nodejs), so
+    // it is not a sibling of the live shims — reproducing the real bug where the
+    // cached interpreter (candidate order pos 2) beat the discovered shim (pos 3).
+    const nodejsDir = path.join(cwd, "nodejs");
+    const stalenode = path.join(nodejsDir, "node.exe");
+    writeFile(stalenode, "MZ node");
+    mapClaudeTo(cwd, stalenode);
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+
+    const resolved = resolveOriginalCommand(cwd, "claude");
+    expect(resolved).toBe(fx.exePath);
+    expect(resolved).not.toBe(stalenode);
+  });
+
+  it("(b) resolves to the real .exe from an empty cache with backups present", () => {
+    const cwd = setup("evo-deny-empty-");
+    const fx = buildFixture(cwd);
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(fx.exePath);
+  });
+
+  it("(c) never selects a stale backup even when it is the cached value", () => {
+    const cwd = setup("evo-deny-backup-cache-");
+    const fx = buildFixture(cwd);
+    mapClaudeTo(cwd, fx.backupCmd);
+    // No discovery — resolution self-heals off the backup to its live sibling.
+    expect(resolveOriginalCommand(cwd, "claude")).toBe(fx.exePath);
+  });
+
+  it("(d) does not select a live shim whose node_modules target is missing", () => {
+    const cwd = setup("evo-deny-missing-target-");
+    const fx = buildFixture(cwd, { exePresent: false });
+    process.env.EVO_TEST_WHERE_STDOUT = `${fx.liveCmd}\r\n${fx.livePs1}\r\n`;
+    // bin/claude.exe absent → shims not usable → nothing acceptable resolves.
+    expect(resolveOriginalCommand(cwd, "claude")).toBeNull();
+  });
+
+  it("(e) followShimToExe never returns a path outside <shimdir>/node_modules", () => {
+    const cwd = setup("evo-deny-containment-");
+    const npmDir = path.join(cwd, "npm");
+    // A shim whose extracted target escapes node_modules via `..`.
+    const escaping = writeClaudeCmdShim(npmDir, "claude.cmd", "node_modules/../../evil.exe");
+    // Create the escaped target so only the containment guard can reject it.
+    writeFile(path.join(cwd, "evil.exe"), "MZ evil");
+    expect(followShimToExe(escaping)).toBe(escaping);
+
+    // A contained shim IS followed.
+    const exePath = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    writeFile(exePath, "MZ fake");
+    const contained = writeClaudeCmdShim(npmDir, "claude-good.cmd", CLAUDE_EXE_REL);
+    expect(followShimToExe(contained)).toBe(exePath);
+  });
+
+  it("(f) isUsableCommandCandidate rejects a bare node.exe", () => {
+    const cwd = setup("evo-deny-usable-node-");
+    const nodeExe = path.join(cwd, "node.exe");
+    writeFile(nodeExe, "MZ node");
+    expect(isUsableCommandCandidate(nodeExe)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isTempResidentTarget — a resolved command under a temp/scratchpad tree must
+// never be accepted/persisted as the wrapped CLI (stale QA-mock guard).
+// ---------------------------------------------------------------------------
+describe("isTempResidentTarget", () => {
+  it("flags a path under os.tmpdir()", () => {
+    const p = path.join(os.tmpdir(), "claude", "scratch", "fixtures", "mock", "cmd", "claude.cmd");
+    expect(isTempResidentTarget(p)).toBe(true);
+  });
+
+  it("flags any path with a scratchpad segment", () => {
+    expect(isTempResidentTarget("D:/work/scratchpad/qa6/claude.cmd")).toBe(true);
+    expect(isTempResidentTarget(["D:", "work", "scratchpad", "qa6", "claude.cmd"].join(path.sep))).toBe(true);
+  });
+
+  it("does NOT flag a normal npm-global / node_modules claude, nor a plain temp fixture", () => {
+    expect(isTempResidentTarget(["C:", "Users", "me", "AppData", "Roaming", "npm", "node_modules", "claude-code", "bin", "claude.exe"].join(path.sep))).toBe(false);
+    expect(isTempResidentTarget("/usr/local/bin/claude")).toBe(false);
+    // legitimate integration-test fixtures live directly under os.tmpdir() (no
+    // scratchpad, not the claude-agent temp root) — must NOT be flagged.
+    expect(isTempResidentTarget(path.join(os.tmpdir(), "evo-proxy-abc", "claude.cmd"))).toBe(false);
+  });
+
+  it("isUsableCommandCandidate rejects an existing scratchpad-resident file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evo-scratchpad-"));
+    tempDirs.push(dir);
+    const scratchDir = path.join(dir, "scratchpad", "qa");
+    fs.mkdirSync(scratchDir, { recursive: true });
+    const p = path.join(scratchDir, "claude.cmd");
+    fs.writeFileSync(p, "@echo off\r\n");
+    // exists + spawnable, but scratchpad-resident -> not usable
+    expect(isUsableCommandCandidate(p)).toBe(false);
   });
 });

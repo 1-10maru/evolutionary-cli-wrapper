@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -10,6 +11,7 @@ import {
   updateEvoConfig,
 } from "./config";
 import { getLogger } from "./logger";
+import { NATIVE_RUNTIME_DEPS } from "./health";
 import { SupportedCli } from "./types";
 
 const shellPathLog = getLogger().child("shell.path");
@@ -296,6 +298,40 @@ function extractShimTargetPath(commandPath: string): string | null {
 }
 
 /**
+ * If a resolved command is an npm interpreter shim (`.cmd` / `.ps1` / `.bat`, or
+ * an extensionless stub) that points at a real `.exe`, return that `.exe` so we
+ * can spawn it directly instead of through a cmd.exe / PowerShell interpreter
+ * layer.
+ *
+ * Why this matters: npm's PowerShell shim runs
+ *   `if ($MyInvocation.ExpectingInput) { $input | & claude.exe $args } ...`
+ * With a redirected stdin that never reaches EOF, PowerShell blocks on stdin
+ * forever even after `claude.exe` has already exited — so evo's direct child
+ * (powershell) never exits and the teardown watchdog, which is keyed on the
+ * direct child's exit, never fires. The `.cmd` variant instead surfaces the
+ * interactive "Terminate batch job (Y/N)?" prompt on Ctrl+C. Spawning the
+ * `.exe` directly removes the interpreter entirely and both symptoms vanish.
+ *
+ * Strictly guarded to `.exe` targets: a shim that points at a `.js` / `cli.js`
+ * (a node launcher) is left alone — following it to node is out of scope here.
+ */
+export function followShimToExe(resolved: string): string {
+  const ext = path.extname(resolved).toLowerCase();
+  const isShim = ext === ".cmd" || ext === ".ps1" || ext === ".bat" || ext === "";
+  if (!isShim) return resolved;
+  const target = extractShimTargetPath(resolved);
+  if (!target) return resolved;
+  if (path.extname(target).toLowerCase() !== ".exe") return resolved;
+  if (!fs.existsSync(target)) return resolved;
+  // Containment: only follow into the shim's OWN node_modules subtree — never to
+  // an arbitrary location a crafted (or corrupt) shim body might reference.
+  const nmRoot = path.join(path.dirname(resolved), "node_modules");
+  const rel = path.relative(nmRoot, target);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return resolved;
+  return target;
+}
+
+/**
  * Whether a resolved command can actually be launched on the current platform
  * by `spawnInteractiveCommand`. On Windows we can spawn `.exe` directly, `.cmd`
  * / `.bat` via cmd.exe, and `.ps1` via pwsh/powershell — but an extensionless
@@ -311,9 +347,72 @@ function isSpawnableOnThisPlatform(commandPath: string): boolean {
   return ext === ".exe" || ext === ".cmd" || ext === ".bat" || ext === ".ps1";
 }
 
-function isUsableCommandCandidate(commandPath: string): boolean {
+/**
+ * Basenames (with OR without extension, case-insensitive) that are language/OS
+ * interpreters — never a real `claude` / `codex` CLI. A stale cached
+ * `originalCommandMap` value can point at one of these: e.g. an old evo build
+ * cached `C:\Program Files\nodejs\node.exe` from a cli.js-era npm shim, and the
+ * candidate order trusts that cache over the live discoverable shim, so the
+ * wrapper ends up launching the interpreter itself. Resolution rejects these.
+ */
+const INTERPRETER_DENYLIST = new Set([
+  "node",
+  "npm",
+  "npx",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "sh",
+  "bash",
+  "wscript",
+  "cscript",
+  "env",
+]);
+
+function isInterpreterBasename(commandPath: string): boolean {
+  const base = path.basename(commandPath).toLowerCase();
+  const noExt = base.replace(/\.[^.]+$/, "");
+  return INTERPRETER_DENYLIST.has(base) || INTERPRETER_DENYLIST.has(noExt);
+}
+
+/**
+ * Positive constraint on a resolved original command: it is only acceptable if
+ * it is plausibly the wrapped CLI — its basename (sans extension) equals the cli
+ * name, OR its path lies inside a `node_modules` subtree (an npm-installed
+ * package). A bare system binary or stray interpreter is rejected even if it
+ * happens to exist and be spawnable.
+ */
+function isAcceptableOriginal(commandPath: string, cli: SupportedCli): boolean {
+  const baseNoExt = path.basename(commandPath).replace(/\.[^.]+$/, "").toLowerCase();
+  if (baseNoExt === cli) return true;
+  return normalize(commandPath).split(/[\\/]+/).includes("node_modules");
+}
+
+/**
+ * A resolution target that lives under an agent/QA scratchpad tree must never be
+ * accepted or persisted as the wrapped CLI. A QA mock `claude` under such a path
+ * was once cached into `.evo/config.json` and then baked into the generated
+ * shims, so real terminals would have launched the mock. Targeted at the
+ * agent/QA signatures — a `scratchpad` path segment, or the Claude-agent temp
+ * root (`<os.tmpdir>/claude/…`) — and NOT all of `os.tmpdir()`, since legitimate
+ * integration-test fixtures live directly under the temp dir. A real CLI is
+ * never resolved from either signature.
+ */
+export function isTempResidentTarget(commandPath: string): boolean {
+  if (!commandPath) return false;
+  if (/[\\/]scratchpad[\\/]/i.test(commandPath)) return true;
+  const norm = normalize(commandPath);
+  const agentTmp = normalize(path.join(os.tmpdir(), "claude"));
+  if (norm === agentTmp || norm.startsWith(agentTmp + path.sep)) return true;
+  const shimTarget = extractShimTargetPath(commandPath);
+  return shimTarget ? isTempResidentTarget(shimTarget) : false;
+}
+
+export function isUsableCommandCandidate(commandPath: string): boolean {
   if (!commandPath || !fs.existsSync(commandPath)) return false;
   if (!isSpawnableOnThisPlatform(commandPath)) return false;
+  if (isInterpreterBasename(commandPath)) return false;
+  if (isTempResidentTarget(commandPath)) return false; // stale QA/agent-mock guard
   const shimTarget = extractShimTargetPath(commandPath);
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }
@@ -340,6 +439,18 @@ function getSiblingCommandCandidates(commandPath: string, cli: SupportedCli): st
 }
 
 function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCli, resolved: string): void {
+  // TRUST GUARD: never cache a resolution that lives under an agent/QA
+  // scratchpad tree into config. A stale QA mock persisted here was once baked
+  // into the generated shims (real terminals would have launched the mock). Warn
+  // once and KEEP the prior value; resolution rejects such candidates too, so
+  // this is defense-in-depth for any path that reaches here.
+  if (isTempResidentTarget(resolved)) {
+    shellResolveLog.warn("refusing to persist a temp/scratchpad-resident resolved command; keeping prior value", {
+      cli,
+      resolved,
+    });
+    return;
+  }
   const persistFor = (targetCwd: string): void => {
     const config = ensureEvoConfig(targetCwd);
     if (config.shellIntegration.originalCommandMap[cli] === resolved) return;
@@ -405,16 +516,32 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
   const binDir = getBinDir(shellHome);
   const configuredCandidates = dedupeCommandCandidates([localKnown, shellKnown]);
   const siblingCandidates = configuredCandidates.flatMap((commandPath) => getSiblingCommandCandidates(commandPath, cli));
-  const liveConfiguredCandidates = configuredCandidates.filter((commandPath) => !isLegacyEvoBackupCommand(commandPath));
+  // Filter the cached (configured) values through the interpreter denylist so a
+  // poisoned cache (e.g. a stale `node.exe`) can neither win the resolution nor
+  // be re-persisted.
+  const liveConfiguredCandidates = configuredCandidates
+    .filter((commandPath) => !isLegacyEvoBackupCommand(commandPath))
+    .filter((commandPath) => !isInterpreterBasename(commandPath));
   const discoveredCandidates = discoverOriginalCommandsFromPath(shellHome, binDir, cli);
-  const fallbackCandidates = configuredCandidates;
+  const fallbackCandidates = configuredCandidates.filter((commandPath) => !isInterpreterBasename(commandPath));
 
-  const resolved = dedupeCommandCandidates([
+  const resolvedRaw = dedupeCommandCandidates([
     ...siblingCandidates,
     ...liveConfiguredCandidates,
     ...discoveredCandidates,
     ...fallbackCandidates,
-  ]).find((candidate) => isUsableCommandCandidate(candidate)) ?? null;
+  ]).find((candidate) => isUsableCommandCandidate(candidate) && isAcceptableOriginal(candidate, cli)) ?? null;
+
+  // Follow an npm interpreter shim (.cmd/.ps1/.bat/extensionless) through to the
+  // real .exe it points at, so we spawn the .exe directly and never wrap it in a
+  // cmd.exe/PowerShell layer that can wedge on a never-EOF stdin. No-op unless
+  // the shim points at an existing .exe inside its own node_modules subtree.
+  const followed = resolvedRaw ? followShimToExe(resolvedRaw) : null;
+  // Re-validate the followed target: it must still be a plausible CLI and not an
+  // interpreter (defends against a shim that resolves to node.exe under
+  // node_modules).
+  const resolved =
+    followed && !isInterpreterBasename(followed) && isAcceptableOriginal(followed, cli) ? followed : null;
 
   if (resolved && !isLegacyEvoBackupCommand(resolved)) {
     persistResolvedCommand(cwd, shellHome, cli, resolved);
@@ -425,96 +552,6 @@ export function resolveOriginalCommand(cwd: string, cli: SupportedCli): string |
   }
 
   return resolved;
-}
-
-function getWrapperTargets(basePath: string): Array<{ path: string; backupPath: string; kind: "sh" | "cmd" | "ps1" }> {
-  return [
-    {
-      path: basePath,
-      backupPath: `${basePath}.evo-original`,
-      kind: "sh",
-    },
-    {
-      path: `${basePath}.cmd`,
-      backupPath: `${basePath}.evo-original.cmd`,
-      kind: "cmd",
-    },
-    {
-      path: `${basePath}.ps1`,
-      backupPath: `${basePath}.evo-original.ps1`,
-      kind: "ps1",
-    },
-  ];
-}
-
-function normalizeResolvedWrapperBase(resolved: string): string {
-  const normalizedResolved = resolved.replace(/\.evo-original(\.(cmd|ps1))?$/i, "");
-  return normalizedResolved.endsWith(".cmd") || normalizedResolved.endsWith(".ps1")
-    ? normalizedResolved.replace(/\.(cmd|ps1)$/i, "")
-    : normalizedResolved;
-}
-
-function buildWrapperContent(kind: "sh" | "cmd" | "ps1", cli: SupportedCli, cwd: string): string {
-  const mainPath = path.join(cwd, "dist", "index.js");
-  const configPath = path.join(cwd, ".evo", "config.json");
-  const cmdBackup = `${cli}.evo-original.cmd`;
-  const titleLabel = `${cli} [Evo ON]`;
-  if (kind === "cmd") {
-    return [
-      "@echo off",
-      "setlocal",
-      `set \"EVO_HOME=${cwd}\"`,
-      `set \"EVO_CONFIG=${configPath}\"`,
-      `if exist \"%~dp0${cmdBackup}\" (`,
-      "  for /f \"usebackq delims=\" %%A in (`powershell -NoProfile -Command \"$cfg=Get-Content -Raw '%EVO_CONFIG%' | ConvertFrom-Json; if($cfg.shellIntegration.enabled){'1'}else{'0'}\"`) do set \"EVO_ENABLED=%%A\"",
-      ") else (",
-      "  set \"EVO_ENABLED=1\"",
-      ")",
-      "if \"%EVO_ENABLED%\"==\"0\" (",
-      `  call \"%~dp0${cmdBackup}\" %*`,
-      "  exit /b %ERRORLEVEL%",
-      ")",
-      `title ${titleLabel}`,
-      `node \"${mainPath}\" proxy --cli ${cli} -- %*`,
-      "",
-    ].join("\r\n");
-  }
-  if (kind === "ps1") {
-    const escapedMain = mainPath.replace(/\\/g, "\\\\");
-    const escapedConfig = configPath.replace(/\\/g, "\\\\");
-    return [
-      "#!/usr/bin/env pwsh",
-      `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
-      `$evoConfig = '${escapePowerShellSingleQuotes(escapedConfig)}'`,
-      "$evoEnabled = $true",
-      "if (Test-Path $evoConfig) {",
-      "  try {",
-      "    $cfg = Get-Content -Raw $evoConfig | ConvertFrom-Json",
-      "    if ($null -ne $cfg.shellIntegration.enabled) { $evoEnabled = [bool]$cfg.shellIntegration.enabled }",
-      "  } catch { $evoEnabled = $true }",
-      "}",
-      "if (-not $evoEnabled) {",
-      `  & \"$PSScriptRoot\\${cli}.evo-original.ps1\" @args`,
-      "  exit $LASTEXITCODE",
-      "}",
-      `$Host.UI.RawUI.WindowTitle = '${escapePowerShellSingleQuotes(titleLabel)}'`,
-      `& node '${escapePowerShellSingleQuotes(mainPath)}' proxy --cli ${cli} -- @args`,
-      "exit $LASTEXITCODE",
-      "",
-    ].join("\r\n");
-  }
-  return [
-    "#!/bin/sh",
-    `EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
-    `EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
-    `if [ -f "$0.evo-original" ] && command -v node >/dev/null 2>&1; then`,
-    `  if node -e "const fs=require('fs');const p=process.argv[1];try{const c=JSON.parse(fs.readFileSync(p,'utf8'));process.stdout.write(c.shellIntegration&&c.shellIntegration.enabled===false?'0':'1')}catch{process.stdout.write('1')}" "$EVO_CONFIG" | grep -q '^0$'; then`,
-    `    exec "$0.evo-original" "$@"`,
-    "  fi",
-    "fi",
-    `exec node "${mainPath.replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
-    "",
-  ].join("\n");
 }
 
 function buildCmdAutoRunScript(cwd: string): string {
@@ -578,6 +615,165 @@ function restoreCommandWrappers(_cwd: string): void {
  */
 const SHIM_PATH_FORBIDDEN = /['"`$;%&|<>^\n\r]/;
 
+/**
+ * Defense-in-depth nesting guard emitted into every generated shim. When the
+ * shim runs while `EVO_PROXY_ACTIVE=1` — i.e. claude re-invoked `claude` by name
+ * from inside an Evo proxy (a `/logout` re-auth flow, or the native updater
+ * relaunching itself) — it execs the real claude directly instead of opening a
+ * second `node dist/index.js proxy` session. The runtime guard in
+ * `src/index.ts` is the primary fix; this shim-level guard just avoids paying
+ * the Node startup on the nested hop and closes the window before Evo's own
+ * process is ever involved.
+ *
+ * Pure and side-effect free: the caller resolves the original command (skipping
+ * resolution entirely in EVO_TEST_MODE) and passes it in. Returns no guard lines
+ * when the original cannot be resolved or is unsafe to interpolate into this
+ * shim kind — in that case the runtime guard still handles the nested case.
+ */
+export function buildNestingGuardLines(kind: "sh" | "cmd" | "ps1", original: string | null): string[] {
+  if (!original || SHIM_PATH_FORBIDDEN.test(original)) return [];
+  if (kind === "cmd") {
+    // Two standalone `if` statements, NOT a parenthesized block: inside a
+    // `( ... )` block cmd.exe expands %ERRORLEVEL% at parse time (before the
+    // `call` runs), so it would always be 0 and mask the nested claude's real
+    // exit code. As separate lines, cmd parses the exit line only after the
+    // call line has executed, so %ERRORLEVEL% is the real post-call value.
+    // (Delayed expansion / `!ERRORLEVEL!` is avoided because enabling it would
+    // make `!` special and corrupt any nested claude argument containing `!`.)
+    return [
+      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" call \"${original}\" %*`,
+      `if \"%EVO_PROXY_ACTIVE%\"==\"1\" exit /b %ERRORLEVEL%`,
+    ];
+  }
+  if (kind === "ps1") {
+    return [
+      "if ($env:EVO_PROXY_ACTIVE -eq '1') {",
+      `  & '${escapePowerShellSingleQuotes(original)}' @args`,
+      "  exit $LASTEXITCODE",
+      "}",
+    ];
+  }
+  return [
+    `if [ \"$EVO_PROXY_ACTIVE\" = \"1\" ]; then`,
+    `  exec \"${original.replace(/\\/g, "/")}\" \"$@\"`,
+    "fi",
+  ];
+}
+
+/**
+ * Resolve the original command for shim-guard emission, skipping resolution in
+ * EVO_TEST_MODE (mirrors installCommandWrappers) so unit tests stay
+ * deterministic and never trigger a real `where` probe.
+ */
+function resolveOriginalForShimGuard(cwd: string, cli: SupportedCli): string | null {
+  if (process.env.EVO_TEST_MODE === "1") return null;
+  return resolveOriginalCommand(cwd, cli);
+}
+
+/**
+ * The published executable entry is the self-contained esbuild bundle, not the
+ * plain tsc output. All pure-JS runtime deps are inlined into it, so thinning
+ * node_modules (an external process on this dev box periodically deletes
+ * transitive packages) can no longer break `claude` startup with
+ * ERR_MODULE_NOT_FOUND. Launched as `node <cwd>/dist/evo.bundle.cjs`.
+ */
+const EVO_BUNDLE_REL_POSIX = "dist/evo.bundle.cjs";
+
+/**
+ * Launch-fallback lines for a generated proxy shim, emitted after the nesting
+ * guard and before the normal bundle launch. The guarantee: a missing bundle,
+ * a missing native dependency, or an unavailable node must not leave the user
+ * without their CLI. When the original command is resolvable the fallback execs
+ * it directly; otherwise it prints the one-line bypass hint and exits.
+ */
+function buildLaunchFallbackLines(
+  kind: "sh" | "cmd" | "ps1",
+  cli: SupportedCli,
+  cwd: string,
+  original: string | null,
+): string[] {
+  const deps = NATIVE_RUNTIME_DEPS;
+  const hasSafeOriginal = !!original && !SHIM_PATH_FORBIDDEN.test(original);
+  if (kind === "cmd") {
+    const bundle = `%~dp0..\\${EVO_BUNDLE_REL_POSIX.replace(/\//g, "\\")}`;
+    const lines = [
+      `set "EVO_BUNDLE=${bundle}"`,
+      "set \"EVO_OK=1\"",
+      "where node >nul 2>nul || set \"EVO_OK=0\"",
+      `if not exist "%EVO_BUNDLE%" set "EVO_OK=0"`,
+      ...deps.map((d) => `if not exist "%~dp0..\\node_modules\\${d}\\" set "EVO_OK=0"`),
+    ];
+    if (hasSafeOriginal) {
+      lines.push(
+        `if "%EVO_OK%"=="0" echo evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo. 1>&2`,
+        `if "%EVO_OK%"=="0" call "${original}" %*`,
+        `if "%EVO_OK%"=="0" exit /b %ERRORLEVEL%`,
+      );
+    } else {
+      lines.push(
+        `if "%EVO_OK%"=="0" echo evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo. 1>&2`,
+        `if "%EVO_OK%"=="0" exit /b 1`,
+      );
+    }
+    return lines;
+  }
+  if (kind === "ps1") {
+    const bundle = path.join(cwd, "dist", "evo.bundle.cjs");
+    const nmDir = path.join(cwd, "node_modules");
+    const lines = [
+      `$evoBundle = '${escapePowerShellSingleQuotes(bundle)}'`,
+      "$evoOk = $true",
+      "if (-not (Get-Command node -ErrorAction SilentlyContinue)) { $evoOk = $false }",
+      "if (-not (Test-Path -LiteralPath $evoBundle)) { $evoOk = $false }",
+      ...deps.map(
+        (d) =>
+          `if (-not (Test-Path -LiteralPath '${escapePowerShellSingleQuotes(path.join(nmDir, d))}')) { $evoOk = $false }`,
+      ),
+      "if (-not $evoOk) {",
+    ];
+    if (hasSafeOriginal) {
+      lines.push(
+        `  [Console]::Error.WriteLine('evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo.')`,
+        `  & '${escapePowerShellSingleQuotes(original as string)}' @args`,
+        "  exit $LASTEXITCODE",
+      );
+    } else {
+      lines.push(
+        `  [Console]::Error.WriteLine('evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo.')`,
+        "  exit 1",
+      );
+    }
+    lines.push("}");
+    return lines;
+  }
+  // sh
+  const bundle = path.join(cwd, "dist", "evo.bundle.cjs").replace(/\\/g, "/");
+  const nmDir = path.join(cwd, "node_modules").replace(/\\/g, "/");
+  const lines = [
+    `EVO_BUNDLE="${bundle}"`,
+    "_evo_ok=1",
+    "command -v node >/dev/null 2>&1 || _evo_ok=0",
+    `[ -r "$EVO_BUNDLE" ] || _evo_ok=0`,
+    `for _evo_dep in ${deps.join(" ")}; do`,
+    `  [ -e "${nmDir}/$_evo_dep" ] || _evo_ok=0`,
+    "done",
+    `if [ "$_evo_ok" = "0" ]; then`,
+  ];
+  if (hasSafeOriginal) {
+    lines.push(
+      `  echo "evo: launcher unavailable; running ${cli} directly. Set EVO_PROXY_ACTIVE=1 to always bypass Evo." 1>&2`,
+      `  exec "${(original as string).replace(/\\/g, "/")}" "$@"`,
+    );
+  } else {
+    lines.push(
+      `  echo "evo: launcher unavailable and no fallback ${cli} found; set EVO_PROXY_ACTIVE=1 to bypass Evo." 1>&2`,
+      "  exit 1",
+    );
+  }
+  lines.push("fi");
+  return lines;
+}
+
 export function createProxyShims(cwd: string): string[] {
   if (SHIM_PATH_FORBIDDEN.test(cwd)) {
     throw new Error(
@@ -595,7 +791,7 @@ export function createProxyShims(cwd: string): string[] {
   const evoShimPath = path.join(binDir, "evo.cmd");
   fs.writeFileSync(
     evoShimPath,
-    `@echo off\r\nsetlocal\r\nset "EVO_HOME=${cwd}"\r\nset "EVO_CONFIG=${configPath}"\r\nnode "%~dp0..\\dist\\index.js" %*\r\n`,
+    `@echo off\r\nsetlocal\r\nset "EVO_HOME=${cwd}"\r\nset "EVO_CONFIG=${configPath}"\r\nnode "%~dp0..\\${EVO_BUNDLE_REL_POSIX.replace(/\//g, "\\")}" %*\r\n`,
   );
   created.push(evoShimPath);
 
@@ -606,7 +802,7 @@ export function createProxyShims(cwd: string): string[] {
       "#!/usr/bin/env pwsh",
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
-      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' @args`,
+      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "evo.bundle.cjs"))}' @args`,
       "exit $LASTEXITCODE",
       "",
     ].join("\r\n"),
@@ -618,14 +814,18 @@ export function createProxyShims(cwd: string): string[] {
   created.push(cmdAutoRunPath);
 
   for (const cli of ["claude"] as const) {
+    const original = resolveOriginalForShimGuard(cwd, cli);
+
     const cmdShimPath = path.join(binDir, `${cli}.cmd`);
     const cmdContent = [
       "@echo off",
       "setlocal",
       `set "EVO_HOME=${cwd}"`,
       `set "EVO_CONFIG=${configPath}"`,
+      ...buildNestingGuardLines("cmd", original),
+      ...buildLaunchFallbackLines("cmd", cli, cwd, original),
       `title ${cli} [Evo ON]`,
-      `node "%~dp0..\\dist\\index.js" proxy --cli ${cli} -- %*`,
+      `node "%EVO_BUNDLE%" proxy --cli ${cli} -- %*`,
       "",
     ].join("\r\n");
     fs.writeFileSync(cmdShimPath, cmdContent);
@@ -636,8 +836,10 @@ export function createProxyShims(cwd: string): string[] {
       "#!/usr/bin/env pwsh",
       `$env:EVO_HOME = '${escapePowerShellSingleQuotes(cwd)}'`,
       `$env:EVO_CONFIG = '${escapePowerShellSingleQuotes(configPath)}'`,
+      ...buildNestingGuardLines("ps1", original),
+      ...buildLaunchFallbackLines("ps1", cli, cwd, original),
       `$Host.UI.RawUI.WindowTitle = '${escapePowerShellSingleQuotes(`${cli} [Evo ON]`)}'`,
-      `& node '${escapePowerShellSingleQuotes(path.join(cwd, "dist", "index.js"))}' proxy --cli ${cli} -- @args`,
+      `& node $evoBundle proxy --cli ${cli} -- @args`,
       "exit $LASTEXITCODE",
       "",
     ].join("\r\n");
@@ -649,7 +851,9 @@ export function createProxyShims(cwd: string): string[] {
       "#!/bin/sh",
       `export EVO_HOME="${cwd.replace(/\\/g, "/")}"`,
       `export EVO_CONFIG="${configPath.replace(/\\/g, "/")}"`,
-      `exec node "${path.join(cwd, "dist", "index.js").replace(/\\/g, "/")}" proxy --cli ${cli} -- "$@"`,
+      ...buildNestingGuardLines("sh", original),
+      ...buildLaunchFallbackLines("sh", cli, cwd, original),
+      `exec node "$EVO_BUNDLE" proxy --cli ${cli} -- "$@"`,
       "",
     ].join("\n");
     fs.writeFileSync(shShimPath, shContent);

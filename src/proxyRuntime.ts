@@ -27,10 +27,12 @@ import {
   gcOldSessionFiles,
   liveStateTargets,
   sessionLiveStatePath,
+  sessionsDir,
   teardownLiveStateFiles,
   writeLiveStateDual,
 } from "./proxy/liveState";
 import { setupJsonlWatcher, type JsonlWatcherHandle } from "./proxy/jsonlWatcher";
+import { gcStaleAtomicTmps } from "./utils/atomicFile";
 import {
   buildLiveStatePayload,
   createEmptyTurn,
@@ -56,6 +58,19 @@ export const shouldUseLightweightTracking = _shouldUseLightweightTracking;
 const proxyResolveLog = getLogger().child("proxy.resolve");
 const proxySpawnLog = getLogger().child("proxy.spawn");
 const proxySubprocessLog = getLogger().child("proxy.subprocess");
+
+/**
+ * How long to wait after the child's `exit` event for its `close` event before
+ * proceeding with teardown anyway. `close` fires only once every stdio stream
+ * has ended; a grandchild that inherits (and holds) a stdio pipe can keep it
+ * open indefinitely after the child itself has exited, which would otherwise
+ * trap the wrapper forever. Overridable via EVO_EXIT_WATCHDOG_MS (primarily for
+ * tests). Defaults to 2000ms.
+ */
+function exitWatchdogMs(): number {
+  const raw = Number(process.env.EVO_EXIT_WATCHDOG_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
+}
 
 /**
  * Conventional shell exit code for a process terminated by a signal:
@@ -274,6 +289,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     // call defensively so a future regression cannot crash proxy startup.
     try {
       gcOldSessionFiles(cwd);
+      // v3.6.5: also sweep orphaned atomic-write tmp files (a crash between the
+      // tmp write and the rename leaves `<name>.tmp.<pid>.<ts>.<rand>` behind).
+      // config/mascot tmps land in `<cwd>/.evo/`, session tmps in `.evo/sessions/`.
+      gcStaleAtomicTmps(path.join(cwd, ".evo"));
+      gcStaleAtomicTmps(sessionsDir(cwd));
     } catch {
       // intentionally ignored — GC is opportunistic
     }
@@ -380,6 +400,15 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   if (attachStdin) {
     process.stdin.resume();
     process.stdin.on("data", stdinListener);
+  } else if (child.stdin) {
+    // Non-attach path: we are not forwarding our stdin to the child, so deliver
+    // EOF right away by closing its stdin pipe. Without this, an interpreter
+    // layer left in front of the real CLI (npm's PowerShell shim runs
+    // `$input | & claude.exe`) blocks on a stdin pipe that never reaches EOF —
+    // hanging forever even after the real CLI has exited. Only the piped,
+    // non-interactive path has a child.stdin stream to close (an inherited
+    // stdio child exposes none), so this never touches interactive sessions.
+    child.stdin.end();
   }
 
   const idleMs = config.proxy.turnIdleMs;
@@ -466,10 +495,21 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
   const subprocessStartMs = Date.now();
   let exitSignal: string | null = null;
   const exitCode = await new Promise<number>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
+    let settled = false;
+    let watchdog: NodeJS.Timeout | null = null;
+    const finish = (
+      code: number | null,
+      signal: NodeJS.Signals | null,
+      via: "close" | "exit-watchdog",
+    ): void => {
+      if (settled) return;
+      settled = true;
+      if (watchdog) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
       const durationMs = Date.now() - subprocessStartMs;
-      const ctx = { exitCode: code, signal, durationMs };
+      const ctx = { exitCode: code, signal, durationMs, via };
       if ((code !== null && code !== 0) || signal !== null) {
         proxySubprocessLog.warn("subprocess exited", ctx);
       } else {
@@ -487,8 +527,23 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
         exitCode: code,
         signal,
         durationMs,
+        via,
       });
       resolve(code ?? 1);
+    };
+    child.on("error", reject);
+    // Normal path: `close` fires after the child exited AND every stdio stream
+    // ended. Exit-code propagation semantics are unchanged when it arrives.
+    child.on("close", (code, signal) => finish(code, signal, "close"));
+    // Watchdog: `exit` fires as soon as the child process itself has exited. If
+    // a grandchild keeps a stdio pipe open, `close` may never fire — so arm a
+    // short timer to proceed with teardown using the child's own exit status.
+    // When `close` follows promptly (the common case) it settles first and the
+    // watchdog is cleared, so behavior is identical to before.
+    child.on("exit", (code, signal) => {
+      if (settled || watchdog) return;
+      watchdog = setTimeout(() => finish(code, signal, "exit-watchdog"), exitWatchdogMs());
+      watchdog.unref?.();
     });
   });
 

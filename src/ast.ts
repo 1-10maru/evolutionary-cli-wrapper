@@ -1,9 +1,38 @@
-import Parser from "tree-sitter";
-import JavaScript from "tree-sitter-javascript";
-import Python from "tree-sitter-python";
-import TypeScript from "tree-sitter-typescript";
+import type Parser from "tree-sitter";
 import { ChangedFile, SymbolChangeEvent, SymbolKind, SymbolSnapshot } from "./types";
 import { hashText, shortHash } from "./utils/hash";
+
+// tree-sitter and its grammars are native addons that cannot be bundled. Load
+// them lazily (on first parse) rather than at module import, so a broken or
+// missing native build does not crash the whole CLI at startup — `evo
+// --version`, `evo doctor --quick`, and the proxy self-check stay runnable and
+// can diagnose / fall back instead.
+let cachedParser: Parser | null = null;
+function getParser(): Parser {
+  if (cachedParser === null) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ParserCtor = require("tree-sitter") as new () => Parser;
+    cachedParser = new ParserCtor();
+  }
+  return cachedParser;
+}
+
+function loadGrammar(name: "javascript" | "python" | "typescript" | "tsx"): unknown {
+  switch (name) {
+    case "javascript":
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require("tree-sitter-javascript");
+    case "python":
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require("tree-sitter-python");
+    case "typescript":
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require("tree-sitter-typescript").typescript;
+    case "tsx":
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require("tree-sitter-typescript").tsx;
+  }
+}
 
 type TreeNode = Parser.SyntaxNode;
 
@@ -19,21 +48,19 @@ interface ExtractedSymbol {
   fingerprintSource: string;
 }
 
-const parser = new Parser();
-
 function languageForExtension(extension: string): { name: string; grammar: unknown } | null {
   switch (extension) {
     case ".ts":
-      return { name: "typescript", grammar: TypeScript.typescript };
+      return { name: "typescript", grammar: loadGrammar("typescript") };
     case ".tsx":
-      return { name: "tsx", grammar: TypeScript.tsx };
+      return { name: "tsx", grammar: loadGrammar("tsx") };
     case ".js":
     case ".jsx":
     case ".mjs":
     case ".cjs":
-      return { name: "javascript", grammar: JavaScript };
+      return { name: "javascript", grammar: loadGrammar("javascript") };
     case ".py":
-      return { name: "python", grammar: Python };
+      return { name: "python", grammar: loadGrammar("python") };
     default:
       return null;
   }
@@ -205,6 +232,7 @@ export function extractSymbolSnapshots(relativePath: string, content?: string): 
   const language = languageForExtension(extension);
   if (!language) return [];
 
+  const parser = getParser();
   parser.setLanguage(language.grammar as never);
   const tree = parser.parse(content);
   const extracted =

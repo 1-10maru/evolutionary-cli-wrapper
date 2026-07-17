@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getGlobalEvoDir } from "./config";
+import { getLogger } from "./logger";
+import { atomicWriteFileSync, readJsonFileWithRetrySync } from "./utils/atomicFile";
 import { migrateMascotFromCwd } from "./mascotMigration";
 import {
   EpisodeSummary,
@@ -15,6 +17,8 @@ import {
   TurnSummary,
 } from "./types";
 import { colorize, dim, formatPanel } from "./terminalUi";
+
+const mascotLog = getLogger().child("mascot");
 
 const MASCOT_FILE = "mascot.json";
 
@@ -126,6 +130,35 @@ export function computeIdealStateGauge(profile: MascotProfile): number {
   return isg;
 }
 
+/**
+ * Live 育成度 for an IN-PROGRESS session.
+ *
+ * `computeIdealStateGauge` reads only `recentEpisodes`, which is appended to
+ * exclusively at episode finalization (process exit). During a live session it
+ * is therefore frozen at prior-session state — a literal 0% next to a high live
+ * promptScore ("指示の質: とても良い!") is contradictory, which is the bug the
+ * user reported. This blends a live rolling promptScore window (fed each turn
+ * in ProxyLiveState) with the historical gauge so the value moves within a
+ * session and tracks the same signal that drives 指示の質.
+ *
+ * Returns -1 (rendered as 測定中) ONLY when there is genuinely no data at all:
+ * an empty live window AND no finalized episodes. A literal 0 is impossible
+ * unless the live prompt scores (or real episodes) are genuinely ~0 — in which
+ * case 指示の質 would itself read "曖昧すぎるかも", so the two agree.
+ */
+export function computeLiveIdealStateGauge(
+  promptScoreWindow: number[] | undefined,
+  profile: MascotProfile,
+): number {
+  const historical = computeIdealStateGauge(profile); // -1 when no episodes
+  const window = promptScoreWindow ?? [];
+  if (window.length === 0) return historical; // -1 or a real historical value
+  const liveAvg = window.reduce((s, v) => s + v, 0) / window.length;
+  const live = Math.max(0, Math.min(100, Math.round(liveAvg)));
+  if (historical < 0) return live; // no finalized episodes yet → pure live
+  return Math.round((live + historical) / 2); // blend live trend with history
+}
+
 export interface QualityMetrics {
   promptScore: number;
   sessionGrade: string;
@@ -216,16 +249,33 @@ export function loadMascotProfile(cwd: string): MascotProfile {
   const filePath = mascotPath(cwd);
   if (!fs.existsSync(filePath)) {
     const profile = defaultMascot();
-    fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+    atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
     return profile;
   }
 
-  let parsed: Partial<MascotProfile> = {};
+  // Guarded read: a concurrent same-cwd proxy may be mid-write. Retry a
+  // transient torn read instead of silently resetting the EvoPet to defaults
+  // (the old try/catch caused data loss on a torn read).
+  let parsed: Partial<MascotProfile>;
   try {
-    parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<MascotProfile>;
+    parsed = readJsonFileWithRetrySync<Partial<MascotProfile>>(filePath);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[evopet] mascot.json read/parse failed (${msg}); falling back to defaults\n`);
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      // Vanished between existsSync and read — write a fresh default.
+      const profile = defaultMascot();
+      atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
+      return profile;
+    }
+    // Present but unparseable after retries. Return defaults IN MEMORY without
+    // overwriting — a concurrent writer may have a valid mascot mid-write, and
+    // clobbering it would silently reset the user's EvoPet progress. The next
+    // saveMascotProfile heals a genuinely corrupt file.
+    mascotLog.warn("mascot.json unreadable after retries; using in-memory defaults (file left intact)", {
+      path: filePath,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return defaultMascot();
   }
   const profile: MascotProfile = {
     ...defaultMascot(),
@@ -235,13 +285,13 @@ export function loadMascotProfile(cwd: string): MascotProfile {
     bestCombo: parsed.bestCombo ?? 0,
     recentEpisodes: parsed.recentEpisodes ?? [],
   };
-  fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+  atomicWriteFileSync(filePath, JSON.stringify(profile, null, 2), mascotLog);
   return profile;
 }
 
 export function saveMascotProfile(cwd: string, profile: MascotProfile): void {
   ensureMascotDir(cwd);
-  fs.writeFileSync(mascotPath(cwd), JSON.stringify(profile, null, 2));
+  atomicWriteFileSync(mascotPath(cwd), JSON.stringify(profile, null, 2), mascotLog);
 }
 
 export function renderMascotState(profile: MascotProfile): MascotRenderState {

@@ -7,6 +7,15 @@
 //
 // CLI usage:
 //   node mock-claude.js --out <jsonlPath> [--exit-code <n>] [--turns <n>]
+//                       [--hold-stdout-ms <n>]
+//
+// --hold-stdout-ms <n>: before exiting, spawn a DETACHED grandchild that
+// inherits (and holds) this process's stdout fd for <n> ms. Because the wrapper
+// pipes our stdout, the grandchild keeps the write end open after we exit, so
+// the wrapper's child `close` event is delayed past our `exit` event. This
+// reproduces the "child exited but stdio lingers" condition the exit watchdog
+// in proxyRuntime.ts guards against. Any unrecognized extra flags (e.g.
+// `--update`) are ignored, so the fixture can also stand in for update ops.
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -20,6 +29,7 @@ function getArg(name, fallback) {
 const outPath = getArg("--out", "");
 const exitCode = Number(getArg("--exit-code", "0")) || 0;
 const turnCount = Number(getArg("--turns", "3")) || 3;
+const holdStdoutMs = Number(getArg("--hold-stdout-ms", "0")) || 0;
 
 if (outPath) {
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -50,4 +60,20 @@ for (let i = 0; i < turnCount; i += 1) {
 // Stdout: a usage observation the proxy may parse.
 console.log("Read src/index.ts");
 console.log("prompt tokens: 12 completion tokens: 4 total tokens: 16");
+
+if (holdStdoutMs > 0) {
+  const { spawn } = require("node:child_process");
+  // Grandchild inherits our stdout (fd 1 = the pipe to the wrapper) and keeps it
+  // open for holdStdoutMs. detached + unref so we can exit immediately while it
+  // lingers, delaying the wrapper's child `close` event past our `exit`.
+  const grandchild = spawn(
+    process.execPath,
+    ["-e", `setTimeout(() => {}, ${holdStdoutMs})`],
+    // Neutral cwd (system temp root) so the grandchild never holds the test's
+    // project dir busy during cleanup.
+    { stdio: ["ignore", 1, "ignore"], detached: true, cwd: require("node:os").tmpdir() },
+  );
+  grandchild.unref();
+}
+
 process.exit(exitCode);

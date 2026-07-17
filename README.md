@@ -102,6 +102,7 @@ Commands most users touch:
 | `evo pet choose <id>` | Set your pet species (e.g. `evo pet choose cat`). |
 | `evo display [mode]` | Toggle the statusline layout: `minimum`, `expansion`, or `toggle`. No arg prints the current mode. |
 | `evo doctor` | Print a one-page health report — versions, environment, file checks, recent errors, and live-state freshness (`--json` for machine-readable output). |
+| `evo doctor --quick` | Fast self-check only — bundle present, native dependencies present, native components loadable, and the real `claude` resolvable. Exits non-zero on any failure; handy for diagnosing a broken wrapper or as a pre-release check. |
 | `evo logs [--tail N] [--since 30m] [--bundle]` | Tail recent Evo log lines, or `--bundle` a redacted zip of the last 7 days of logs + doctor output for a bug report. |
 
 Developer / power-user commands (mostly relevant after `npm run setup` from a clone):
@@ -172,6 +173,24 @@ When the statusline is rendered through the `evo` CLI (`evo statusline`), it per
 | `EVO_FORCE_LIGHT` | unset | Force lightweight tracking regardless of cwd heuristics. |
 
 </details>
+
+## Privacy / Data at rest
+
+Evo scores your collaboration **locally**. Nothing is sent anywhere — the only network call is the optional npm update check (disable with `EVO_NO_UPDATE_CHECK=1`).
+
+**What is stored.** Per turn, a **capped preview of the input** you sent the wrapped CLI (at most 500 characters), a **sha256 hash and length** of the full input (so repeated prompts can be recognized without keeping the text), a short **output preview** (~160 characters), plus derived metrics (detected file paths, token counts, friction/complexity scores).
+
+**Where.** Under `<project>/.evo/` — the SQLite database `.evo/evolutionary.db`, redacted logs in `.evo/logs/`, and per-session counters in `.evo/sessions/`. A small live-status file is also written to `~/.claude/.evo-live.json` for the statusline.
+
+**Retention.** Logs older than 7 days are pruned automatically; the database is compacted on a size/age policy (`evo storage` shows the footprint, `evo compact` archives old raw episodes into rollups).
+
+**How to disable prompt-text capture.** Set `capture.promptText` to `false` in `<project>/.evo/config.json`. Evo then stores **only** the sha256 hash and length of your input — no input text, no input previews, and no output previews (the wrapped CLI's output can echo your input back, so it is covered too).
+
+```json
+{ "capture": { "promptText": false } }
+```
+
+**How to purge.** `evo forget` deletes the local `.evo/` history for the current project; `evo uninstall --purge-data` removes the shell integration and deletes the project's `.evo/` data.
 
 ## The Pet
 

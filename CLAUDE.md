@@ -65,9 +65,32 @@ which -a evo  # Unix
 
 ソース側 (`<repo>/bin/evo`) が npm グローバル側より先に来ているか確認する。
 
+## ライブツリー規律（AI・自動開発時の厳守・ハードルール）
+
+ユーザーのライブ `claude` は **この実 repo の `dist/`**（`bin/claude` 経由）から起動する。
+つまり実 repo の `dist/` を書き換えると、ユーザーが次に打つ `claude` がその中身で動く。
+
+**AI / 自動化されたエージェントが開発する間は、以下を厳守する:**
+
+- **feature/fix ブランチ上で実 repo の `dist/` を絶対に再ビルドしない**（`npm run build` / `build:release` を実 repo で走らせない）。ブランチのコードでユーザーのライブ `claude` を差し替えてしまう。
+- **開発ビルド・検証はすべてサンドボックスのコピーで行う**（`git archive <commit>` で対象ツリーを取り出し、`node_modules` はコピーで用意する。junction/symlink は使わない）。
+- **実 repo の `dist/` を再ビルドしてよいのは、リリース直後に released `main` からだけ**。それ以外のタイミングで実 repo の `dist/` を触らない。
+- **作業ツリーを feature ブランチに置いたまま放置しない**。作業後は必ず `main`（= リリース済みコード）へ戻す。
+- 上の「ソースを編集 → `npm run build`」サイクルは**人間のオーナーが npm link で対話開発する場合の説明**であり、AI エージェントの自動開発には適用しない（エージェントは上のサンドボックス規律に従う）。
+
+**事故（2026-07-17）**: レビュー用ビルドが実 repo の `dist/` をブランチコードで上書きし、ユーザーのライブ `claude` が未リリースコードで動く状態になった。コーディネーターが公開済み 3.6.1 の tarball（リリース済みバイト列）から `dist/` を復元して復旧。実 repo の `dist/` はリリース済みコードで「休ませる」のが原則。
+
+## QA 実機統合の規律（AI 開発時・厳守）
+
+- **実機統合テスト（wrapper を実際に spawn して挙動を見る検証）は、必ず隔離した cwd + EVO 設定 + HOME で行う**。実 repo の cwd / 実 `~/.claude` / 実 `.evo/config.json` を使わない。QA の mock `claude` は repo 内の固定 fixture（`scripts/qa/fixtures/`）に置き、**Temp/scratchpad 配下の解決対象を実設定（originalCommandMap）に絶対に混入させない**。
+- **リリース検証・shim 再生成の前後は、実際の `claude` バージョン行（例 `2.1.212 (Claude Code)`）を必ず引用して報告する**。banner / 育成度ゲージだけでは mock 混入を見逃す。`resolveOriginalCommand` が Temp/scratchpad を解決対象にしていないかを `evo doctor`（Critical フラグ）で確認する。
+- **事故（2026-07-17）**: QA の mock `claude` が実 `.evo/config.json` の originalCommandMap に永続化され、再生成した shim に焼き込まれた（新しい claude ウィンドウが mock を起動しかけた）。コーディネーターの doctor スポットチェックで検出・同時間に修復。wrapper 側は Temp/scratchpad 解決対象を拒否し、`evo doctor` が Critical で警告する（この対策は本 repo に実装済み）。
+
 ## リリース手順
-- **RC channel**: `git tag v3.6.0-rc.1 && git push origin v3.6.0-rc.1` → `release-rc.yml` が走り `@next` で公開
-- **Stable channel**: GitHub Actions UI から「Release Stable」を手動実行(version 入力)→ `release-stable.yml` が走り `@latest` で公開
+- 公開は単一ワークフロー `.github/workflows/release.yml` が npm OIDC Trusted Publishing で実行（`NPM_TOKEN` 不要）
+- **RC channel**: `git tag v3.6.0-rc.2 && git push origin v3.6.0-rc.2` → `release.yml`（RC 経路）が走り `@next` で公開
+- **Stable channel**: GitHub Actions UI から「Release」を手動実行(version 入力)→ `release.yml`（stable 経路）が走り `@latest` で公開
+- 初回のみ npmjs.com で Trusted Publisher 登録が必要（user=`1-10maru` / repo=`evolutionary-cli-wrapper` / workflow filename=`release.yml`）
 - 詳細: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)
 - ロールバック: [docs/runbooks/rollback-bad-release.md](docs/runbooks/rollback-bad-release.md)
 

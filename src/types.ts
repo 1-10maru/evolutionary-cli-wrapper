@@ -164,6 +164,16 @@ export interface NudgeConfig {
   minConfidenceForPercent: number;
 }
 
+export interface CaptureConfig {
+  /**
+   * When true (default) a capped preview of the wrapped CLI's input (max 500
+   * chars) is stored in the local DB alongside a sha256 hash + length of the
+   * full input. When false, NO input text is stored — only the hash + length —
+   * and prompt previews are blanked.
+   */
+  promptText: boolean;
+}
+
 export interface EvoConfig {
   formatVersion: number;
   retention: RetentionPolicy;
@@ -171,6 +181,7 @@ export interface EvoConfig {
   proxy: ProxyConfig;
   nudge: NudgeConfig;
   advice: AdviceConfig;
+  capture: CaptureConfig;
 }
 
 export interface EpisodeEvent {

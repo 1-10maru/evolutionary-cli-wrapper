@@ -4,6 +4,7 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { Command } from "commander";
 import path from "node:path";
+import { assertSafeCommandPath, quoteArgForCmd } from "./proxy/spawnCommand";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { readIssueIntake } from "./issueIntake";
@@ -15,7 +16,9 @@ import { runLogsCommand } from "./cli/logs";
 import { runDoctor } from "./cli/doctor";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
+import { runAdviceCommand } from "./cli/advice";
 import { runInstallStatusline } from "./cli/installStatusline";
+import { quickHealthReport, writeSelfCheckState } from "./health";
 import { maybeRunFirstRunPrompt } from "./firstRunPrompt";
 import {
   getShellStatus,
@@ -31,6 +34,28 @@ import { formatExplain, formatIssueIntake, formatMascotStats, formatRunSummary, 
  * mascot output, tracking, or run summaries.
  */
 const PASSTHROUGH_SUBCOMMANDS = new Set(["review"]);
+
+/**
+ * Native update-family subcommands that must never be proxied — even at the top
+ * level. Claude Code's own auto-updater (and the manual `claude update` /
+ * `install` / `migrate-installer` flows) relaunch `claude` and manage helper
+ * child processes of their own. Proxying these would (a) hold the running
+ * `claude` executable open as an Evo-managed child so Windows cannot replace the
+ * locked image (`update_apply_exe_locked`), and (b) let Evo's signal escalation
+ * tree-kill a deferred updater helper. We hand these straight to the real CLI
+ * with no tracking and no signal handlers.
+ */
+const UPDATE_SUBCOMMANDS = new Set(["update", "install", "migrate-installer"]);
+
+/**
+ * True when this invocation is an update-family operation: a leading update
+ * subcommand (`claude update`), or the top-level `--update` flag anywhere in
+ * the argument list (`claude --update`).
+ */
+export function isUpdateInvocation(args: string[]): boolean {
+  if (args.length > 0 && UPDATE_SUBCOMMANDS.has(args[0].toLowerCase())) return true;
+  return args.some((arg) => arg === "--update");
+}
 
 const cliPassthroughLog = getLogger().child("cli.passthrough");
 const cliResolveLog = getLogger().child("cli.resolve");
@@ -79,6 +104,86 @@ function patchLiveStateOnPassthroughExit(
       // best-effort — never fail the passthrough on observability writes
     }
   }
+}
+
+/**
+ * Run the wrapped CLI transparently: no Evo tracking, episode, statusline, run
+ * summary, or signal machinery. Resolves the original command, inherits stdio,
+ * forwards the child's exit code, and force-exits with it. Used for three cases:
+ *
+ *   - "subcommand": native passthrough subcommands (e.g. `claude review`).
+ *   - "update":     update-family ops (`claude update` / `claude --update`).
+ *                   No signal handlers are installed, so Evo can never tree-kill
+ *                   a deferred updater helper, and the real CLI owns its own
+ *                   child processes and exe replacement.
+ *   - "nested":     EVO_PROXY_ACTIVE=1 — claude re-invoked `claude` by name (a
+ *                   /logout re-auth flow or an updater relaunch) and hit the evo
+ *                   shim again. Opening a second proxy session here is what made
+ *                   the outer wrapper wait forever (the /logout hang), so we must
+ *                   pass straight through and create no nested episode.
+ *
+ * Never creates the wrapped-CLI live-state files; it only patches them if they
+ * already exist (best-effort observability).
+ */
+async function runTransparentPassthrough(
+  cwd: string,
+  cli: "claude",
+  args: string[],
+  reason: "subcommand" | "update" | "nested" | "self-check",
+): Promise<void> {
+  const originalCommand = resolveOriginalCommand(cwd, cli);
+  if (!originalCommand) {
+    cliResolveLog.error("could not resolve original CLI", {
+      cli,
+      message: `no live ${cli} install on PATH after excluding evo shim`,
+    });
+    process.stderr.write(formatMissingOriginalCommandMessage(cli));
+    process.exit(1);
+  }
+  // Quote arguments identically to the proxy path: for a .cmd/.bat original,
+  // use cmd.exe-aware per-arg quoting (quoteArgForCmd) with
+  // windowsVerbatimArguments + a safety check on the command path, so embedded
+  // " & | < > ^ reach the child verbatim instead of being interpreted by
+  // cmd.exe (mangling / command injection). Non-shell originals pass the argv
+  // array directly (shell:false), which needs no quoting.
+  const ext = path.extname(originalCommand).toLowerCase();
+  const needsShell = ext === ".cmd" || ext === ".bat";
+  const passthroughEnv = { ...process.env, EVO_PROXY_ACTIVE: "1" };
+  let child;
+  if (needsShell) {
+    assertSafeCommandPath(originalCommand);
+    child = spawn(originalCommand, args.map(quoteArgForCmd), {
+      cwd,
+      shell: true,
+      windowsVerbatimArguments: true,
+      stdio: "inherit",
+      env: passthroughEnv,
+    });
+  } else {
+    child = spawn(originalCommand, args, {
+      cwd,
+      stdio: "inherit",
+      env: passthroughEnv,
+    });
+  }
+  const code = await new Promise<number>((resolve) => {
+    child.on("error", () => resolve(1));
+    child.on("close", (c) => resolve(c ?? 1));
+  });
+  if (code !== 0) {
+    cliPassthroughLog.warn("passthrough exited non-zero", {
+      cli,
+      exitCode: code,
+      reason,
+      // Log only the first arg (subcommand/flag) — never full content/prompt body.
+      args: args[0] ?? "",
+    });
+  }
+  // Best-effort: patch existing live-state files so observers see the
+  // passthrough exit code. Never CREATE files here.
+  patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
+  // Force exit with the child's code, consistent with the proxied branch.
+  process.exit(code);
 }
 
 const program = new Command();
@@ -167,49 +272,58 @@ program
     void options.cli;
     const cli = "claude" as const;
 
-    // Passthrough: native subcommands like `claude review` bypass Evo entirely
+    // Nesting guard (fixes both the /logout hang and the auto-update lock): if
+    // we are already inside an Evo proxy, claude re-invoked `claude` by name and
+    // hit our shim again. Pass straight through with NO tracking/episode/signal
+    // machinery so we never open a nested session. Must run before any setup.
+    if (process.env.EVO_PROXY_ACTIVE === "1") {
+      await runTransparentPassthrough(cwd, cli, args, "nested");
+      return;
+    }
+
+    // Update-family ops (`claude update` / `claude --update` / install /
+    // migrate-installer) must never be proxied even at top level: the native
+    // updater owns its own children and needs to replace the running claude exe.
+    if (isUpdateInvocation(args)) {
+      await runTransparentPassthrough(cwd, cli, args, "update");
+      return;
+    }
+
+    // Native subcommands like `claude review` bypass Evo entirely.
     if (args.length > 0 && PASSTHROUGH_SUBCOMMANDS.has(args[0].toLowerCase())) {
-      const originalCommand = resolveOriginalCommand(cwd, cli);
-      if (!originalCommand) {
-        cliResolveLog.error("could not resolve original CLI", {
-          cli,
-          message: `no live ${cli} install on PATH after excluding evo shim`,
-        });
-        process.stderr.write(formatMissingOriginalCommandMessage(cli));
-        process.exitCode = 1;
-        return;
-      }
-      const ext = path.extname(originalCommand).toLowerCase();
-      const needsShell = ext === ".cmd" || ext === ".bat";
-      const child = needsShell
-        ? spawn(`"${originalCommand}" ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`, {
-            cwd,
-            shell: true,
-            stdio: "inherit",
-            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-          })
-        : spawn(originalCommand, args, {
-            cwd,
-            stdio: "inherit",
-            env: { ...process.env, EVO_PROXY_ACTIVE: "1" },
-          });
-      const code = await new Promise<number>((resolve) => {
-        child.on("error", () => resolve(1));
-        child.on("close", (c) => resolve(c ?? 1));
-      });
-      if (code !== 0) {
-        cliPassthroughLog.warn("passthrough exited non-zero", {
-          cli,
-          exitCode: code,
-          // Log only first arg (subcommand name) — never full content/prompt body.
-          args: args[0],
-        });
-      }
-      // Best-effort: patch existing live-state files so observers see the
-      // passthrough exit code. Never CREATE files here.
-      patchLiveStateOnPassthroughExit(cwd, code, args[0] ?? "");
-      // Force exit with the child's code, consistent with the proxied branch.
-      process.exit(code);
+      await runTransparentPassthrough(cwd, cli, args, "subcommand");
+      return;
+    }
+
+    // Wrapper self-health-check (never silent again). Before we hand the
+    // terminal to the tracked proxy — which loads the native addons and opens
+    // the DB — verify the wrapper can actually run: bundle present, native
+    // runtime closure present, natives loadable. On failure, print ONE clear
+    // warning and run the real claude directly, so a broken Evo install can
+    // never leave the user without claude (nor crash/hang silently). The
+    // generated shim does a cheap file-presence check too; this additionally
+    // catches present-but-unloadable natives (ABI mismatch, corrupt .node) that
+    // a file check cannot see, because native loading is now lazy.
+    const health = quickHealthReport();
+    // Record the result to the inspectable self-check state file so `evo doctor`
+    // can surface it later (written on both healthy and failed startups so the
+    // record always reflects the latest reality). Best-effort; never throws.
+    writeSelfCheckState(health);
+    if (!health.ok) {
+      const failed = health.checks.filter((c) => !c.ok);
+      const summary = failed.map((c) => `${c.name}: ${c.detail ?? "failed"}`).join("; ");
+      cliResolveLog.error("wrapper self-check failed; falling back to real claude", { summary });
+      // User-facing warning. Kept ASCII/English (single line) for parity across
+      // every Windows console codepage — on a legacy chcp-932 console UTF-8 bytes
+      // would mojibake, so the actionable content must not depend on the terminal
+      // being UTF-8. The generated shim-level fallback is ASCII for the same
+      // reason. (The failing-module name in `summary` makes it self-explanatory.)
+      process.stderr.write(
+        `evo: wrapper self-check failed (${summary}); running claude directly. ` +
+          `See 'evo doctor'; set EVO_PROXY_ACTIVE=1 to bypass.\n`,
+      );
+      await runTransparentPassthrough(cwd, cli, args, "self-check");
+      return;
     }
 
     const config = ensureEvoConfig(cwd);
@@ -487,8 +601,9 @@ program
   .command("doctor")
   .description("Print a one-page health report (versions, env, file checks, recent errors, live-state freshness).")
   .option("--json", "Emit machine-readable JSON output instead of formatted text")
+  .option("--quick", "Fast self-check only (bundle, native deps, native load, claude resolvable); exits 1 on any failure")
   .option("--cwd <dir>", "Working dir to resolve .evo/ state from", process.cwd())
-  .action(async (options: { json?: boolean; cwd?: string }) => {
+  .action(async (options: { json?: boolean; quick?: boolean; cwd?: string }) => {
     await runDoctor(options);
   });
 
@@ -504,6 +619,14 @@ program
   .description("Render EvoPet portion of the Claude Code statusline (reads JSON from stdin).")
   .action(async () => {
     await runStatuslineCommand();
+  });
+
+program
+  .command("advice")
+  .description("Print the full EvoPet advice (untruncated) for the most recently active session in this directory.")
+  .option("--cwd <path>", "Project directory that owns the .evo live-state.", process.cwd())
+  .action((options: Record<string, unknown>) => {
+    runAdviceCommand({ cwd: String(options.cwd) });
   });
 
 program
@@ -583,6 +706,14 @@ program.parseAsync(process.argv).catch((error: unknown) => {
       message,
     });
   }
+  // Capture the full stack + any error code (e.g. SQLITE_BUSY and its failing
+  // statement) at debug so DB and other failures are diagnosable — the console
+  // still shows only the message.
+  getLogger().child("cli").debug("command failed", {
+    message,
+    code: (error as NodeJS.ErrnoException).code,
+    stack: error instanceof Error ? error.stack : undefined,
+  });
   console.error(message);
   process.exitCode = 1;
 });

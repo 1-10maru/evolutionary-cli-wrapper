@@ -2,10 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
+import { quickHealthReport, readSelfCheckState, type HealthCheck, type HealthReport } from "../health";
+import { isTempResidentTarget } from "../shellIntegration";
 
 export interface DoctorOptions {
   json?: boolean;
   cwd?: string;
+  quick?: boolean;
 }
 
 interface VersionInfo {
@@ -43,6 +46,14 @@ interface LiveStateInfo {
   raw?: Record<string, unknown>;
 }
 
+interface SelfCheckInfo {
+  found: boolean;
+  ok?: boolean;
+  at?: number;
+  ageSeconds?: number;
+  failed?: string[];
+}
+
 export interface DoctorReport {
   versions: VersionInfo;
   env: EnvVarEntry[];
@@ -50,6 +61,7 @@ export interface DoctorReport {
   recentLogs: LogSummary;
   errorSummary: { errors24h: number; warns24h: number };
   liveState: LiveStateInfo;
+  selfCheck: SelfCheckInfo;
   criticalIssues: string[];
 }
 
@@ -295,10 +307,28 @@ function collectLiveState(cwd: string): LiveStateInfo {
   }
 }
 
+// ── Self-check state (written by the proxy path) ───────────────────────────
+
+function collectSelfCheck(): SelfCheckInfo {
+  const state = readSelfCheckState();
+  if (!state) return { found: false };
+  const ageSeconds = typeof state.at === "number" ? Math.floor((Date.now() - state.at) / 1000) : undefined;
+  const failed = Array.isArray(state.checks)
+    ? state.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail ?? "failed"}`)
+    : [];
+  return { found: true, ok: state.ok, at: state.at, ageSeconds, failed };
+}
+
 // ── Report assembly ────────────────────────────────────────────────────────
 
 function computeCritical(report: Omit<DoctorReport, "criticalIssues">): string[] {
   const issues: string[] = [];
+  if (report.selfCheck.found && report.selfCheck.ok === false) {
+    const reasons = (report.selfCheck.failed ?? []).join("; ");
+    issues.push(
+      `Last wrapper self-check FAILED${reasons ? ` (${reasons})` : ""}: claude launched via the fallback (real CLI, no Evo). Run 'evo doctor --quick' and reinstall the affected native dependency.`,
+    );
+  }
   const shimCheck = report.files.find((f) => f.label === "evo shim on PATH");
   const evoHomeCheck = report.files.find((f) => f.label.startsWith(".evo/ (global home)"));
   const statuslineCheck = report.files.find((f) => f.label === "statusline.py");
@@ -329,9 +359,34 @@ export function buildReport(opts: DoctorOptions): DoctorReport {
     recentLogs: logs,
     errorSummary: { errors24h: logs.errorCount24h, warns24h: logs.warnCount24h },
     liveState,
+    selfCheck: collectSelfCheck(),
   };
   const criticalIssues = computeCritical(partial);
+  const tempCmd = collectResolvedCommandCritical(cwd);
+  if (tempCmd) criticalIssues.unshift(tempCmd);
   return { ...partial, criticalIssues };
+}
+
+/**
+ * Flag a resolved `claude` command that points into a temp / scratchpad tree —
+ * almost always a stale QA mock that was cached into `.evo/config.json` (and
+ * could otherwise be baked into regenerated shims, launching the mock in real
+ * terminals). Returns a Critical message, or null.
+ */
+function collectResolvedCommandCritical(cwd: string): string | null {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, ".evo", "config.json"), "utf8")) as {
+      shellIntegration?: { originalCommandMap?: { claude?: string } };
+    };
+    const claude = cfg.shellIntegration?.originalCommandMap?.claude;
+    if (!claude) return null;
+    if (isTempResidentTarget(claude)) {
+      return `Resolved 'claude' command points at a temp/scratchpad path (${claude}) — almost certainly a stale QA mock. Remove originalCommandMap.claude from .evo/config.json and run 'evo setup-shell' to re-resolve the real claude.`;
+    }
+  } catch {
+    // no config / unreadable — nothing to flag
+  }
+  return null;
 }
 
 // ── Text rendering ─────────────────────────────────────────────────────────
@@ -424,6 +479,25 @@ function renderText(report: DoctorReport): string {
   }
   lines.push("");
 
+  // Self-check (last wrapper startup self-check result)
+  lines.push(bold("Wrapper Self-check (last startup)"));
+  lines.push(sep);
+  if (!report.selfCheck.found) {
+    lines.push(`  ${pad("status", 10)} ${dim("no record yet (proxy not run since install)")}`);
+  } else {
+    const age = report.selfCheck.ageSeconds;
+    const ageStr = age !== undefined ? `${age}s ago` : "(unknown)";
+    if (report.selfCheck.ok) {
+      lines.push(`  ${pad("status", 10)} ${green("ok")} ${dim(ageStr)}`);
+    } else {
+      lines.push(`  ${pad("status", 10)} ${red("FAILED")} ${dim(ageStr)}`);
+      for (const reason of report.selfCheck.failed ?? []) {
+        lines.push(`  ${red("!")} ${reason}`);
+      }
+    }
+  }
+  lines.push("");
+
   // Critical
   if (report.criticalIssues.length > 0) {
     lines.push(bold("⚠ Critical Issues"));
@@ -440,7 +514,77 @@ function renderText(report: DoctorReport): string {
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
+// ── Quick health check (evo doctor --quick) ────────────────────────────────
+
+/**
+ * The same fast self-check the wrapper runs at proxy startup: bundle present,
+ * native runtime closure present, natives loadable, and the real (wrapped) CLI
+ * resolvable ("proxy round-trip"). No log scanning, no disk writes. Exits 0 when
+ * healthy, 1 when any check fails — usable as a fast release/CI preflight and by
+ * users to diagnose a broken wrapper.
+ */
+function buildQuickReport(cwd: string): HealthReport {
+  const report = quickHealthReport();
+  const checks: HealthCheck[] = [...report.checks];
+
+  // Proxy round-trip: can we resolve the real claude the proxy would wrap?
+  // Resolution is pure-JS (a `where`/PATH probe), so it runs even when the
+  // native addons are broken.
+  let claudeCheck: HealthCheck;
+  try {
+    // Lazy require so a load failure here cannot break the rest of the report.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resolveOriginalCommand } = require("../shellIntegration") as typeof import("../shellIntegration");
+    const resolved = resolveOriginalCommand(cwd, "claude");
+    claudeCheck = resolved
+      ? { name: "claude-resolve", ok: true, detail: resolved }
+      : { name: "claude-resolve", ok: false, detail: "no live claude found on PATH" };
+  } catch (err) {
+    claudeCheck = {
+      name: "claude-resolve",
+      ok: false,
+      detail: err instanceof Error ? err.message.split("\n")[0] : String(err),
+    };
+  }
+  checks.push(claudeCheck);
+
+  return { ok: checks.every((c) => c.ok), checks };
+}
+
+function renderQuickText(report: HealthReport): string {
+  const lines: string[] = [];
+  lines.push(bold("── evo doctor --quick ──────────────────────────────────────"));
+  const width = Math.max(...report.checks.map((c) => c.name.length)) + 2;
+  for (const c of report.checks) {
+    const sym = c.ok ? green("✓") : red("✗");
+    const detail = c.detail ? dim(c.detail) : "";
+    lines.push(`  ${sym} ${pad(c.name, width)} ${detail}`);
+  }
+  lines.push(report.ok ? green("PASS") : red("FAIL"));
+  return lines.join("\n");
+}
+
+async function runQuickDoctor(opts: DoctorOptions): Promise<void> {
+  const cwd = opts.cwd ?? process.cwd();
+  const report = buildQuickReport(cwd);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  } else {
+    process.stdout.write(renderQuickText(report) + "\n");
+  }
+
+  if (!report.ok) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runDoctor(opts: DoctorOptions): Promise<void> {
+  if (opts.quick) {
+    await runQuickDoctor(opts);
+    return;
+  }
+
   const report = buildReport(opts);
 
   if (opts.json) {

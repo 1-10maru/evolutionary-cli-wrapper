@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { ensureEvoConfig, updateEvoConfig } from "../src/config";
 import { EvoDatabase } from "../src/db";
 import { runProxySession, shouldUseLightweightTracking } from "../src/proxyRuntime";
+import { disposeNodeAsClaude, nodeAsClaude } from "./fixtures/nodeAsClaude";
+
+afterAll(() => disposeNodeAsClaude());
 
 const tempDirs: string[] = [];
 
@@ -58,7 +61,7 @@ describe("proxy runtime", () => {
         ...config.shellIntegration,
         originalCommandMap: {
           ...config.shellIntegration.originalCommandMap,
-          claude: process.execPath,
+          claude: nodeAsClaude(),
         },
       },
       proxy: {
@@ -110,7 +113,7 @@ describe("proxy runtime", () => {
         ...config.shellIntegration,
         originalCommandMap: {
           ...config.shellIntegration.originalCommandMap,
-          claude: process.execPath,
+          claude: nodeAsClaude(),
         },
       },
       proxy: {
@@ -155,7 +158,7 @@ describe("proxy runtime", () => {
         ...config.shellIntegration,
         originalCommandMap: {
           ...config.shellIntegration.originalCommandMap,
-          claude: process.execPath,
+          claude: nodeAsClaude(),
         },
       },
       proxy: { ...config.proxy, turnIdleMs: 50, defaultMode: "active" },
