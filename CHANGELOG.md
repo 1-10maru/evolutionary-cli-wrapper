@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+### Fixed
+- CLI **output** text captured into tool-lifecycle and adapter events is now secret-masked before it is stored in the local database. Previously the ≤300-char output-line snippets in `episode_events.details_json` (tool call/edit/approval/retry/recovery events, search/log/test/build detections) and the command output previews of verification runs were persisted raw — CLI output can echo a pasted token/key. Detection still runs on the raw line; only the persisted snippet is masked.
+- `evo install-statusline` no longer overwrites an existing **wrapper-based** statusline setup. If your `statusLine.command` runs a wrapper (or `evo statusline`) — the split "token-only base + `evo statusline`" construction that `npm run setup` deploys — the installer now prints a one-line notice and leaves your wiring untouched, instead of deploying the full renderer on top of a token-only base (which would render EvoPet twice).
+
+### Internal
+- Documented the risk-tiered release-gate policy in `docs/RELEASE_PROCESS.md` (Tier 1 docs/test → CI + self-check; Tier 2 minor behavior → one review + targeted matrix + diff-verify promotion; Tier 3 startup/native/major-deps → full ceremony), plus the RC-OIDC hard gate and the direct implementer⇄reviewer/QA handoff.
+
 ## v3.6.6 (2026-07-18)
 
 _Patch release promoted from `v3.6.6-rc.1`. Follow-ups to the 3.6.5 secret-masking work: the `evo run` path now honors `capture.promptText`, the `sk-…` secret pattern is tightened, the secret-masking behavioral gates are adopted into the QA suite, and a flaky Windows CI test is stabilized._

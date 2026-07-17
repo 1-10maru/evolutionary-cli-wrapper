@@ -46,11 +46,15 @@ if (shellSetup.status !== 0) {
 
 // Deploy the TOKEN-ONLY statusline to ~/.claude/base_statusline.py.
 //
-// base_statusline.py must render ONLY the model/context/cwd line. The EvoPet
-// block is rendered separately by `evo statusline`. A statusline wrapper runs
-// both on the same stdin, so deploying the FULL repo statusline.py here (which
-// also renders EvoPet) produced two EvoPet blocks. Deploy the token-only
-// script instead.
+// This is the DEV / hand-built "wrapper" statusline construction (one of two —
+// the other is the end-user single-file installer `evo install-statusline`,
+// which deploys the full renderer instead; see src/cli/installStatusline.ts).
+// Here base_statusline.py must render ONLY the model/context/cwd line. The
+// EvoPet block is rendered separately by `evo statusline`, and a statusline
+// wrapper runs both on the same stdin — so deploying the FULL repo statusline.py
+// here (which also renders EvoPet) would produce two EvoPet blocks. Deploy the
+// token-only script instead. (`evo install-statusline` detects and refuses to
+// clobber this wrapper setup, so the two constructions never collide.)
 const statuslineSrc = path.join(projectRoot, "scripts", "token_statusline.py");
 const claudeDir = path.join(os.homedir(), ".claude");
 const statuslineDst = path.join(claudeDir, "base_statusline.py");

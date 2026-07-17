@@ -178,3 +178,93 @@ describe("install-statusline", () => {
     expect(json.statusLine.command).toBe("ccusage");
   });
 });
+
+describe("install-statusline — wrapper construction guard (A2)", () => {
+  it("detects an existing wrapper construction and does NOT overwrite it", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // Simulate a hand-built wrapper setup: a token-only base + a wrapper command.
+    const base = path.join(claudeDir, "base_statusline.py");
+    fs.writeFileSync(base, "# token-only base placeholder\n");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          statusLine: { type: "command", command: "bash ~/.claude/scripts/statusline-wrapper.sh" },
+          keepThis: "yes",
+        },
+        null,
+        2,
+      ),
+    );
+    const baseBefore = fs.readFileSync(base, "utf8");
+    const settingsBefore = fs.readFileSync(settingsPath, "utf8");
+    const messages: string[] = [];
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: (m) => messages.push(m),
+    });
+
+    expect(result.noop).toBe(true);
+    expect(result.settingsUpdated).toBe(false);
+    // The token-only base and the wrapper wiring are left byte-for-byte intact.
+    expect(fs.readFileSync(base, "utf8")).toBe(baseBefore);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(settingsBefore);
+    expect(messages.join("\n")).toMatch(/wrapper/i);
+  });
+
+  it("also detects an `evo statusline` wrapper command", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify(
+        { statusLine: { type: "command", command: "python base.py | evo statusline" } },
+        null,
+        2,
+      ),
+    );
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+    expect(result.noop).toBe(true);
+    expect(result.settingsUpdated).toBe(false);
+    // No base_statusline.py was deployed (the guard skipped before the copy).
+    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(false);
+  });
+
+  it("proceeds normally when the existing command is NOT a wrapper", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // A plain single-file command (not a wrapper) — the installer should deploy.
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify(
+        { statusLine: { type: "command", command: 'python "~/.claude/base_statusline.py"' } },
+        null,
+        2,
+      ),
+    );
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+
+    expect(result.noop).toBeUndefined();
+    expect(result.settingsUpdated).toBe(true);
+    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(true);
+  });
+});

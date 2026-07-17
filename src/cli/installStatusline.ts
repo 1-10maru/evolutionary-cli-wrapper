@@ -1,3 +1,16 @@
+// `evo install-statusline` — the END-USER, single-file statusline installer.
+//
+// It deploys the FULL `statusline.py` (token line + EvoPet) to
+// `~/.claude/base_statusline.py` and points settings.json at it directly. This
+// is one of two supported constructions:
+//   • single-file (THIS command): full renderer, no wrapper. For end users who
+//     just want EvoPet in their statusline.
+//   • split "wrapper": a TOKEN-ONLY base + `evo statusline`, joined by a wrapper
+//     script. Deployed by `npm run setup` for the dev / hand-built setup.
+// The two must not clobber each other: this command DETECTS an existing wrapper
+// construction (see looksLikeWrapperConstruction) and refuses to overwrite it,
+// so a full renderer is never stacked on top of a token-only base (which would
+// render EvoPet twice).
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -94,6 +107,36 @@ function looksLikeEvopetCommand(command: unknown): boolean {
   return /base_statusline\.py/i.test(command);
 }
 
+// The EvoPet statusline can be deployed two ways, for two audiences:
+//   • single-file renderer (what THIS command installs): the full `statusline.py`
+//     copied to `~/.claude/base_statusline.py`, invoked directly by settings.json.
+//   • split "wrapper" construction (what `npm run setup` / a hand-built dev setup
+//     uses): a TOKEN-ONLY base + `evo statusline`, joined by a wrapper script so
+//     the token line and the EvoPet block render on the same stdin.
+// `evo install-statusline` only owns the single-file path. If it detected the
+// wrapper construction and deployed the full renderer over the token-only base,
+// EvoPet would render twice (once from the full base, once from `evo statusline`).
+// So we detect an existing wrapper setup and refuse to clobber it.
+function looksLikeWrapperConstruction(command: unknown): boolean {
+  if (typeof command !== "string") return false;
+  return /statusline-wrapper|evo\s+statusline/i.test(command);
+}
+
+/** Peek `statusLine.command` from settings.json; undefined if absent/unparseable. */
+function readStatusLineCommand(settingsPath: string): unknown {
+  try {
+    if (!fs.existsSync(settingsPath)) return undefined;
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    if (!raw.trim()) return undefined;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const sl = parsed.statusLine;
+    return sl && typeof sl === "object" ? (sl as Record<string, unknown>).command : undefined;
+  } catch {
+    // Unparseable settings — let the normal flow surface the JSON error later.
+    return undefined;
+  }
+}
+
 export async function runInstallStatusline(
   options: InstallStatuslineOptions = {},
 ): Promise<{
@@ -115,6 +158,20 @@ export async function runInstallStatusline(
     throw new Error(
       `statusline.py not found at ${paths.statuslineSrc}. Reinstall the evolutionary-cli-wrapper package.`,
     );
+  }
+
+  // A2: never clobber a hand-built / setup-deployed WRAPPER construction. If the
+  // current statusLine.command runs a wrapper (or `evo statusline`), the base is
+  // token-only and deploying the full renderer would double-render EvoPet — so
+  // skip entirely and leave the user's wiring untouched.
+  const existingCommand = readStatusLineCommand(paths.settingsPath);
+  if (looksLikeWrapperConstruction(existingCommand)) {
+    log(
+      "Detected an existing wrapper-based statusline (statusLine.command runs a " +
+        "wrapper / `evo statusline`). Leaving it untouched — `evo install-statusline` " +
+        "manages only the single-file renderer and will not overwrite a wrapper setup.",
+    );
+    return { settingsUpdated: false, noop: true };
   }
 
   if (!options.yes) {
