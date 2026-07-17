@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { quickHealthReport, readSelfCheckState, type HealthCheck, type HealthReport } from "../health";
+import { isTempResidentTarget } from "../shellIntegration";
 
 export interface DoctorOptions {
   json?: boolean;
@@ -361,7 +362,31 @@ export function buildReport(opts: DoctorOptions): DoctorReport {
     selfCheck: collectSelfCheck(),
   };
   const criticalIssues = computeCritical(partial);
+  const tempCmd = collectResolvedCommandCritical(cwd);
+  if (tempCmd) criticalIssues.unshift(tempCmd);
   return { ...partial, criticalIssues };
+}
+
+/**
+ * Flag a resolved `claude` command that points into a temp / scratchpad tree —
+ * almost always a stale QA mock that was cached into `.evo/config.json` (and
+ * could otherwise be baked into regenerated shims, launching the mock in real
+ * terminals). Returns a Critical message, or null.
+ */
+function collectResolvedCommandCritical(cwd: string): string | null {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, ".evo", "config.json"), "utf8")) as {
+      shellIntegration?: { originalCommandMap?: { claude?: string } };
+    };
+    const claude = cfg.shellIntegration?.originalCommandMap?.claude;
+    if (!claude) return null;
+    if (isTempResidentTarget(claude)) {
+      return `Resolved 'claude' command points at a temp/scratchpad path (${claude}) — almost certainly a stale QA mock. Remove originalCommandMap.claude from .evo/config.json and run 'evo setup-shell' to re-resolve the real claude.`;
+    }
+  } catch {
+    // no config / unreadable — nothing to flag
+  }
+  return null;
 }
 
 // ── Text rendering ─────────────────────────────────────────────────────────

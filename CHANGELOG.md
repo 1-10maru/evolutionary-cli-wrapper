@@ -5,10 +5,17 @@
 ## Unreleased
 
 ### Added
+- `evo doctor` now flags a `claude` command that resolves into a temp/scratchpad path (almost always a stale QA mock) as a **critical issue**, and tells you exactly how to fix it.
 
 ### Changed
+- The wrapper now **refuses to use or persist** a `claude` resolved under a temp/scratchpad path, so a stray mock can never be cached into your config or baked into regenerated shims.
+- The self-check warning is clearer and safer: it **names the specific broken component** (e.g. the exact tree-sitter grammar), and leads with an ASCII, always-readable message — so it stays legible even on a legacy Windows console — with the Japanese sentence appended.
+- The self-check state is now written under the project's own `.evo/` directory (honoring `EVO_HOME`) instead of your global `~/.claude`, so a normal launch no longer writes into `~/.claude`.
 
 ### Fixed
+
+### Internal
+- Added unit tests for self-check state persistence, `EVO_HOME` resolution, `evo doctor` rendering, and the temp-resident-target guard; updated the behavioral harness to match; added a QA discipline rule (isolated cwd/EVO/HOME for real-integration runs, quote the real claude version line in release verifications).
 
 ## v3.6.3 (2026-07-17)
 

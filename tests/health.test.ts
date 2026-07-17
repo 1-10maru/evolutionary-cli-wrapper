@@ -9,11 +9,17 @@ import {
   checkNativeClosurePresent,
   checkNativesLoadable,
   quickHealthReport,
+  readSelfCheckState,
+  selfCheckStatePath,
+  writeSelfCheckState,
 } from "../src/health";
 
 const tempDirs: string[] = [];
+const savedEvoHome = process.env.EVO_HOME;
 
 afterEach(() => {
+  if (savedEvoHome === undefined) delete process.env.EVO_HOME;
+  else process.env.EVO_HOME = savedEvoHome;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
@@ -114,5 +120,41 @@ describe("quickHealthReport", () => {
     expect(report.checks.map((c) => c.name)).toEqual(["bundle", "native-deps", "native-load"]);
     // bundle + native-deps deterministically ok; native-load ok in test env.
     expect(report.ok).toBe(true);
+  });
+});
+
+describe("selfCheckStatePath / persistence", () => {
+  it("honors EVO_HOME (writes under <EVO_HOME>/.evo/, not the real ~/.claude)", () => {
+    const root = makeRoot();
+    process.env.EVO_HOME = root;
+    const p = selfCheckStatePath();
+    expect(p).toBe(path.join(root, ".evo", ".evo-selfcheck.json"));
+    // must NOT be under the real home
+    expect(p.startsWith(path.join(os.homedir(), ".claude"))).toBe(false);
+  });
+
+  it("falls back to ~/.claude when EVO_HOME is unset", () => {
+    delete process.env.EVO_HOME;
+    expect(selfCheckStatePath()).toBe(path.join(os.homedir(), ".claude", ".evo-selfcheck.json"));
+  });
+
+  it("write/read roundtrips the report + a timestamp, atomically", () => {
+    const root = makeRoot();
+    process.env.EVO_HOME = root;
+    writeSelfCheckState({ ok: false, checks: [{ name: "native-load", ok: false, detail: "tree-sitter-python: broken" }] });
+    const state = readSelfCheckState();
+    expect(state).not.toBeNull();
+    expect(state!.ok).toBe(false);
+    expect(state!.checks[0].name).toBe("native-load");
+    expect(state!.checks[0].detail).toContain("tree-sitter-python");
+    expect(typeof state!.at).toBe("number");
+    // no leftover tmp file
+    expect(fs.existsSync(selfCheckStatePath() + ".tmp")).toBe(false);
+  });
+
+  it("readSelfCheckState returns null when absent", () => {
+    const root = makeRoot();
+    process.env.EVO_HOME = root;
+    expect(readSelfCheckState()).toBeNull();
   });
 });

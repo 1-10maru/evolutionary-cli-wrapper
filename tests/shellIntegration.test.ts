@@ -8,6 +8,7 @@ import {
   createProxyShims,
   followShimToExe,
   getShellStatus,
+  isTempResidentTarget,
   isUsableCommandCandidate,
   resolveOriginalCommand,
   setupShellIntegration,
@@ -591,5 +592,40 @@ describe("resolveOriginalCommand — interpreter denylist + positive constraint"
     const nodeExe = path.join(cwd, "node.exe");
     writeFile(nodeExe, "MZ node");
     expect(isUsableCommandCandidate(nodeExe)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isTempResidentTarget — a resolved command under a temp/scratchpad tree must
+// never be accepted/persisted as the wrapped CLI (stale QA-mock guard).
+// ---------------------------------------------------------------------------
+describe("isTempResidentTarget", () => {
+  it("flags a path under os.tmpdir()", () => {
+    const p = path.join(os.tmpdir(), "claude", "scratch", "fixtures", "mock", "cmd", "claude.cmd");
+    expect(isTempResidentTarget(p)).toBe(true);
+  });
+
+  it("flags any path with a scratchpad segment", () => {
+    expect(isTempResidentTarget("D:/work/scratchpad/qa6/claude.cmd")).toBe(true);
+    expect(isTempResidentTarget(["D:", "work", "scratchpad", "qa6", "claude.cmd"].join(path.sep))).toBe(true);
+  });
+
+  it("does NOT flag a normal npm-global / node_modules claude, nor a plain temp fixture", () => {
+    expect(isTempResidentTarget(["C:", "Users", "me", "AppData", "Roaming", "npm", "node_modules", "claude-code", "bin", "claude.exe"].join(path.sep))).toBe(false);
+    expect(isTempResidentTarget("/usr/local/bin/claude")).toBe(false);
+    // legitimate integration-test fixtures live directly under os.tmpdir() (no
+    // scratchpad, not the claude-agent temp root) — must NOT be flagged.
+    expect(isTempResidentTarget(path.join(os.tmpdir(), "evo-proxy-abc", "claude.cmd"))).toBe(false);
+  });
+
+  it("isUsableCommandCandidate rejects an existing scratchpad-resident file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evo-scratchpad-"));
+    tempDirs.push(dir);
+    const scratchDir = path.join(dir, "scratchpad", "qa");
+    fs.mkdirSync(scratchDir, { recursive: true });
+    const p = path.join(scratchDir, "claude.cmd");
+    fs.writeFileSync(p, "@echo off\r\n");
+    // exists + spawnable, but scratchpad-resident -> not usable
+    expect(isUsableCommandCandidate(p)).toBe(false);
   });
 });

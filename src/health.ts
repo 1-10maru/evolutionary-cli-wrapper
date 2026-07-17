@@ -101,24 +101,36 @@ export function checkNativesLoadable(): HealthCheck {
   } catch (err) {
     return { name: "native-load", ok: false, detail: `better-sqlite3: ${errMsg(err)}` };
   }
+  let parser: { setLanguage(g: unknown): void };
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Parser = require("tree-sitter");
-    const parser = new Parser();
-    // Load AND bind every grammar the AST diff can use (episodeLifecycle drives
-    // js/ts/tsx/python). A grammar whose native binding is present-but-broken only
-    // throws on setLanguage, so checking javascript alone would pass self-check
-    // and then crash mid-session on the first python/typescript file.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    parser.setLanguage(require("tree-sitter-javascript"));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    parser.setLanguage(require("tree-sitter-python"));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const TypeScript = require("tree-sitter-typescript");
-    parser.setLanguage(TypeScript.typescript);
-    parser.setLanguage(TypeScript.tsx);
+    parser = new Parser();
   } catch (err) {
     return { name: "native-load", ok: false, detail: `tree-sitter: ${errMsg(err)}` };
+  }
+  // Load AND bind every grammar the AST diff can use (episodeLifecycle drives
+  // js/ts/tsx/python). A grammar whose native binding is present-but-broken only
+  // throws on setLanguage, so checking javascript alone would pass self-check and
+  // then crash mid-session on the first file of that language. Each grammar is
+  // loaded in its OWN try/catch so the warning NAMES the failing grammar rather
+  // than a generic "tree-sitter".
+  const grammars: Array<[string, () => unknown]> = [
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ["tree-sitter-javascript", () => require("tree-sitter-javascript")],
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ["tree-sitter-python", () => require("tree-sitter-python")],
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ["tree-sitter-typescript (ts)", () => require("tree-sitter-typescript").typescript],
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ["tree-sitter-typescript (tsx)", () => require("tree-sitter-typescript").tsx],
+  ];
+  for (const [name, load] of grammars) {
+    try {
+      parser.setLanguage(load());
+    } catch (err) {
+      return { name: "native-load", ok: false, detail: `${name}: ${errMsg(err)}` };
+    }
   }
   return { name: "native-load", ok: true };
 }
@@ -138,8 +150,11 @@ export function quickHealthReport(root: string = getEvoRoot()): HealthReport {
 // ── Inspectable self-check state ───────────────────────────────────────────
 //
 // So a broken wrapper is never silent AND the reason is inspectable later: the
-// proxy path records its last self-check result to a small global JSON file that
-// `evo doctor` surfaces. Lives next to the live-state file under ~/.claude.
+// proxy path records its last self-check result to a small JSON file that
+// `evo doctor` surfaces. When EVO_HOME is set (the proxy always sets it), the
+// file lives under `<EVO_HOME>/.evo/` — the project's own gitignored Evo dir —
+// so a normal launch never writes into the user's real `~/.claude`. Falls back
+// to `~/.claude` only when EVO_HOME is unset.
 
 export interface SelfCheckState extends HealthReport {
   /** epoch ms when the self-check ran */
@@ -147,6 +162,8 @@ export interface SelfCheckState extends HealthReport {
 }
 
 export function selfCheckStatePath(): string {
+  const evoHome = process.env.EVO_HOME;
+  if (evoHome) return path.join(evoHome, ".evo", ".evo-selfcheck.json");
   return path.join(os.homedir(), ".claude", ".evo-selfcheck.json");
 }
 
