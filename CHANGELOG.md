@@ -10,6 +10,16 @@
 
 ### Fixed
 
+## v3.6.3 (2026-07-17)
+
+_Patch release promoted from `v3.6.3-rc.1`. Hardens the wrapper self-check added in 3.6.2: it now checks that every code parser (JavaScript, Python, and TypeScript) actually loads, so a broken parser is caught at startup and the wrapper falls back to the real `claude`, instead of the problem only surfacing later on the first file of that language._
+
+### Changed
+- The startup self-check (and `evo doctor --quick`) now verifies that **all** of the code parsers load — JavaScript, Python, and TypeScript — not just JavaScript. A parser whose native component is present but broken is now caught up front (and triggers the safe fallback to the real `claude`) instead of only failing later, on the first file of that language.
+
+### Internal
+- Hardened the native-dependency drift-guard test to derive the set it exercises from the addon list, so a newly added native addon is covered automatically and the checked list can't quietly go stale. Added a repository rule against rebuilding the released bundle from a feature branch.
+
 ## v3.6.3-rc.1 (2026-07-17)
 
 ### Changed
