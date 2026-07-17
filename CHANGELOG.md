@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+## v3.6.5 (2026-07-18)
+
+_Patch release promoted from `v3.6.5-rc.1`. Privacy + hygiene: prompt/output text stored in the local tracking database is secret-masked before write (across every persisted text site), startup sweeps orphaned atomic-write temp files, and the v3.6.0 `SQLITE_BUSY` notes are consolidated into one narrative._
+
+### Changed
+- Prompt/output text stored in the local tracking database is now **secret-masked** before it is written. In addition to `KEY=…`/`"KEY":"…"` assignment values (token/key/secret/password names), standalone credential shapes pasted into a prompt are masked too — AWS `AKIA…`/`ASIA…` access keys, GitHub `ghp_…`/`gho_…` tokens, `sk-…` (and `sk-ant-…`) API keys, Google `AIza…` keys, Slack `xox…` tokens, `Bearer …` headers, and PEM private-key blocks — each replaced with `[REDACTED]`. This covers every persisted text site (turn input/previews, episode and prompt-profile previews, and the prompt-submitted event). The sha256 and length recorded for dedupe/metrics are still computed over the **raw** input, so masking does not change measurement. The redaction patterns are now shared with `evo logs --bundle` (single source in `src/redact.ts`).
+
+### Fixed
+- Startup now sweeps orphaned atomic-write temp files — `*.tmp.<pid>.<ts>.<rand>` left behind when a process is killed between the temp write and the rename — from `<cwd>/.evo/` and `.evo/sessions/`, alongside the existing stale per-session GC. Only files matching that exact temp shape and older than an hour are removed; the sweep is best-effort and never blocks startup.
+
+### Internal
+- Consolidated the three overlapping `SQLITE_BUSY` bullets in the v3.6.0 changelog notes into a single three-tier narrative (`busy_timeout` for ordinary contention → `IMMEDIATE` transactions for upgrade-deadlocks → first-open WAL-switch retry). Documentation only — no behavior change.
+
 ## v3.6.5-rc.1 (2026-07-18)
 
 ### Changed
