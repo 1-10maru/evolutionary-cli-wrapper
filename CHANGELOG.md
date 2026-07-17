@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+## v3.6.6-rc.0 (2026-07-18)
+
+### Internal
+- CI: bumped `actions/setup-node` (4→7) and `actions/checkout` (→7) across the workflows. This throwaway prerelease exists only to validate that npm OIDC Trusted Publishing still works on `setup-node@v7` before any stable release relies on it — no runtime changes.
+
 ## v3.6.5 (2026-07-18)
 
 _Patch release promoted from `v3.6.5-rc.1`. Privacy + hygiene: prompt/output text stored in the local tracking database is secret-masked before write (across every persisted text site), startup sweeps orphaned atomic-write temp files, and the v3.6.0 `SQLITE_BUSY` notes are consolidated into one narrative._
