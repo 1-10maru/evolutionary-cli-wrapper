@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## v3.6.8-rc.1 (2026-07-18)
+
 ### Changed
 - Dependency bumps: `commander` 14 → 15 (the CLI argument-parsing library — major version) and `better-sqlite3` 12.9 → 12.11 (the native SQLite driver). No user-facing behavior change intended; the CLI surface and DB layer are unchanged.
 
