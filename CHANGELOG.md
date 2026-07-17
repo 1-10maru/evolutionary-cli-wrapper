@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## v3.6.6-rc.1 (2026-07-18)
+
 ### Fixed
 - The `evo run` path now honors `capture.promptText`: when prompt-text capture is disabled, the prompt-submitted event no longer stores a preview of your prompt in the local database (it previously persisted one unconditionally, bypassing the privacy flag). When enabled, the preview stays secret-masked.
 
