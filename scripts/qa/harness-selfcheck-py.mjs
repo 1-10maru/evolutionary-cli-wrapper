@@ -13,22 +13,24 @@ const WORK = resolveWork();
 const P = paths(WORK);
 const BROKEN_PY = P.brokenPy;
 const HEALTHY = P.build;
-const FAKE_SELFCHECK = path.join(P.fakehome, ".claude", ".evo-selfcheck.json");
 const REAL_SELFCHECK = realSelfcheckPath();
 const results = [];
 const rec = makeRecorder(results);
 
+// Self-check state honors EVO_HOME → written under <EVO_HOME>/.evo/, per-run.
+const selfcheckIn = (evoHome) => path.join(evoHome, ".evo", ".evo-selfcheck.json");
+
 function proxy(root, args, extra = {}) {
   return new Promise((res) => {
-    const runDir = path.join(P.run, "h5", path.basename(root) + "-" + Date.now());
+    const runDir = path.join(P.run, "h5", path.basename(root) + "-" + Date.now() + "-" + Math.random().toString(36).slice(2));
     fs.rmSync(runDir, { recursive: true, force: true });
     fs.mkdirSync(runDir, { recursive: true });
     const c = spawn(process.execPath, [bundleOf(root), "proxy", "--cli", "claude", "--", ...args], { env: envFor(WORK, runDir, extra), cwd: runDir, stdio: ["ignore", "pipe", "pipe"] });
     const out = [], err = [];
     c.stdout.on("data", (d) => out.push(d));
     c.stderr.on("data", (d) => err.push(d));
-    c.on("close", (code) => res({ code, out: Buffer.concat(out).toString("utf8"), err: Buffer.concat(err).toString("utf8") }));
-    c.on("error", (e) => res({ code: -1, out: "", err: String(e) }));
+    c.on("close", (code) => res({ code, out: Buffer.concat(out).toString("utf8"), err: Buffer.concat(err).toString("utf8"), runDir }));
+    c.on("error", (e) => res({ code: -1, out: "", err: String(e), runDir }));
   });
 }
 function doctorQuick(root) {
@@ -44,19 +46,18 @@ const countNodeFiles = (dir) => { let n = 0; const walk = (d) => { for (const e 
   fs.mkdirSync(P.results, { recursive: true });
   console.log(`harness-selfcheck-py — broken-py python .node left=${countNodeFiles(path.join(BROKEN_PY, "node_modules", "tree-sitter-python"))}; py-dir present=${fs.existsSync(path.join(BROKEN_PY, "node_modules", "tree-sitter-python"))}`);
   const realBefore = rstat(REAL_SELFCHECK);
-  fs.rmSync(FAKE_SELFCHECK, { force: true });
 
   // H5a: broken-python proxy → single warning line + exec mock, exit 0.
   const h5 = await proxy(BROKEN_PY, ["-p", "x"], { MOCK_MODE: "exit0", MOCK_TAG: "h5py" });
-  const warnLines = h5.err.split(/\r?\n/).filter((l) => /自己診断|ラッパー|素の claude/.test(l));
+  const warnLines = h5.err.split(/\r?\n/).filter((l) => /wrapper self-check failed/.test(l));
   const loadFailInWarn = /native-load/.test(h5.err) && /tree-sitter/.test(h5.err);
-  const namesPython = /python/i.test(h5.err); // observation only
+  const namesPython = /python/i.test(h5.err); // now expected: per-grammar naming
   const mockRan = /\[MOCK:h5py:exit0\]/.test(h5.out);
   rec("H5a_broken_python_caught_fallback", h5.code === 0 && warnLines.length === 1 && loadFailInWarn && mockRan ? "PASS" : "FAIL", `exit=${h5.code} warnLines=${warnLines.length} loadFailReported=${loadFailInWarn} mockRan=${mockRan}`);
   console.log(`     [H5 warning] ${warnLines[0] || "(none)"}`);
 
   // H5b: persisted state proves closure PASSED (dir present) but native-load FAILED — the NEW coverage.
-  const st = readJson(FAKE_SELFCHECK);
+  const st = readJson(selfcheckIn(h5.runDir));
   const closureOk = st && st.checks.find((c) => c.name === "native-deps")?.ok === true;
   const loadFail = st && st.checks.find((c) => c.name === "native-load")?.ok === false;
   rec("H5b_closure_ok_but_load_fails", closureOk && loadFail ? "PASS" : "FAIL", `native-deps.ok=${closureOk} native-load.ok=false?${loadFail} (a js-only or file-existence check would have MISSED this)`);

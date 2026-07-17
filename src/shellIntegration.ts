@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -387,10 +388,31 @@ function isAcceptableOriginal(commandPath: string, cli: SupportedCli): boolean {
   return normalize(commandPath).split(/[\\/]+/).includes("node_modules");
 }
 
+/**
+ * A resolution target that lives under an agent/QA scratchpad tree must never be
+ * accepted or persisted as the wrapped CLI. A QA mock `claude` under such a path
+ * was once cached into `.evo/config.json` and then baked into the generated
+ * shims, so real terminals would have launched the mock. Targeted at the
+ * agent/QA signatures — a `scratchpad` path segment, or the Claude-agent temp
+ * root (`<os.tmpdir>/claude/…`) — and NOT all of `os.tmpdir()`, since legitimate
+ * integration-test fixtures live directly under the temp dir. A real CLI is
+ * never resolved from either signature.
+ */
+export function isTempResidentTarget(commandPath: string): boolean {
+  if (!commandPath) return false;
+  if (/[\\/]scratchpad[\\/]/i.test(commandPath)) return true;
+  const norm = normalize(commandPath);
+  const agentTmp = normalize(path.join(os.tmpdir(), "claude"));
+  if (norm === agentTmp || norm.startsWith(agentTmp + path.sep)) return true;
+  const shimTarget = extractShimTargetPath(commandPath);
+  return shimTarget ? isTempResidentTarget(shimTarget) : false;
+}
+
 export function isUsableCommandCandidate(commandPath: string): boolean {
   if (!commandPath || !fs.existsSync(commandPath)) return false;
   if (!isSpawnableOnThisPlatform(commandPath)) return false;
   if (isInterpreterBasename(commandPath)) return false;
+  if (isTempResidentTarget(commandPath)) return false; // stale QA/agent-mock guard
   const shimTarget = extractShimTargetPath(commandPath);
   return shimTarget ? fs.existsSync(shimTarget) : true;
 }
@@ -417,6 +439,18 @@ function getSiblingCommandCandidates(commandPath: string, cli: SupportedCli): st
 }
 
 function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCli, resolved: string): void {
+  // TRUST GUARD: never cache a resolution that lives under an agent/QA
+  // scratchpad tree into config. A stale QA mock persisted here was once baked
+  // into the generated shims (real terminals would have launched the mock). Warn
+  // once and KEEP the prior value; resolution rejects such candidates too, so
+  // this is defense-in-depth for any path that reaches here.
+  if (isTempResidentTarget(resolved)) {
+    shellResolveLog.warn("refusing to persist a temp/scratchpad-resident resolved command; keeping prior value", {
+      cli,
+      resolved,
+    });
+    return;
+  }
   const persistFor = (targetCwd: string): void => {
     const config = ensureEvoConfig(targetCwd);
     if (config.shellIntegration.originalCommandMap[cli] === resolved) return;

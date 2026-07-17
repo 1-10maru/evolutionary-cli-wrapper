@@ -49,11 +49,31 @@ function proxy(dir, args, extraEnv = {}, { stdinData = null } = {}) {
   });
 }
 
+// Baseline env for the direct-mock (no-proxy) parity runs — sandboxed like the
+// proxy runs (HOME/USERPROFILE redirected, minimal PATH) rather than inheriting
+// the full parent environment.
+function directEnv(extra = {}) {
+  const pathStr = [path.dirname(process.execPath), "C:\\Windows\\System32"].join(";");
+  return {
+    SystemRoot: "C:\\Windows",
+    windir: "C:\\Windows",
+    ComSpec: process.env.ComSpec,
+    PATHEXT: process.env.PATHEXT,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    USERPROFILE: P.fakehome,
+    HOME: P.fakehome,
+    PATH: pathStr,
+    Path: pathStr,
+    ...extra,
+  };
+}
+
 function directMock(args, extraEnv = {}) {
   return new Promise((res) => {
     const t0 = Date.now();
     const events = [];
-    const c = spawn(process.execPath, [MOCKJS, ...args], { env: { ...process.env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
+    const c = spawn(process.execPath, [MOCKJS, ...args], { env: directEnv(extraEnv), stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "";
     c.stdout.on("data", (d) => { out += d; events.push({ stream: "out", ms: Date.now() - t0, text: d.toString("utf8") }); });
     c.stderr.on("data", (d) => { err += d; });

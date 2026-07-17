@@ -313,12 +313,14 @@ program
       const failed = health.checks.filter((c) => !c.ok);
       const summary = failed.map((c) => `${c.name}: ${c.detail ?? "failed"}`).join("; ");
       cliResolveLog.error("wrapper self-check failed; falling back to real claude", { summary });
-      // User-facing warning (Japanese). Node writes UTF-8 to stderr, so this is
-      // safe on modern terminals; the generated shim fallbacks stay ASCII for
-      // cmd.exe compatibility.
+      // User-facing warning. Kept ASCII/English (single line) for parity across
+      // every Windows console codepage — on a legacy chcp-932 console UTF-8 bytes
+      // would mojibake, so the actionable content must not depend on the terminal
+      // being UTF-8. The generated shim-level fallback is ASCII for the same
+      // reason. (The failing-module name in `summary` makes it self-explanatory.)
       process.stderr.write(
-        `evo: ラッパーの自己診断に失敗したため、素の claude で起動します (${summary})。` +
-          `詳細は 'evo doctor'。回避するには EVO_PROXY_ACTIVE=1 を設定してください。\n`,
+        `evo: wrapper self-check failed (${summary}); running claude directly. ` +
+          `See 'evo doctor'; set EVO_PROXY_ACTIVE=1 to bypass.\n`,
       );
       await runTransparentPassthrough(cwd, cli, args, "self-check");
       return;

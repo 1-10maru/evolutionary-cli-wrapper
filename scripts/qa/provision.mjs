@@ -66,12 +66,12 @@ const removeDotNode = (root) => {
 
 function makeThinnedBrokenCopy(build, dest, breakDirName) {
   fs.rmSync(dest, { recursive: true, force: true });
-  fs.mkdirSync(path.join(dest, "node_modules"), { recursive: true });
-  fs.cpSync(path.join(build, "dist"), path.join(dest, "dist"), { recursive: true });
-  fs.cpSync(path.join(build, "package.json"), path.join(dest, "package.json"));
+  fs.mkdirSync(path.join(dest, "node_modules"), { recursive: true, dereference: true });
+  fs.cpSync(path.join(build, "dist"), path.join(dest, "dist"), { recursive: true, dereference: true });
+  fs.cpSync(path.join(build, "package.json"), path.join(dest, "package.json"), { dereference: true });
   for (const dep of NATIVE_CLOSURE) {
     const src = path.join(build, "node_modules", dep);
-    if (fs.existsSync(src)) fs.cpSync(src, path.join(dest, "node_modules", dep), { recursive: true });
+    if (fs.existsSync(src)) fs.cpSync(src, path.join(dest, "node_modules", dep), { recursive: true, dereference: true });
   }
   const removed = removeDotNode(path.join(dest, "node_modules", breakDirName));
   if (removed === 0) throw new Error(`no .node removed under ${breakDirName} — cannot create broken copy`);
@@ -94,9 +94,9 @@ function main() {
   console.log(`provision: real node_modules top-level entries BEFORE = ${beforeCount}`);
 
   fs.rmSync(p.build, { recursive: true, force: true });
-  fs.mkdirSync(p.build, { recursive: true });
-  fs.mkdirSync(p.results, { recursive: true });
-  fs.mkdirSync(path.join(p.fakehome, ".claude"), { recursive: true });
+  fs.mkdirSync(p.build, { recursive: true, dereference: true });
+  fs.mkdirSync(p.results, { recursive: true, dereference: true });
+  fs.mkdirSync(path.join(p.fakehome, ".claude"), { recursive: true, dereference: true });
 
   // 1) source = committed bytes of <ref> via git archive (never the live tree).
   // Extract with a RELATIVE tar filename from inside build/ — a Windows `tar
@@ -108,7 +108,7 @@ function main() {
 
   // 2) node_modules = COPY of the real repo's (no junctions/symlinks).
   console.log("provision: copying node_modules (copy-only)…");
-  fs.cpSync(realNm, path.join(p.build, "node_modules"), { recursive: true });
+  fs.cpSync(realNm, path.join(p.build, "node_modules"), { recursive: true, dereference: true });
 
   // 3) build the bundle + tsc output inside the sandbox copy.
   console.log("provision: npm run build (in sandbox copy)…");

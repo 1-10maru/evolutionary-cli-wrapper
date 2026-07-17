@@ -80,6 +80,12 @@ which -a evo  # Unix
 
 **事故（2026-07-17）**: レビュー用ビルドが実 repo の `dist/` をブランチコードで上書きし、ユーザーのライブ `claude` が未リリースコードで動く状態になった。コーディネーターが公開済み 3.6.1 の tarball（リリース済みバイト列）から `dist/` を復元して復旧。実 repo の `dist/` はリリース済みコードで「休ませる」のが原則。
 
+## QA 実機統合の規律（AI 開発時・厳守）
+
+- **実機統合テスト（wrapper を実際に spawn して挙動を見る検証）は、必ず隔離した cwd + EVO 設定 + HOME で行う**。実 repo の cwd / 実 `~/.claude` / 実 `.evo/config.json` を使わない。QA の mock `claude` は repo 内の固定 fixture（`scripts/qa/fixtures/`）に置き、**Temp/scratchpad 配下の解決対象を実設定（originalCommandMap）に絶対に混入させない**。
+- **リリース検証・shim 再生成の前後は、実際の `claude` バージョン行（例 `2.1.212 (Claude Code)`）を必ず引用して報告する**。banner / 育成度ゲージだけでは mock 混入を見逃す。`resolveOriginalCommand` が Temp/scratchpad を解決対象にしていないかを `evo doctor`（Critical フラグ）で確認する。
+- **事故（2026-07-17）**: QA の mock `claude` が実 `.evo/config.json` の originalCommandMap に永続化され、再生成した shim に焼き込まれた（新しい claude ウィンドウが mock を起動しかけた）。コーディネーターの doctor スポットチェックで検出・同時間に修復。wrapper 側は Temp/scratchpad 解決対象を拒否し、`evo doctor` が Critical で警告する（この対策は本 repo に実装済み）。
+
 ## リリース手順
 - 公開は単一ワークフロー `.github/workflows/release.yml` が npm OIDC Trusted Publishing で実行（`NPM_TOKEN` 不要）
 - **RC channel**: `git tag v3.6.0-rc.2 && git push origin v3.6.0-rc.2` → `release.yml`（RC 経路）が走り `@next` で公開
