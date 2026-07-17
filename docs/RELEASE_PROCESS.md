@@ -105,10 +105,29 @@ the wrapper actually proxies:
 Record the matrix result (date, commit SHA, PASS/FAIL per row) in the release PR
 or the promotion notes. A single FAIL blocks promotion until fixed and re-run.
 
-Rows 1–9 are manual/interactive for now. Row 10 and the load-time preconditions
-are also covered non-interactively by `evo doctor --quick` (see the README), which
-should be run on the promotion commit as a fast first pass — but it does **not**
-replace the interactive rows above.
+### Running the matrix
+
+Most rows are automated by the copy-based behavioral harness in
+[`scripts/qa/`](../scripts/qa/README.md). Provision a sandbox from the exact
+promotion commit and run every suite in one command:
+
+```bash
+node scripts/qa/run-all.mjs --work <sandbox-dir> --ref <promotion-sha>
+```
+
+> **Windows-only.** The harness uses Windows process tooling (`taskkill`,
+> PowerShell `Win32_Process`, `System32`). **Promote from a Windows box**, or
+> port the process helpers before relying on it elsewhere.
+
+The row → suite/check-id mapping is in [`scripts/qa/README.md`](../scripts/qa/README.md):
+rows 1–4 → `harness-render.mjs` (A/B/C); rows 5–6 → `harness-render.mjs` (D);
+row 7 → `harness-concurrency.mjs` (E); row 8 → `harness-concurrency.mjs` (G);
+row 9 → `harness-render.mjs` (F); row 10 → `harness-selfcheck.mjs` +
+`harness-selfcheck-py.mjs` (H). The harness is copy-only and sandboxed (never
+touches the real repo `node_modules`, `~/.claude`, or the live `dist/`).
+
+`evo doctor --quick`, run on the promotion commit, is a fast non-interactive first
+pass for the load-time preconditions — but it does **not** replace the harness.
 
 ### What the workflow does
 
