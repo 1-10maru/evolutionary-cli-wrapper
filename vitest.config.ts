@@ -13,6 +13,8 @@ export default defineConfig({
     hookTimeout: 30_000,
     // Agent worktrees live under .worktrees/ inside the repo; without this,
     // vitest discovers their test copies and double-runs everything.
-    exclude: [...configDefaults.exclude, "**/.worktrees/**"],
+    // scripts/qa/** is the manual behavioral harness (drives real child
+    // processes, copy-based sandbox) — never run it under vitest/CI.
+    exclude: [...configDefaults.exclude, "**/.worktrees/**", "scripts/qa/**"],
   },
 });
