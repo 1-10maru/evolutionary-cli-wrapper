@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -123,4 +124,41 @@ export function checkNativesLoadable(): HealthCheck {
 export function quickHealthReport(root: string = getEvoRoot()): HealthReport {
   const checks = [checkBundlePresent(root), checkNativeClosurePresent(root), checkNativesLoadable()];
   return { ok: checks.every((c) => c.ok), checks };
+}
+
+// ── Inspectable self-check state ───────────────────────────────────────────
+//
+// So a broken wrapper is never silent AND the reason is inspectable later: the
+// proxy path records its last self-check result to a small global JSON file that
+// `evo doctor` surfaces. Lives next to the live-state file under ~/.claude.
+
+export interface SelfCheckState extends HealthReport {
+  /** epoch ms when the self-check ran */
+  at: number;
+}
+
+export function selfCheckStatePath(): string {
+  return path.join(os.homedir(), ".claude", ".evo-selfcheck.json");
+}
+
+/** Best-effort atomic write of the last self-check result. Never throws. */
+export function writeSelfCheckState(report: HealthReport): void {
+  try {
+    const target = selfCheckStatePath();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const payload: SelfCheckState = { ok: report.ok, checks: report.checks, at: Date.now() };
+    const tmp = `${target}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload));
+    fs.renameSync(tmp, target);
+  } catch {
+    // Observability only — never fail a launch on this write.
+  }
+}
+
+export function readSelfCheckState(): SelfCheckState | null {
+  try {
+    return JSON.parse(fs.readFileSync(selfCheckStatePath(), "utf8")) as SelfCheckState;
+  } catch {
+    return null;
+  }
 }
