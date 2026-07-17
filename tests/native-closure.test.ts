@@ -13,9 +13,15 @@ import { NATIVE_ADDON_EXTERNALS, NATIVE_RUNTIME_DEPS } from "../src/health";
  * the pure-JS loader helpers they `require` when the DB opens / a parser loads).
  * If a future version of better-sqlite3 / tree-sitter changes that helper chain,
  * a hardcoded list silently goes stale — the exact failure mode #86's review
- * flagged. This test measures the ACTUAL runtime closure by exercising the
- * natives under a `require` hook in a child process and fails if it differs from
- * the hardcoded list, forcing the list to be updated.
+ * flagged.
+ *
+ * This is NOT a tautology: the expected closure is derived independently of the
+ * hardcoded helper list. The probe exercises the addons taken from
+ * NATIVE_ADDON_EXTERNALS (so a newly added addon is automatically exercised),
+ * records EVERY node_modules package actually pulled in via a `require` hook, and
+ * the test asserts that measured set equals NATIVE_RUNTIME_DEPS exactly. A new
+ * helper dep, a dropped helper, or a new addon whose helpers weren't declared all
+ * make the sets differ and fail CI.
  *
  * Requires the native addons to be built (they are, in dev + CI — the rest of
  * the suite already depends on them). If they cannot load, the probe throws and
@@ -26,6 +32,7 @@ const Module = require("module");
 const path = require("path");
 const builtins = new Set(Module.builtinModules);
 const repo = process.argv[2];
+const addons = JSON.parse(process.argv[3]);
 const seen = new Set();
 const orig = Module._load;
 Module._load = function (request) {
@@ -42,13 +49,19 @@ Module._load = function (request) {
   return orig.apply(this, arguments);
 };
 const req = Module.createRequire(path.join(repo, "index.js"));
-new (req("better-sqlite3"))(":memory:").close();
-const p = new (req("tree-sitter"))();
-p.setLanguage(req("tree-sitter-javascript"));
-req("tree-sitter-python");
-const tst = req("tree-sitter-typescript");
-p.setLanguage(tst.typescript);
-p.setLanguage(tst.tsx);
+const loaded = {};
+for (const a of addons) loaded[a] = req(a); // requiring triggers the native load
+// Exercise each addon the way the app does, so lazily-loaded bindings surface.
+if (loaded["better-sqlite3"]) new (loaded["better-sqlite3"])(":memory:").close();
+if (loaded["tree-sitter"]) {
+  const p = new (loaded["tree-sitter"])();
+  for (const a of addons) {
+    if (!a.startsWith("tree-sitter-")) continue;
+    const g = loaded[a];
+    if (g && g.typescript) { p.setLanguage(g.typescript); p.setLanguage(g.tsx); }
+    else if (g) p.setLanguage(g);
+  }
+}
 process.stdout.write(JSON.stringify([...seen].sort()));
 `;
 
@@ -64,24 +77,28 @@ afterAll(() => {
 });
 
 describe("native runtime closure", () => {
-  it("matches the actual packages loaded when exercising the native addons", () => {
+  it("matches the packages actually loaded when exercising the native addons", () => {
     fs.writeFileSync(probeFile, PROBE);
-    const out = execFileSync(process.execPath, [probeFile, repoRoot], { encoding: "utf8" });
+    const out = execFileSync(
+      process.execPath,
+      [probeFile, repoRoot, JSON.stringify([...NATIVE_ADDON_EXTERNALS])],
+      { encoding: "utf8" },
+    );
     const actual = new Set(JSON.parse(out) as string[]);
     const declared = new Set(NATIVE_RUNTIME_DEPS);
 
-    // Every package the natives actually pull in must be declared (a NEW runtime
-    // dependency the hardcoded list is missing => the shim/self-check would let a
-    // thinned node_modules through and crash at load).
+    // A package the natives actually pull in that ISN'T declared => a thinned
+    // node_modules could drop it, pass the file-presence preflight, and crash at
+    // load. Add it to NATIVE_RUNTIME_DEPS.
     const undeclared = [...actual].filter((p) => !declared.has(p as (typeof NATIVE_RUNTIME_DEPS)[number]));
     expect(undeclared, `undeclared runtime deps — add to NATIVE_RUNTIME_DEPS: ${undeclared.join(", ")}`).toEqual([]);
 
-    // Every declared dep must actually be loaded (a stale entry that no longer
-    // exists => the check would fall back unnecessarily forever).
+    // A declared package that ISN'T loaded => a stale entry that makes the check
+    // fall back unnecessarily forever. Remove it.
     const unused = [...declared].filter((p) => !actual.has(p));
     expect(unused, `declared but not loaded — remove from NATIVE_RUNTIME_DEPS: ${unused.join(", ")}`).toEqual([]);
 
-    // Sanity: all five native addons were exercised.
+    // Sanity: every declared native addon was exercised.
     for (const addon of NATIVE_ADDON_EXTERNALS) {
       expect(actual.has(addon), `native addon not loaded by probe: ${addon}`).toBe(true);
     }
