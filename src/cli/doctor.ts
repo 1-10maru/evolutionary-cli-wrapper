@@ -2,10 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
+import { quickHealthReport, type HealthCheck, type HealthReport } from "../health";
 
 export interface DoctorOptions {
   json?: boolean;
   cwd?: string;
+  quick?: boolean;
 }
 
 interface VersionInfo {
@@ -440,7 +442,77 @@ function renderText(report: DoctorReport): string {
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
+// ── Quick health check (evo doctor --quick) ────────────────────────────────
+
+/**
+ * The same fast self-check the wrapper runs at proxy startup: bundle present,
+ * native runtime closure present, natives loadable, and the real (wrapped) CLI
+ * resolvable ("proxy round-trip"). No log scanning, no disk writes. Exits 0 when
+ * healthy, 1 when any check fails — usable as a fast release/CI preflight and by
+ * users to diagnose a broken wrapper.
+ */
+function buildQuickReport(cwd: string): HealthReport {
+  const report = quickHealthReport();
+  const checks: HealthCheck[] = [...report.checks];
+
+  // Proxy round-trip: can we resolve the real claude the proxy would wrap?
+  // Resolution is pure-JS (a `where`/PATH probe), so it runs even when the
+  // native addons are broken.
+  let claudeCheck: HealthCheck;
+  try {
+    // Lazy require so a load failure here cannot break the rest of the report.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resolveOriginalCommand } = require("../shellIntegration") as typeof import("../shellIntegration");
+    const resolved = resolveOriginalCommand(cwd, "claude");
+    claudeCheck = resolved
+      ? { name: "claude-resolve", ok: true, detail: resolved }
+      : { name: "claude-resolve", ok: false, detail: "no live claude found on PATH" };
+  } catch (err) {
+    claudeCheck = {
+      name: "claude-resolve",
+      ok: false,
+      detail: err instanceof Error ? err.message.split("\n")[0] : String(err),
+    };
+  }
+  checks.push(claudeCheck);
+
+  return { ok: checks.every((c) => c.ok), checks };
+}
+
+function renderQuickText(report: HealthReport): string {
+  const lines: string[] = [];
+  lines.push(bold("── evo doctor --quick ──────────────────────────────────────"));
+  const width = Math.max(...report.checks.map((c) => c.name.length)) + 2;
+  for (const c of report.checks) {
+    const sym = c.ok ? green("✓") : red("✗");
+    const detail = c.detail ? dim(c.detail) : "";
+    lines.push(`  ${sym} ${pad(c.name, width)} ${detail}`);
+  }
+  lines.push(report.ok ? green("PASS") : red("FAIL"));
+  return lines.join("\n");
+}
+
+async function runQuickDoctor(opts: DoctorOptions): Promise<void> {
+  const cwd = opts.cwd ?? process.cwd();
+  const report = buildQuickReport(cwd);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  } else {
+    process.stdout.write(renderQuickText(report) + "\n");
+  }
+
+  if (!report.ok) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runDoctor(opts: DoctorOptions): Promise<void> {
+  if (opts.quick) {
+    await runQuickDoctor(opts);
+    return;
+  }
+
   const report = buildReport(opts);
 
   if (opts.json) {

@@ -10,6 +10,7 @@ import {
   updateEvoConfig,
 } from "./config";
 import { getLogger } from "./logger";
+import { NATIVE_RUNTIME_DEPS } from "./health";
 import { SupportedCli } from "./types";
 
 const shellPathLog = getLogger().child("shell.path");
@@ -742,42 +743,6 @@ function resolveOriginalForShimGuard(cwd: string, cli: SupportedCli): string | n
 const EVO_BUNDLE_REL_POSIX = "dist/evo.bundle.cjs";
 
 /**
- * Native addons that CANNOT be bundled — they load platform-specific `.node`
- * binaries and stay external, required from node_modules at runtime. The
- * generated launch fallback checks that each is present before launching the
- * bundle; if any is missing (or the bundle itself is gone, or node is
- * unavailable) the shim execs the real CLI directly so the user is never
- * blocked. Keep in sync with NATIVE_ADDON_EXTERNALS in scripts/bundle.mjs.
- */
-const NATIVE_ADDON_EXTERNALS = [
-  "better-sqlite3",
-  "tree-sitter",
-  "tree-sitter-javascript",
-  "tree-sitter-python",
-  "tree-sitter-typescript",
-] as const;
-
-/**
- * The full set of node_modules packages the bundle still needs present at
- * runtime: the native addons above PLUS the pure-JS loader helpers those addons
- * `require` from node_modules when the DB is opened / the parser loads. These
- * were measured empirically against a thinned node_modules:
- *   - better-sqlite3 -> `bindings` -> `file-uri-to-path` (loaded on DB open)
- *   - tree-sitter    -> `node-gyp-build`                 (loaded on parser init)
- * If any of these is missing the bundle cannot open its DB / load a parser, so
- * the launch fallback execs the real CLI instead. Everything the MAIN package
- * depends on (commander, chokidar, strip-ansi, ansi-regex, ...) is inlined into
- * the bundle and is intentionally NOT listed here — its deletion can no longer
- * break startup, which is the whole point of the bundle.
- */
-const NATIVE_RUNTIME_DEP_DIRS = [
-  ...NATIVE_ADDON_EXTERNALS,
-  "bindings",
-  "file-uri-to-path",
-  "node-gyp-build",
-] as const;
-
-/**
  * Launch-fallback lines for a generated proxy shim, emitted after the nesting
  * guard and before the normal bundle launch. The guarantee: a missing bundle,
  * a missing native dependency, or an unavailable node must not leave the user
@@ -790,7 +755,7 @@ function buildLaunchFallbackLines(
   cwd: string,
   original: string | null,
 ): string[] {
-  const deps = NATIVE_RUNTIME_DEP_DIRS;
+  const deps = NATIVE_RUNTIME_DEPS;
   const hasSafeOriginal = !!original && !SHIM_PATH_FORBIDDEN.test(original);
   if (kind === "cmd") {
     const bundle = `%~dp0..\\${EVO_BUNDLE_REL_POSIX.replace(/\//g, "\\")}`;

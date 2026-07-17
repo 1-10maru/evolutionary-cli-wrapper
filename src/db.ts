@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { ensureEvoConfig, getEvoDir } from "./config";
 import { getLogger } from "./logger";
 import { shouldUseLightweightTracking } from "./proxy/sessionMode";
@@ -87,6 +87,20 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+// better-sqlite3 is a native addon that cannot be bundled. Load it lazily (on
+// first DB open) rather than at module import, so a broken or missing native
+// build does not crash the whole CLI at startup — `evo --version`, `evo doctor
+// --quick`, and the proxy self-check stay runnable and can diagnose/fall back.
+type DatabaseCtor = new (filename: string, options?: Database.Options) => Database.Database;
+let cachedDatabaseCtor: DatabaseCtor | null = null;
+function loadDatabaseCtor(): DatabaseCtor {
+  if (cachedDatabaseCtor === null) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    cachedDatabaseCtor = require("better-sqlite3") as DatabaseCtor;
+  }
+  return cachedDatabaseCtor;
+}
+
 export class EvoDatabase {
   readonly db: Database.Database;
   readonly cwd: string;
@@ -102,18 +116,19 @@ export class EvoDatabase {
     // lightweight dir it short-circuits to defaults. capture.promptText defaults
     // to true.
     this.capturePromptText = ensureEvoConfig(cwd).capture.promptText;
+    const DatabaseCtor = loadDatabaseCtor();
     // Lightweight tracking: skip per-project .evo/ creation; use an in-memory
     // SQLite database so the proxy still functions without disk artifacts.
     if (shouldUseLightweightTracking(cwd)) {
       this.dbPath = ":memory:";
-      this.db = new Database(this.dbPath);
+      this.db = new DatabaseCtor(this.dbPath);
       this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.initialize();
       return;
     }
     ensureDirectory(this.evoDir);
     this.dbPath = path.join(this.evoDir, "evolutionary.db");
-    this.db = new Database(this.dbPath);
+    this.db = new DatabaseCtor(this.dbPath);
     // Set busy_timeout BEFORE switching to WAL: the journal-mode switch itself
     // can need a brief exclusive lock, which concurrent fresh-db launches
     // contend for — waiting there avoids a SQLITE_BUSY on the very first write.
