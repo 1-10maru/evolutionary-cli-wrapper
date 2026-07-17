@@ -16,6 +16,8 @@ The verification ceremony scales to the change's risk. Classify each change by t
 
 The npm **OIDC Publish job is a hard gate**: for Tier 3 the RC's Publish job must be green before promoting; for Tier 2 the stable workflow runs OIDC publish only after its 3-OS smoke passes, so a broken publish blocks the release. Never let a stable release ship if OIDC failed (this is what caught, and cleared, the `setup-node@v7` bump). Gate handoffs are **direct** (implementer ⇄ reviewer/QA); the coordinator observes via CC and intervenes only on FAIL / anomaly / design fork.
 
+**Pure dependency bump (Tier-3 variant):** skip the full A–G behavioral matrix on hand-provisioned deps (a frankensteined tree gives false signals). The authoritative signal is CI's 3-OS `npm ci` build + full test + native-closure drift guard **with the new deps**, plus a *targeted new-deps smoke* on a bundle built by a clean `npm ci` (if a native dep can't compile locally, copy only its already-compiled closure): wrapped-CLI proxy end-to-end, CLI parse surface (`--help`/subcommands/flags + one negative case), a DB round-trip, `doctor --quick`, and native-load. The RC soak's clean registry install + 3-OS tarball run is the real new-deps environment test.
+
 ## Trusted publishing setup (one-time, on npmjs.com)
 
 npm allows only **one** trusted publisher per package, keyed by workflow filename — which is why RC and stable both live in `release.yml`. On <https://www.npmjs.com> → the `evolutionary-cli-wrapper` package → **Settings → Trusted Publisher**, register a GitHub Actions publisher with:
