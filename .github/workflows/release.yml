@@ -40,7 +40,7 @@ jobs:
       dist_tag: ${{ steps.p.outputs.dist_tag }}
       tag: ${{ steps.p.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -96,7 +96,7 @@ jobs:
         os: [ubuntu-22.04, windows-2022, macos-14]
         node: [22]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -114,7 +114,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2022, macos-14]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -153,7 +153,7 @@ jobs:
       contents: write   # push the stable tag + create the GitHub Release
       id-token: write   # mint the OIDC token for npm Trusted Publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
