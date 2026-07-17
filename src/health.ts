@@ -167,6 +167,16 @@ export function selfCheckStatePath(): string {
   return path.join(os.homedir(), ".claude", ".evo-selfcheck.json");
 }
 
+/**
+ * Legacy (pre-EVO_HOME, ≤ v3.6.3) self-check location. Older wrapper versions —
+ * and any launch where EVO_HOME is unset — wrote here unconditionally. Kept as a
+ * READ fallback so `evo doctor` can still surface the last recorded self-check
+ * after an upgrade; writes always go to `selfCheckStatePath()`.
+ */
+export function legacySelfCheckStatePath(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, ".claude", ".evo-selfcheck.json");
+}
+
 /** Best-effort atomic write of the last self-check result. Never throws. */
 export function writeSelfCheckState(report: HealthReport): void {
   try {
@@ -181,10 +191,25 @@ export function writeSelfCheckState(report: HealthReport): void {
   }
 }
 
-export function readSelfCheckState(): SelfCheckState | null {
+function tryReadSelfCheckFile(file: string): SelfCheckState | null {
   try {
-    return JSON.parse(fs.readFileSync(selfCheckStatePath(), "utf8")) as SelfCheckState;
+    return JSON.parse(fs.readFileSync(file, "utf8")) as SelfCheckState;
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the last recorded self-check. Primary is `selfCheckStatePath()`; when
+ * that file is absent/unreadable, fall back to the legacy `~/.claude` location
+ * (backward compat — see legacySelfCheckStatePath). The primary path always
+ * wins when present, so the new location keeps working unchanged.
+ */
+export function readSelfCheckState(homeDir: string = os.homedir()): SelfCheckState | null {
+  const primaryPath = selfCheckStatePath();
+  const primary = tryReadSelfCheckFile(primaryPath);
+  if (primary) return primary;
+  const legacyPath = legacySelfCheckStatePath(homeDir);
+  if (path.resolve(legacyPath) === path.resolve(primaryPath)) return null;
+  return tryReadSelfCheckFile(legacyPath);
 }
