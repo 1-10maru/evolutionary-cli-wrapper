@@ -115,6 +115,10 @@ promotion commit and run every suite in one command:
 node scripts/qa/run-all.mjs --work <sandbox-dir> --ref <promotion-sha>
 ```
 
+> **Windows-only.** The harness uses Windows process tooling (`taskkill`,
+> PowerShell `Win32_Process`, `System32`). **Promote from a Windows box**, or
+> port the process helpers before relying on it elsewhere.
+
 The row → suite/check-id mapping is in [`scripts/qa/README.md`](../scripts/qa/README.md):
 rows 1–4 → `harness-render.mjs` (A/B/C); rows 5–6 → `harness-render.mjs` (D);
 row 7 → `harness-concurrency.mjs` (E); row 8 → `harness-concurrency.mjs` (G);

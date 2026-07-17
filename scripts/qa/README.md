@@ -1,5 +1,11 @@
 # Behavioral QA harness
 
+> **Windows-only.** The suites use Windows-specific process tooling
+> (`taskkill`, PowerShell `Win32_Process` for orphan detection, and `System32`
+> on the sandbox `PATH`). Run the promotion matrix from a Windows box, or port
+> the process helpers first. `provision.mjs` (copy + build) is portable, but the
+> harnesses that assert signal/teardown behavior are not yet cross-platform.
+
 Copy-based, sandboxed behavioral tests for the `claude` wrapper. These exercise
 the **real interactive proxy path** (rendering/streaming, signals, teardown,
 `/exit`, nested relaunch, `EVO_PROXY_ACTIVE=1` bypass, multi-window isolation,
