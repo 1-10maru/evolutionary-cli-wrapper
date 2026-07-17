@@ -5,6 +5,14 @@
 ## Unreleased
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## v3.6.2-rc.1 (2026-07-17)
+
+### Added
 - `evo doctor --quick`: a fast self-check — bundle present, native dependencies present, native components actually load, and the real `claude` is resolvable — that exits non-zero if anything is wrong. Use it to diagnose a broken wrapper, or as a quick pre-release check.
 - Wrapper self-health-check. Before starting a tracked session, the `claude` wrapper now confirms it can actually run. If something is broken (for example a native component that won't load), it prints one clear warning line and runs the real `claude` directly instead of crashing or hanging — so a broken Evo install is never silent and never blocks you.
 - The result of that self-check is recorded and shown in `evo doctor`: a "Wrapper Self-check" line reports whether the last startup was healthy, and a failed check is called out as a critical issue with what to fix.
