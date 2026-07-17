@@ -56,6 +56,8 @@ evo install-statusline
 
 Then **restart your Claude Code session** to pick up the new statusline. Prefer a no-prompt run for CI or provisioning? Add `--yes`.
 
+> **Note — two statusline constructions.** `evo install-statusline` deploys the **single-file** renderer (the full `statusline.py` as `base_statusline.py`), which is the right choice for most people. Advanced/dev setups instead use a **split "wrapper"** construction — a token-only base plus `evo statusline`, joined by a small wrapper script (this is what `npm run setup` deploys). To avoid rendering EvoPet twice, `evo install-statusline` **detects an existing wrapper setup and leaves it untouched** (it prints a one-line notice and makes no changes) rather than overwriting your wiring.
+
 Don't want to install globally? Run it once with `npx`:
 
 ```bash

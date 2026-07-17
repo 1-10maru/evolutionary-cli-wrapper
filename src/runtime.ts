@@ -71,8 +71,9 @@ async function runShellCommand(
         event: createEvent(eventType, "verification", {
           command,
           exitCode: exitCode ?? 1,
-          stdoutPreview: stdout.slice(-400),
-          stderrPreview: stderr.slice(-400),
+          // Secret-mask the persisted command output (it can echo tokens).
+          stdoutPreview: redactSecretText(stdout.slice(-400)),
+          stderrPreview: redactSecretText(stderr.slice(-400)),
         }),
       });
     });

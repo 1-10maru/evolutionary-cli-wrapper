@@ -1,4 +1,5 @@
 import { EpisodeEvent } from "../types";
+import { redactSecretText } from "../redact";
 
 export interface FrictionCaptureAdapter {
   consumeOutputLine(source: "stdout" | "stderr", line: string): EpisodeEvent[];
@@ -53,60 +54,65 @@ export function createClaudeCaptureAdapter(): FrictionCaptureAdapter {
       const line = rawLine.trim();
       if (!line) return [];
 
+      // Detection runs on the raw line, but the snippet PERSISTED into
+      // episode_events.details_json is secret-masked — CLI output can echo a
+      // pasted token/key back. Masked once per line and reused everywhere.
+      const maskedLine = redactSecretText(line.slice(0, 300));
+
       const events: EpisodeEvent[] = [];
       const detectedTool = detectToolName(line);
       if (detectedTool && detectedTool !== currentTool) {
         currentTool = detectedTool;
-        events.push(createEvent("tool_call_started", { toolName: detectedTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_call_started", { toolName: detectedTool, line: maskedLine }));
       }
 
       if (EDIT_RE.test(line)) {
-        events.push(createEvent("edit_attempt_started", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("edit_attempt_started", { toolName: currentTool, line: maskedLine }));
       }
 
       if (APPROVAL_REQUEST_RE.test(line)) {
         pendingApprovalTool = currentTool;
-        events.push(createEvent("tool_approval_requested", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_approval_requested", { toolName: currentTool, line: maskedLine }));
       }
 
       if (APPROVAL_DENIED_RE.test(line)) {
         pendingApprovalTool = null;
-        events.push(createEvent("tool_approval_denied", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_approval_denied", { toolName: currentTool, line: maskedLine }));
       }
 
       if (RETRY_RE.test(line)) {
         retryPending = true;
-        events.push(createEvent("tool_retry_requested", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_retry_requested", { toolName: currentTool, line: maskedLine }));
       }
 
       if (RECOVERY_START_RE.test(line)) {
-        events.push(createEvent("error_recovery_started", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("error_recovery_started", { toolName: currentTool, line: maskedLine }));
       }
 
       if (FAILURE_RE.test(line)) {
-        events.push(createEvent("tool_call_failed", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_call_failed", { toolName: currentTool, line: maskedLine }));
         if (retryPending) {
-          events.push(createEvent("tool_retry_failed", { toolName: currentTool, line: line.slice(0, 300) }));
+          events.push(createEvent("tool_retry_failed", { toolName: currentTool, line: maskedLine }));
         }
         if (EDIT_RE.test(line)) {
           editFailed = true;
-          events.push(createEvent("edit_attempt_failed", { toolName: currentTool, line: line.slice(0, 300) }));
+          events.push(createEvent("edit_attempt_failed", { toolName: currentTool, line: maskedLine }));
         }
       }
 
       if (SUCCESS_RE.test(line)) {
-        events.push(createEvent("tool_call_succeeded", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_call_succeeded", { toolName: currentTool, line: maskedLine }));
       }
       if (RETRY_SUCCESS_RE.test(line) || (retryPending && SUCCESS_RE.test(line))) {
         retryPending = false;
-        events.push(createEvent("tool_retry_succeeded", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("tool_retry_succeeded", { toolName: currentTool, line: maskedLine }));
       }
       if (editFailed && (EDIT_RECOVERED_RE.test(line) || (EDIT_RE.test(line) && SUCCESS_RE.test(line)))) {
         editFailed = false;
-        events.push(createEvent("edit_attempt_recovered", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("edit_attempt_recovered", { toolName: currentTool, line: maskedLine }));
       }
       if (RECOVERY_SUCCESS_RE.test(line)) {
-        events.push(createEvent("error_recovery_succeeded", { toolName: currentTool, line: line.slice(0, 300) }));
+        events.push(createEvent("error_recovery_succeeded", { toolName: currentTool, line: maskedLine }));
       }
 
       return events;
@@ -123,12 +129,12 @@ export function createClaudeCaptureAdapter(): FrictionCaptureAdapter {
       if (YES_RE.test(lastDecision)) {
         const toolName = pendingApprovalTool;
         pendingApprovalTool = null;
-        return [createEvent("tool_approval_granted", { toolName, input: lastDecision })];
+        return [createEvent("tool_approval_granted", { toolName, input: redactSecretText(lastDecision) })];
       }
       if (NO_RE.test(lastDecision)) {
         const toolName = pendingApprovalTool;
         pendingApprovalTool = null;
-        return [createEvent("tool_approval_denied", { toolName, input: lastDecision })];
+        return [createEvent("tool_approval_denied", { toolName, input: redactSecretText(lastDecision) })];
       }
       return [];
     },

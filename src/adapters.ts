@@ -1,5 +1,6 @@
 import stripAnsi from "strip-ansi";
 import { getLogger } from "./logger";
+import { redactSecretText } from "./redact";
 import { EpisodeEvent, SupportedCli, UsageObservation } from "./types";
 
 const log = getLogger().child("adapters.detect");
@@ -72,6 +73,9 @@ export function extractEventsFromLine(line: string): EpisodeEvent[] {
   if (!cleanLine) return [];
 
   const events: EpisodeEvent[] = [];
+  // Detection runs on cleanLine, but any snippet PERSISTED into
+  // episode_events.details_json is secret-masked (CLI output can echo tokens).
+  const maskedSnippet = redactSecretText(cleanLine.slice(0, 300));
   const pathScanLine = cleanLine.length > MAX_PATH_SCAN ? cleanLine.slice(0, MAX_PATH_SCAN) : cleanLine;
   const fileMatch = FILE_PATH_RE.exec(pathScanLine)?.groups?.path ?? null;
 
@@ -80,11 +84,11 @@ export function extractEventsFromLine(line: string): EpisodeEvent[] {
   }
 
   if (/(?:rg|grep|search|find|select-string)\b/i.test(cleanLine)) {
-    events.push(buildEvent("search", { line: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("search", { line: maskedSnippet }));
   }
 
   if (/(?:log|traceback|stack trace|error log)\b/i.test(cleanLine)) {
-    events.push(buildEvent("log_read", { line: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("log_read", { line: maskedSnippet }));
   }
 
   if (/(?:apply_patch|updated file|created file|deleted file|edited|writing to)\b/i.test(cleanLine)) {
@@ -92,19 +96,19 @@ export function extractEventsFromLine(line: string): EpisodeEvent[] {
   }
 
   if (/(?:npm test|pnpm test|yarn test|vitest|pytest|cargo test|go test)\b/i.test(cleanLine)) {
-    events.push(buildEvent("test_run", { command: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("test_run", { command: maskedSnippet }));
   }
 
   if (/(?:npm run build|pnpm build|yarn build|cargo build|tsc\b|vite build)\b/i.test(cleanLine)) {
-    events.push(buildEvent("build_run", { command: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("build_run", { command: maskedSnippet }));
   }
 
   if (/(?:clarify|question|need more info|which option|確認したい|質問です)\b/i.test(cleanLine)) {
-    events.push(buildEvent("clarification_prompt", { line: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("clarification_prompt", { line: maskedSnippet }));
   }
 
   if (/(?:no changes|did not change|unable to modify|変更なし|見送り)\b/i.test(cleanLine)) {
-    events.push(buildEvent("no_code_change_response", { line: cleanLine.slice(0, 300) }));
+    events.push(buildEvent("no_code_change_response", { line: maskedSnippet }));
   }
 
   return events;

@@ -64,3 +64,23 @@ describe("extractEventsFromLine — long-line / ReDoS safety", () => {
     expect(events.find((e) => e.type === "file_read")?.details.path).toBe("src/index.ts");
   });
 });
+
+describe("extractEventsFromLine — secret masking in persisted line/command", () => {
+  it("masks a secret echoed in an output line before it lands in event details", () => {
+    // Built from parts so no scannable literal is in source.
+    const secret = "AKIA" + "IOSFODNN7" + "EXAMPLE";
+    const events = extractEventsFromLine(`grep found ${secret} in config`);
+    const search = events.find((e) => e.type === "search");
+    expect(search).toBeDefined();
+    expect(String(search?.details.line)).toContain("[REDACTED]");
+    expect(String(search?.details.line)).not.toContain(secret);
+  });
+
+  it("masks a secret in a test/build command line", () => {
+    const secret = "ghp" + "_" + "A".repeat(36);
+    const events = extractEventsFromLine(`npm test -- --token=${secret}`);
+    const testRun = events.find((e) => e.type === "test_run");
+    expect(testRun).toBeDefined();
+    expect(String(testRun?.details.command)).not.toContain(secret);
+  });
+});
