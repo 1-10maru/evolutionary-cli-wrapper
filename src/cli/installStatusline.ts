@@ -122,6 +122,56 @@ function looksLikeWrapperConstruction(command: unknown): boolean {
   return /statusline-wrapper|evo\s+statusline/i.test(command);
 }
 
+// Non-standard wrapper names (#34): a hand-built wrapper script does not have to
+// be CALLED `statusline-wrapper` — the command may be e.g.
+// `bash ~/.claude/my-status.sh` while the wrapper wiring (`evo statusline` /
+// the token-only `base_statusline.py`) lives INSIDE the script. The command-name
+// regex above cannot see that, so as a second layer we best-effort read any
+// script file the command references and look for the wrapper markers in its
+// content. Read-only, size-capped, and never throws — an unreadable or absent
+// candidate is simply not evidence of a wrapper.
+const WRAPPER_CONTENT_RE = /statusline-wrapper|evo\s+statusline|base_statusline\.py/i;
+const MAX_WRAPPER_SCRIPT_BYTES = 64 * 1024;
+
+/** Tokenize a shell-ish command string (respecting quotes) and keep the tokens
+ *  that plausibly reference a script file. */
+function extractScriptPathCandidates(command: string, homeDir: string): string[] {
+  const tokens: string[] = [];
+  const tokenRe = /"([^"]+)"|'([^']+)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(command)) !== null) tokens.push(m[1] ?? m[2] ?? m[3]);
+  const candidates: string[] = [];
+  for (const raw of tokens) {
+    if (raw.startsWith("-")) continue; // flags
+    let candidate = raw;
+    if (candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+      candidate = path.join(homeDir, candidate.slice(1));
+    }
+    // Only tokens that look like paths or script files are worth stat-ing.
+    if (!/[\\/]|\.(sh|ps1|cmd|bat|py|js|cjs|mjs)$/i.test(candidate)) continue;
+    // The single-file renderer itself (`... base_statusline.py`) is the file THIS
+    // command deploys — it is not a wrapper, so never treat it as one.
+    if (/^base_statusline\.py$/i.test(path.basename(candidate))) continue;
+    candidates.push(candidate);
+  }
+  return candidates;
+}
+
+/** Second-layer wrapper detection: peek inside referenced script files. */
+function scriptContentLooksLikeWrapper(command: unknown, homeDir: string): boolean {
+  if (typeof command !== "string") return false;
+  for (const candidate of extractScriptPathCandidates(command, homeDir)) {
+    try {
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile() || stat.size > MAX_WRAPPER_SCRIPT_BYTES) continue;
+      if (WRAPPER_CONTENT_RE.test(fs.readFileSync(candidate, "utf8"))) return true;
+    } catch {
+      // Unreadable / absent — not evidence of a wrapper construction.
+    }
+  }
+  return false;
+}
+
 /** Peek `statusLine.command` from settings.json; undefined if absent/unparseable. */
 function readStatusLineCommand(settingsPath: string): unknown {
   try {
@@ -165,11 +215,19 @@ export async function runInstallStatusline(
   // token-only and deploying the full renderer would double-render EvoPet — so
   // skip entirely and leave the user's wiring untouched.
   const existingCommand = readStatusLineCommand(paths.settingsPath);
-  if (looksLikeWrapperConstruction(existingCommand)) {
+  const home = options.homeDir ?? os.homedir();
+  if (
+    looksLikeWrapperConstruction(existingCommand) ||
+    // #34: also catch wrappers with NON-STANDARD names — the command string may
+    // not mention `statusline-wrapper` / `evo statusline`, but the script it
+    // runs does. Content-based, best-effort, read-only.
+    scriptContentLooksLikeWrapper(existingCommand, home)
+  ) {
     log(
       "Detected an existing wrapper-based statusline (statusLine.command runs a " +
-        "wrapper / `evo statusline`). Leaving it untouched — `evo install-statusline` " +
-        "manages only the single-file renderer and will not overwrite a wrapper setup.",
+        "wrapper / `evo statusline`, or references a script that does). Leaving it " +
+        "untouched — `evo install-statusline` manages only the single-file renderer " +
+        "and will not overwrite a wrapper setup.",
     );
     return { settingsUpdated: false, noop: true };
   }

@@ -268,3 +268,86 @@ describe("install-statusline — wrapper construction guard (A2)", () => {
     expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(true);
   });
 });
+
+describe("install-statusline — non-standard wrapper NAME detection (#34)", () => {
+  it("detects a wrapper whose script has a non-standard name (`evo statusline` inside)", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // Hand-built wrapper with an arbitrary name: the command string mentions
+    // neither `statusline-wrapper` nor `evo statusline` — only the script body does.
+    const script = path.join(claudeDir, "my-status.sh");
+    fs.writeFileSync(script, '#!/usr/bin/env bash\ncat - | tee /tmp/in | evo statusline\n');
+    const settingsPath = path.join(claudeDir, "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ statusLine: { type: "command", command: "bash ~/.claude/my-status.sh" } }, null, 2),
+    );
+    const settingsBefore = fs.readFileSync(settingsPath, "utf8");
+    const messages: string[] = [];
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: (m) => messages.push(m),
+    });
+
+    expect(result.noop).toBe(true);
+    expect(result.settingsUpdated).toBe(false);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(settingsBefore);
+    // The guard fired before the deploy — no renderer was copied over the setup.
+    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(false);
+    expect(messages.join("\n")).toMatch(/wrapper/i);
+  });
+
+  it("detects a non-standard wrapper that references the token-only base", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const base = path.join(claudeDir, "base_statusline.py");
+    fs.writeFileSync(base, "# token-only base placeholder\n");
+    const script = path.join(claudeDir, "join-lines.cmd");
+    fs.writeFileSync(script, '@echo off\r\npython "%USERPROFILE%\\.claude\\base_statusline.py"\r\n');
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify({ statusLine: { type: "command", command: `cmd /c "${script.replace(/\\/g, "/")}"` } }, null, 2),
+    );
+    const baseBefore = fs.readFileSync(base, "utf8");
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+
+    expect(result.noop).toBe(true);
+    expect(result.settingsUpdated).toBe(false);
+    // Token-only base left byte-for-byte intact (not clobbered by the full renderer).
+    expect(fs.readFileSync(base, "utf8")).toBe(baseBefore);
+  });
+
+  it("still proceeds when the referenced script is unrelated to the wrapper wiring", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const script = path.join(claudeDir, "some-other-tool.sh");
+    fs.writeFileSync(script, "#!/usr/bin/env bash\necho unrelated-statusline\n");
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify({ statusLine: { type: "command", command: "bash ~/.claude/some-other-tool.sh" } }, null, 2),
+    );
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+
+    expect(result.noop).toBeUndefined();
+    expect(result.settingsUpdated).toBe(true);
+    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(true);
+  });
+});
