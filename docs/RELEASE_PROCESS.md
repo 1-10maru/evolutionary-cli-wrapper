@@ -10,11 +10,11 @@ The verification ceremony scales to the change's risk. Classify each change by t
 
 | Tier | Change class | Gate |
 |---|---|---|
-| **1** | docs, tests, data-sync (e.g. `scripts/sync-claude-docs`), CHANGELOG | CI green + implementer self-check only. No review agent, no matrix, no RC soak — rides the next train. |
-| **2** | minor behavior patches (privacy/masking, a bounded fix, a small CLI flag) | **One** independent review + a **targeted** matrix (only the H-rows the diff touches + a ~2-minute A-row smoke) + RC publish. Promotion step = **diff-verify only**: `git diff <gate-SHA> <promotion-SHA> -- src/ scripts/` empty ⇒ no full matrix re-run; a `--version` + `doctor --quick` smoke suffices. |
-| **3** | startup path, native deps, major dependency bumps, proxy internals, session binding | Full ceremony: independent review + full behavioral matrix (incl. native-closure drift guard + bundle rebuild + sandbox smoke) at both the gate SHA and the promotion SHA. |
+| **1** | docs, tests, data-sync (e.g. `scripts/sync-claude-docs`), CHANGELOG | CI green + implementer self-check only. No review agent, no matrix, no RC — rides the next train. |
+| **2** | minor behavior patches (privacy/masking, a bounded fix, a small CLI flag) | **One combined gate agent** does the code review AND the targeted behavioral probes (only the H-rows the diff touches + a ~2-minute A-row smoke) in a single pass → one verdict. **No RC channel**: put the version bump + CHANGELOG release section **in the train PR itself**; on that verdict PASS + CI green, merge and **dispatch the stable release directly** (`release.yml` `version=X.Y.Z`). The stable workflow's own 3-OS tarball install+run smoke + OIDC publish is the safety net. No RC tag, no `@next`, no separate stable-prep PR — the promotion SHA *is* the merge SHA, so diff-verify is automatic. |
+| **3** | startup path, native deps, major dependency bumps, proxy internals, session binding | Full ceremony: **two independent** gate agents (independent review + full behavioral matrix — incl. native-closure drift guard + bundle rebuild + native-load smoke) on the combined head → **RC soak** (`@next`) → promotion matrix → stable. |
 
-The npm **OIDC Publish job on the RC is a hard gate for any tier**: never dispatch a stable release unless the RC's Publish job was green (this is what caught, and cleared, the `setup-node@v7` bump). Gate handoffs are direct (implementer ⇄ reviewer/QA); the coordinator observes via CC and intervenes only on FAIL / anomaly / design fork.
+The npm **OIDC Publish job is a hard gate**: for Tier 3 the RC's Publish job must be green before promoting; for Tier 2 the stable workflow runs OIDC publish only after its 3-OS smoke passes, so a broken publish blocks the release. Never let a stable release ship if OIDC failed (this is what caught, and cleared, the `setup-node@v7` bump). Gate handoffs are **direct** (implementer ⇄ reviewer/QA); the coordinator observes via CC and intervenes only on FAIL / anomaly / design fork.
 
 ## Trusted publishing setup (one-time, on npmjs.com)
 
