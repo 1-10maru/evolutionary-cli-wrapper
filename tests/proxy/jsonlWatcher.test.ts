@@ -115,26 +115,42 @@ describe("jsonlWatcher", () => {
     }
   });
 
-  it("forwards parsed entries to onEntry when a JSONL file exists", async () => {
-    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "evo-jsonl-home-"));
-    tempDirs.push(tmpHome);
-    const projectsDir = path.join(tmpHome, ".claude", "projects");
-    fs.mkdirSync(projectsDir, { recursive: true });
-    const fakeCwd = path.join(tmpHome, "fakeProject");
-    fs.mkdirSync(fakeCwd, { recursive: true });
-    const encodedCwd = fakeCwd.replace(/[\\/]/g, "-").replace(/:/g, "-");
-    const projDir = path.join(projectsDir, encodedCwd);
-    fs.mkdirSync(projDir, { recursive: true });
-    const jsonlPath = path.join(projDir, "session.jsonl");
-    fs.writeFileSync(jsonlPath, "");
+  it("forwards newly-appended parsed entries to onEntry", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      const jsonlPath = path.join(fixture.projDir, "session.jsonl");
+      // Locked file already has its header line; the watcher skips past it.
+      fs.writeFileSync(
+        jsonlPath,
+        JSON.stringify({ sessionId: "SID-A", type: "user", message: { content: "header" } }) + "\n",
+      );
+      fs.utimesSync(jsonlPath, (t0 + 500) / 1000, (t0 + 500) / 1000);
 
-    const handle = setupJsonlWatcher({
-      cwd: fakeCwd,
-      onEntry: () => {},
-      onRotation: () => {},
-    });
-    if (handle) handle.close();
-    expect(true).toBe(true);
+      const entries: Array<{ type?: string }> = [];
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: (e) => entries.push(e),
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+      });
+      try {
+        expect(handle?.getLockedJsonlPath?.()).toBe(jsonlPath);
+        // A new turn is appended after the lock; rescan drives the read path.
+        fs.appendFileSync(
+          jsonlPath,
+          JSON.stringify({ type: "assistant", message: { content: "reply" } }) + "\n",
+        );
+        handle?.rescan?.();
+        expect(entries.length).toBe(1);
+        expect(entries[0]?.type).toBe("assistant");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
   });
 
   // ── v3.2.0 session-scoped behavior tests ──

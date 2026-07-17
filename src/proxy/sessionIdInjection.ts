@@ -25,6 +25,26 @@ const RESUME_FLAGS = new Set(["-c", "--continue", "-r", "--resume"]);
 /** Immediate-exit flags: never worth injecting a session id for. */
 const IMMEDIATE_EXIT_FLAGS = new Set(["--help", "-h", "--version", "-v"]);
 
+/**
+ * Known `claude` subcommands. `--session-id` is a session-launch option, so
+ * injecting it in front of a subcommand invocation (`claude mcp serve`,
+ * `claude doctor`, `claude update`, `claude config …`) is meaningless and may
+ * error. When the first non-flag positional is one of these we skip injection
+ * and fall back to default binding. (Deliberately conservative — a bare prompt
+ * that happens to equal one of these words also skips, which is harmless: the
+ * owner-registry path still binds correctly.)
+ */
+const CLAUDE_SUBCOMMANDS = new Set([
+  "mcp",
+  "config",
+  "doctor",
+  "update",
+  "install",
+  "migrate-installer",
+  "setup-token",
+  "plugin",
+]);
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface SessionIdInjectionResult {
@@ -42,6 +62,7 @@ export interface SessionIdInjectionResult {
     | "user_session_id"
     | "resume_flag"
     | "immediate_exit"
+    | "subcommand"
     | "bad_id";
 }
 
@@ -84,6 +105,12 @@ export function maybeInjectSessionId(opts: {
   // --help / --version etc: pointless to inject.
   if (args.some((a) => IMMEDIATE_EXIT_FLAGS.has(a.toLowerCase()))) {
     return { args, injected: false, reason: "immediate_exit" };
+  }
+  // `claude <subcommand> …` (mcp/config/doctor/update/…): --session-id does not
+  // apply. Skip if the first non-flag positional is a known subcommand.
+  const firstPositional = args.find((a) => !a.startsWith("-"));
+  if (firstPositional !== undefined && CLAUDE_SUBCOMMANDS.has(firstPositional)) {
+    return { args, injected: false, reason: "subcommand" };
   }
 
   const sessionId = generateId();

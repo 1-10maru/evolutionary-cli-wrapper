@@ -124,6 +124,29 @@ describe("claimOwnership", () => {
     expect(entries[0]).not.toContain("/");
     expect(entries[0]).not.toContain("\\");
   });
+
+  it("sanitizes pure dot-segment session ids (no traversal)", () => {
+    const cwd = makeCwd();
+    // ".." must not escape the owners dir. The marker still lands inside.
+    expect(claimOwnership(cwd, "..", process.pid)).toBe(true);
+    const owned = ownerFilePath(cwd, "..");
+    expect(path.dirname(owned)).toBe(ownersDir(cwd));
+    expect(path.basename(owned)).not.toBe("..");
+    expect(fs.existsSync(owned)).toBe(true);
+  });
+
+  it("FAILS OPEN (allows bind) when the registry cannot be written", () => {
+    const cwd = makeCwd();
+    // Make .evo/sessions a FILE so .evo/sessions/.owners can never be created.
+    fs.mkdirSync(path.join(cwd, ".evo"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".evo", "sessions"), "not a dir");
+    // A genuine write failure must NOT be reported as a live-owner conflict.
+    expect(claimOwnership(cwd, "sid-A", process.pid)).toBe(true);
+    // The gate must also allow the bind (tracking never silently stops).
+    const gate = createSessionOwnershipGate({ cwd });
+    expect(gate.canBind("sid-A")).toBe(true);
+    expect(gate.claimedSessionId()).toBe("sid-A");
+  });
 });
 
 describe("releaseOwnership", () => {

@@ -121,6 +121,53 @@ describe("maybeInjectSessionId", () => {
     },
   );
 
+  it.each(["mcp", "config", "doctor", "update", "install", "migrate-installer", "setup-token", "plugin"])(
+    "does NOT inject for the `%s` subcommand",
+    (sub) => {
+      const r = maybeInjectSessionId({
+        cli: "claude",
+        args: [sub, "serve"],
+        env: { EVO_BIND_SESSION_ID: "1" },
+        generateId: gen,
+      });
+      expect(r.injected).toBe(false);
+      expect(r.reason).toBe("subcommand");
+    },
+  );
+
+  it("skips injection when a subcommand follows global flags", () => {
+    const r = maybeInjectSessionId({
+      cli: "claude",
+      args: ["--debug", "mcp", "serve"],
+      env: { EVO_BIND_SESSION_ID: "1" },
+      generateId: gen,
+    });
+    expect(r.injected).toBe(false);
+    expect(r.reason).toBe("subcommand");
+  });
+
+  it("STILL injects for a bare prompt that merely contains a subcommand word", () => {
+    const r = maybeInjectSessionId({
+      cli: "claude",
+      args: ["fix the mcp bug please"],
+      env: { EVO_BIND_SESSION_ID: "1" },
+      generateId: gen,
+    });
+    expect(r.injected).toBe(true);
+    expect(r.args).toEqual(["--session-id", FIXED_UUID, "fix the mcp bug please"]);
+  });
+
+  it("STILL injects for a `-p` prompt (first positional is the prompt value)", () => {
+    const r = maybeInjectSessionId({
+      cli: "claude",
+      args: ["-p", "hello world"],
+      env: { EVO_BIND_SESSION_ID: "1" },
+      generateId: gen,
+    });
+    expect(r.injected).toBe(true);
+    expect(r.args).toEqual(["--session-id", FIXED_UUID, "-p", "hello world"]);
+  });
+
   it("does NOT inject a malformed (non-UUID) generated id", () => {
     const r = maybeInjectSessionId({
       cli: "claude",

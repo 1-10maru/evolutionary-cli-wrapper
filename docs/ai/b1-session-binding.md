@@ -75,10 +75,11 @@ the proxy falls back to ownership-gated binding) in every one of these cases:
 | Condition | Behaviour |
 |---|---|
 | `EVO_BIND_SESSION_ID` unset/false | no injection (default) |
-| CLI is not `claude` (e.g. `codex`) | no injection |
+| CLI is not `claude` | no injection (defensive guard — `detectCli` currently always returns `claude`, so this row is inert today but kept for reuse/safety) |
 | user already passed `--session-id[=...]` | no injection (respect user) |
 | resume/continue (`-c`/`--continue`/`-r`/`--resume`) | no injection (would conflict) |
 | immediate-exit (`--help`/`--version`) | no injection |
+| first non-flag positional is a known `claude` subcommand (`mcp`/`config`/`doctor`/`update`/`install`/`migrate-installer`/`setup-token`/`plugin`) | no injection (`--session-id` doesn't apply; conservative — a bare prompt equal to a subcommand word also skips, which is harmless) |
 | generated id is not a valid UUID | no injection |
 | live tracking off (non-interactive) | no injection |
 
@@ -88,9 +89,14 @@ When both are off (`EVO_DISABLE_STICK_HARD=1` and no injection), behaviour is
 identical to pre-B1.
 
 All owner-registry operations are **best-effort / fail-open**: any filesystem or
-parse error degrades to "not owned / claimable" rather than throwing, so a
-broken registry never blocks a session from being tracked — it only weakens the
-multi-window guarantee back to pre-B1 strength.
+parse error degrades to "claimable" rather than throwing, so a broken registry
+never blocks a session from being tracked — it only weakens the multi-window
+guarantee back to pre-B1 strength. In particular `claimOwnership` returns
+`false` (back off) **only** for a confirmed live, different owner; a genuine
+write failure (read-only fs, `ENOSPC`, `EACCES`, an unwritable `.owners` dir) is
+distinguished from an `EEXIST` clash and **allows the bind** — an unwritable
+registry must never silently stop evo tracking (the wrapped `claude` is
+unaffected regardless).
 
 Injection support in the installed `claude` (`--session-id` availability) is
 verified on real machines by a **separate QA gate**; this change unit-tests the

@@ -52,7 +52,10 @@ export function ownersDir(cwd: string): string {
  * even though Claude Code session ids are UUIDs.
  */
 export function ownerFilePath(cwd: string, sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
+  // Drop "." too (not just separators) so pure "." / ".." can never survive as
+  // a traversal segment. Claude session ids are UUIDs (hex + hyphens), so this
+  // never alters a real id.
+  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "_") || "_";
   return path.join(ownersDir(cwd), safe);
 }
 
@@ -106,31 +109,48 @@ function markerIsStaleByAge(file: string): boolean {
   }
 }
 
-function writeOwnerMarker(file: string, pid: number, cwd: string, flag: "wx" | "w"): boolean {
+interface OwnerWriteResult {
+  ok: boolean;
+  /** errno of a failed write; "EEXIST" for the expected exclusive-create clash. */
+  code?: string;
+}
+
+function writeOwnerMarker(file: string, pid: number, cwd: string, flag: "wx" | "w"): OwnerWriteResult {
   const payload = JSON.stringify({ pid, cwd, claimedAt: new Date().toISOString() });
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, payload, { flag });
-    return true;
+    return { ok: true };
   } catch (err) {
     const n = normalizeErr(err);
     // EEXIST from the exclusive ("wx") create is an expected, non-error outcome
     // (another proxy won the race); the caller inspects the existing marker.
-    if (flag === "wx" && n.code === "EEXIST") return false;
-    ownershipLog.debug("owner marker write failed (non-fatal)", {
-      file,
-      flag,
-      errno: n.code,
-      message: n.message,
-    });
-    return false;
+    // Any other errno is a genuine write failure (read-only fs / ENOSPC /
+    // EACCES / ENOTDIR) and MUST be distinguishable so the caller can fail
+    // OPEN — a registry we cannot write to must never block session tracking.
+    if (!(flag === "wx" && n.code === "EEXIST")) {
+      ownershipLog.debug("owner marker write failed (non-fatal)", {
+        file,
+        flag,
+        errno: n.code,
+        message: n.message,
+      });
+    }
+    return { ok: false, code: n.code };
   }
 }
 
 /**
  * Attempt to claim ownership of `sessionId` for `pid`. Returns true if this
- * process now owns the session (freshly claimed, reclaimed from a stale marker,
- * or already ours), false if another *live* process owns it.
+ * process may bind the session (freshly claimed, reclaimed from a stale marker,
+ * already ours, OR the registry is unwritable — fail-open). Returns false ONLY
+ * when a **confirmed live, different** process owns the marker.
+ *
+ * Fail-open is load-bearing: if `.evo/sessions/.owners` cannot be written
+ * (read-only fs, disk full, permission denied), the owner registry degrades to
+ * pre-B1 behaviour (binding proceeds) instead of silently stopping evo
+ * tracking. The wrapped `claude` is unaffected either way — only evo's
+ * bookkeeping relaxes.
  *
  * Concurrency: the first claim uses an exclusive create ("wx") so that two
  * proxies racing on the same brand-new sessionId cannot both win — exactly one
@@ -144,25 +164,41 @@ export function claimOwnership(cwd: string, sessionId: string, pid: number): boo
   const file = ownerFilePath(cwd, sessionId);
 
   // Fast path: exclusive create. Wins if no marker exists.
-  if (writeOwnerMarker(file, pid, cwd, "wx")) return true;
-
-  const existing = readOwnerRecord(file);
-  if (!existing) {
-    // Marker exists but is unreadable/corrupt → treat as stale and reclaim.
-    return writeOwnerMarker(file, pid, cwd, "w");
+  const first = writeOwnerMarker(file, pid, cwd, "wx");
+  if (first.ok) return true;
+  if (first.code !== "EEXIST") {
+    // Genuine write failure (unwritable registry) → fail OPEN so tracking never
+    // stops. This is NOT a live-owner conflict.
+    ownershipLog.warn("owner registry unwritable; allowing bind (fail-open)", {
+      file,
+      errno: first.code,
+    });
+    return true;
   }
-  if (existing.pid === pid) return true; // idempotent: already ours
-  if (isPidAlive(existing.pid) && !markerIsStaleByAge(file)) {
-    // Owned by another live proxy and not aged-out → cannot claim.
+
+  // A marker already exists (EEXIST): decide by its owner.
+  const existing = readOwnerRecord(file);
+  if (existing && existing.pid === pid) return true; // idempotent: already ours
+  if (existing && isPidAlive(existing.pid) && !markerIsStaleByAge(file)) {
+    // The ONLY case we refuse: a confirmed live, different owner.
     return false;
   }
-  // Stale marker (dead pid, or aged-out despite pid reuse) → reclaim.
-  ownershipLog.debug("reclaiming stale owner marker", {
+
+  // Corrupt/unreadable, dead pid, or aged-out marker → reclaim. If the reclaim
+  // write itself fails (unwritable registry), still fail OPEN (allow bind).
+  ownershipLog.debug("reclaiming owner marker", {
     file,
-    stalePid: existing.pid,
+    stalePid: existing?.pid,
     newPid: pid,
   });
-  return writeOwnerMarker(file, pid, cwd, "w");
+  const reclaimed = writeOwnerMarker(file, pid, cwd, "w");
+  if (!reclaimed.ok) {
+    ownershipLog.warn("owner marker reclaim failed; allowing bind (fail-open)", {
+      file,
+      errno: reclaimed.code,
+    });
+  }
+  return true;
 }
 
 /**
