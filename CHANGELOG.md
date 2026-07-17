@@ -10,6 +10,14 @@
 
 ### Fixed
 
+## v3.6.3-rc.1 (2026-07-17)
+
+### Changed
+- The startup self-check (and `evo doctor --quick`) now verifies that **all** of the code parsers load — JavaScript, Python, and TypeScript — not just JavaScript. A parser whose native component is present but broken is now caught up front (and triggers the safe fallback to the real `claude`) instead of only failing later, on the first file of that language.
+
+### Internal
+- Hardened the native-dependency drift-guard test to derive the set it exercises from the addon list, so a newly added native addon is covered automatically and the checked list can't quietly go stale. Added a repository rule against rebuilding the released bundle from a feature branch.
+
 ## v3.6.2 (2026-07-17)
 
 _Patch release promoted from `v3.6.2-rc.1`. Makes a broken Evo install visible and non-blocking: the `claude` wrapper now runs a fast self-check at startup and, if anything is wrong (for example a native component that won't load), prints one clear warning line and runs the real `claude` directly instead of crashing or hanging. The result is recorded and shown in `evo doctor`, and a new `evo doctor --quick` gives an on-demand health check. Native components now load on first use, so `claude --version` and `evo doctor` keep working even when one is broken._
