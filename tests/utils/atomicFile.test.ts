@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   atomicWriteFileSync,
   readJsonFileWithRetrySync,
+  gcStaleAtomicTmps,
+  isAtomicTmpName,
 } from "../../src/utils/atomicFile";
 
 const tempDirs: string[] = [];
@@ -107,5 +109,62 @@ describe("readJsonFileWithRetrySync", () => {
     }
     expect(code).toBe("ENOENT");
     expect(spy).toHaveBeenCalledTimes(1); // no retry on a genuinely-absent file
+  });
+});
+
+describe("isAtomicTmpName", () => {
+  it("matches the atomic tmp shape and rejects everything else", () => {
+    expect(isAtomicTmpName("config.json.tmp.1234.1699999999999.ab12cd")).toBe(true);
+    expect(isAtomicTmpName("mascot.json.tmp.9.1.z")).toBe(true);
+    // Real files and legacy single-suffix tmps are not matched.
+    expect(isAtomicTmpName("config.json")).toBe(false);
+    expect(isAtomicTmpName("live-state.json.tmp")).toBe(false);
+    expect(isAtomicTmpName("notes.tmp.txt")).toBe(false);
+    // Non-numeric pid/timestamp is not the shape we produce.
+    expect(isAtomicTmpName("config.json.tmp.abc.def.ghi")).toBe(false);
+  });
+});
+
+describe("gcStaleAtomicTmps", () => {
+  it("removes stale atomic tmps, keeps fresh tmps and non-tmp files", () => {
+    const dir = tmpDir();
+    const stale = path.join(dir, "config.json.tmp.111.1000.aaa");
+    const fresh = path.join(dir, "config.json.tmp.222.2000.bbb");
+    const real = path.join(dir, "config.json");
+    fs.writeFileSync(stale, "x");
+    fs.writeFileSync(fresh, "y");
+    fs.writeFileSync(real, "{}");
+    // Age the stale tmp two hours into the past (past the 1h default cutoff).
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(stale, old, old);
+
+    const res = gcStaleAtomicTmps(dir);
+    expect(res.scanned).toBe(2); // both tmp shapes scanned; real file ignored
+    expect(res.removed).toBe(1);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true); // too new to sweep
+    expect(fs.existsSync(real)).toBe(true); // not a tmp shape
+  });
+
+  it("honors a custom maxAgeMs cutoff", () => {
+    const dir = tmpDir();
+    const t = path.join(dir, "mascot.json.tmp.5.5.qq");
+    fs.writeFileSync(t, "z");
+    const tenSecAgo = new Date(Date.now() - 10_000);
+    fs.utimesSync(t, tenSecAgo, tenSecAgo);
+    // Cutoff of 1s → the 10s-old tmp is stale and swept.
+    const res = gcStaleAtomicTmps(dir, 1000);
+    expect(res.removed).toBe(1);
+    expect(fs.existsSync(t)).toBe(false);
+  });
+
+  it("is a no-op on a missing directory and never throws", () => {
+    const dir = tmpDir();
+    const missing = path.join(dir, "no-such-dir");
+    let res: { scanned: number; removed: number } | undefined;
+    expect(() => {
+      res = gcStaleAtomicTmps(missing);
+    }).not.toThrow();
+    expect(res).toEqual({ scanned: 0, removed: 0 });
   });
 });

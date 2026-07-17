@@ -27,10 +27,12 @@ import {
   gcOldSessionFiles,
   liveStateTargets,
   sessionLiveStatePath,
+  sessionsDir,
   teardownLiveStateFiles,
   writeLiveStateDual,
 } from "./proxy/liveState";
 import { setupJsonlWatcher, type JsonlWatcherHandle } from "./proxy/jsonlWatcher";
+import { gcStaleAtomicTmps } from "./utils/atomicFile";
 import {
   buildLiveStatePayload,
   createEmptyTurn,
@@ -287,6 +289,11 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     // call defensively so a future regression cannot crash proxy startup.
     try {
       gcOldSessionFiles(cwd);
+      // v3.6.5: also sweep orphaned atomic-write tmp files (a crash between the
+      // tmp write and the rename leaves `<name>.tmp.<pid>.<ts>.<rand>` behind).
+      // config/mascot tmps land in `<cwd>/.evo/`, session tmps in `.evo/sessions/`.
+      gcStaleAtomicTmps(path.join(cwd, ".evo"));
+      gcStaleAtomicTmps(sessionsDir(cwd));
     } catch {
       // intentionally ignored — GC is opportunistic
     }

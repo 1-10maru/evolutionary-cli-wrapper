@@ -7,6 +7,7 @@
 // retry read so a transient torn read heals instead of crashing.
 
 import fs from "node:fs";
+import path from "node:path";
 
 export interface AtomicWriteLogger {
   warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -112,4 +113,67 @@ export function readJsonFileWithRetrySync<T>(
     }
   }
   throw lastErr;
+}
+
+// ── Stale tmp-file sweep ──────────────────────────────────────────────────
+// `atomicWriteFileSync` writes to `<target>.tmp.<pid>.<epochms>.<rand>` then
+// renames over the target. If the process dies between the write and the
+// rename (crash / SIGKILL), the tmp file is orphaned. A tmp only exists for
+// microseconds during a healthy write, so any tmp older than a short window is
+// certainly abandoned and safe to remove. This RE is anchored to that exact
+// shape so a real file merely containing ".tmp" in its name is never matched.
+const ATOMIC_TMP_RE = /\.tmp\.\d+\.\d+\.[a-z0-9]+$/i;
+
+/** True if `name` is an atomic-write tmp file (see atomicWriteFileSync). */
+export function isAtomicTmpName(name: string): boolean {
+  return ATOMIC_TMP_RE.test(name);
+}
+
+/**
+ * Best-effort GC of stale atomic-write tmp files in `dir`. Non-recursive.
+ * Removes only files matching the atomic tmp shape whose mtime is older than
+ * `maxAgeMs` (default 1 hour). Never throws — failures are logged and swallowed
+ * so an opportunistic sweep can never crash startup. A missing dir is a no-op.
+ */
+export function gcStaleAtomicTmps(
+  dir: string,
+  maxAgeMs: number = 60 * 60 * 1000,
+  logger?: AtomicWriteLogger,
+): { scanned: number; removed: number } {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch (err) {
+    const n = errInfo(err);
+    if (n.code !== "ENOENT") {
+      logger?.warn("atomic tmp GC: readdir failed", { path: dir, errno: n.code, message: n.message });
+    }
+    return { scanned: 0, removed: 0 };
+  }
+  const cutoff = Date.now() - maxAgeMs;
+  let scanned = 0;
+  let removed = 0;
+  for (const name of entries) {
+    if (!isAtomicTmpName(name)) continue;
+    scanned += 1;
+    const full = path.join(dir, name);
+    try {
+      const st = fs.statSync(full);
+      if (st.mtimeMs < cutoff) {
+        fs.unlinkSync(full);
+        removed += 1;
+      }
+    } catch (err) {
+      const n = errInfo(err);
+      // ENOENT: another sweeper/writer already removed it — not an error.
+      if (n.code !== "ENOENT") {
+        logger?.warn("atomic tmp GC: stat/unlink failed", {
+          path: full,
+          errno: n.code,
+          message: n.message,
+        });
+      }
+    }
+  }
+  return { scanned, removed };
 }
