@@ -173,6 +173,8 @@ When the statusline is rendered through the `evo` CLI (`evo statusline`), it per
 | `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when spawning the real `claude`, used for re-entry detection. |
 | `EVO_FORCE_NORMAL` | unset | Force full (non-lightweight) tracking regardless of cwd heuristics. Wins over `EVO_FORCE_LIGHT`. |
 | `EVO_FORCE_LIGHT` | unset | Force lightweight tracking regardless of cwd heuristics. |
+| `EVO_BIND_SESSION_ID` | unset | When `1`, the proxy injects `--session-id <uuid>` into the launched `claude` so the tracker binds to that exact session — best precision when you run several Claude Code windows in one folder. Requires a `claude` that accepts `--session-id`. |
+| `EVO_DISABLE_STICK_HARD` | unset | When `1`, restores the pre-3.6.9 behavior where the tracker may re-attach to a newer session's transcript in the same folder (escape hatch; not recommended). |
 
 </details>
 
@@ -182,7 +184,7 @@ Evo scores your collaboration **locally**. Nothing is sent anywhere — the only
 
 **What is stored.** Per turn, a **capped preview of the input** you sent the wrapped CLI (at most 500 characters), a **sha256 hash and length** of the full input (so repeated prompts can be recognized without keeping the text), a short **output preview** (~160 characters), plus derived metrics (detected file paths, token counts, friction/complexity scores).
 
-**Where.** Under `<project>/.evo/` — the SQLite database `.evo/evolutionary.db`, redacted logs in `.evo/logs/`, and per-session counters in `.evo/sessions/`. A small live-status file is also written to `~/.claude/.evo-live.json` for the statusline.
+**Where.** Under `<project>/.evo/` — the SQLite database `.evo/evolutionary.db`, redacted logs in `.evo/logs/`, and per-session counters in `.evo/sessions/`. Session-owner markers under `.evo/sessions/.owners/` (used to keep concurrent windows from claiming each other's session) hold only a session id, process id, and timestamp — no prompt or output data. A small live-status file is also written to `~/.claude/.evo-live.json` for the statusline.
 
 **Retention.** Logs older than 7 days are pruned automatically; the database is compacted on a size/age policy (`evo storage` shows the footprint, `evo compact` archives old raw episodes into rollups).
 
