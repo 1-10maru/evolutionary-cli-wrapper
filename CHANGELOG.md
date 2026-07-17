@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+## v3.6.8 (2026-07-18)
+
+_Patch release promoted from `v3.6.8-rc.1`. Dependency maintenance: `commander` 14 → 15 and `better-sqlite3` 12.9 → 12.11, with no user-facing behavior change; also documents the compressed risk-tiered release-gate flow._
+
+### Changed
+- Dependency bumps: `commander` 14 → 15 (the CLI argument-parsing library — major version) and `better-sqlite3` 12.9 → 12.11 (the native SQLite driver). No user-facing behavior change intended; the CLI surface and DB layer are unchanged.
+
+### Internal
+- Updated the risk-tiered release-gate policy in `docs/RELEASE_PROCESS.md`: Tier 2 now skips the RC channel entirely (version bump folded into the train PR, a single combined review+matrix gate agent, direct stable dispatch — the stable workflow's own 3-OS smoke + OIDC publish is the safety net); Tier 3 keeps the RC soak + two independent gate agents. A pure dependency bump uses a Tier-3 variant: CI clean-`npm ci` build+test+closure-guard with the new deps + a targeted new-deps smoke + the RC soak, instead of a full behavioral matrix on hand-provisioned deps.
+
 ## v3.6.8-rc.1 (2026-07-18)
 
 ### Changed
