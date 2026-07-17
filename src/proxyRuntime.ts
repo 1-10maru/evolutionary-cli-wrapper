@@ -32,6 +32,8 @@ import {
   writeLiveStateDual,
 } from "./proxy/liveState";
 import { setupJsonlWatcher, type JsonlWatcherHandle } from "./proxy/jsonlWatcher";
+import { createSessionOwnershipGate, gcStaleOwners, type SessionOwnershipGate } from "./proxy/sessionOwnership";
+import { maybeInjectSessionId } from "./proxy/sessionIdInjection";
 import { gcStaleAtomicTmps } from "./utils/atomicFile";
 import {
   buildLiveStatePayload,
@@ -204,6 +206,19 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
     process.env.EVO_LIVE_TRACKING !== "0";
   const { cwdTarget: liveStateFile, homeTarget: homeLiveStateFile } = liveStateTargets(cwd);
 
+  // ── B1 recording-side session binding ──
+  // Opt-in `--session-id` injection makes the spawned session's id known up
+  // front so the watcher can bind to exactly the right JSONL. The ownership
+  // gate (`.evo/sessions/.owners/<sid>`) prevents parallel windows in the same
+  // cwd from stealing each other's session. Both are scoped to live tracking
+  // (interactive sessions); when tracking is off, args and binding are
+  // unchanged (pre-B1 behaviour).
+  const injection = liveTrackingEnabled
+    ? maybeInjectSessionId({ cli, args: options.args })
+    : { args: options.args, injected: false, sessionId: undefined as string | undefined, reason: "tracking_off" as const };
+  const spawnArgs = injection.args;
+  let ownershipGate: SessionOwnershipGate | null = null;
+
   // Live session state tracked via JSONL monitoring
   const liveState: ProxyLiveState = {
     turns: 0,
@@ -279,6 +294,14 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       }
       jsonlWatcherHandle = null;
     }
+    if (ownershipGate) {
+      try {
+        ownershipGate.release();
+      } catch {
+        // best-effort
+      }
+      ownershipGate = null;
+    }
     teardownLiveStateFiles(liveStateFile, homeLiveStateFile);
     liveStateTornDown = true;
   };
@@ -294,11 +317,21 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
       // config/mascot tmps land in `<cwd>/.evo/`, session tmps in `.evo/sessions/`.
       gcStaleAtomicTmps(path.join(cwd, ".evo"));
       gcStaleAtomicTmps(sessionsDir(cwd));
+      // B1: sweep owner markers left by dead proxies (or aged-out markers).
+      gcStaleOwners(cwd);
     } catch {
       // intentionally ignored — GC is opportunistic
     }
+    // B1: create the ownership gate and, when a session id was injected,
+    // pre-claim it so the marker exists before the child starts writing.
+    ownershipGate = createSessionOwnershipGate({ cwd });
+    if (injection.sessionId) {
+      ownershipGate.canBind(injection.sessionId);
+    }
     jsonlWatcherHandle = setupJsonlWatcher({
       cwd,
+      expectedSessionId: injection.sessionId,
+      canBindSession: (sessionId) => (ownershipGate ? ownershipGate.canBind(sessionId) : true),
       onEntry: (entry) => {
         processJsonlEntry(entry, {
           liveState,
@@ -340,12 +373,13 @@ export async function runProxySession(options: ProxyRunOptions): Promise<{
 
   proxySpawnLog.info("spawning subprocess", {
     command: originalCommand,
-    argvLength: options.args.length,
+    argvLength: spawnArgs.length,
     cwd,
     envKeyCount: Object.keys(process.env).length,
     interactivePassthrough,
+    sessionIdInjected: injection.injected,
   });
-  const child = spawnInteractiveCommand(originalCommand, options.args, cwd, interactivePassthrough);
+  const child = spawnInteractiveCommand(originalCommand, spawnArgs, cwd, interactivePassthrough);
 
   // Handle terminal signals without orphaning the child. The previous handler
   // called process.exit(0) here, which left the child running (a zombie/orphan

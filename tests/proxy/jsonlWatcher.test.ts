@@ -309,3 +309,205 @@ describe("jsonlWatcher", () => {
     }
   });
 });
+
+// ── B1 recording-side session binding tests ──
+
+/** Write a JSONL with a given sessionId and set its mtime (seconds since epoch). */
+function writeJsonl(dir: string, name: string, sessionId: string, mtimeMs: number): string {
+  const p = path.join(dir, name);
+  fs.writeFileSync(
+    p,
+    JSON.stringify({ sessionId, type: "user", message: { content: "x" } }) + "\n",
+  );
+  fs.utimesSync(p, mtimeMs / 1000, mtimeMs / 1000);
+  return p;
+}
+
+describe("jsonlWatcher — B1 bind-first-stick-hard", () => {
+  it("does NOT migrate to a newer JSONL in the same cwd once locked", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      const fileA = writeJsonl(fixture.projDir, "a.jsonl", "SID-A", t0 + 500);
+
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+      });
+      try {
+        expect(handle?.getLockedJsonlPath?.()).toBe(fileA);
+        expect(handle?.getSessionId?.()).toBe("SID-A");
+
+        // A second window writes a NEWER transcript in the same cwd.
+        writeJsonl(fixture.projDir, "b.jsonl", "SID-B", t0 + 5000);
+        handle?.rescan?.();
+
+        // Stick-hard: we must remain bound to A, never migrate to B.
+        expect(handle?.getLockedJsonlPath?.()).toBe(fileA);
+        expect(handle?.getSessionId?.()).toBe("SID-A");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  it("migrates when EVO_DISABLE_STICK_HARD=1 (legacy escape hatch)", () => {
+    const fixture = makeFakeHomeAndProject();
+    const prev = process.env.EVO_DISABLE_STICK_HARD;
+    process.env.EVO_DISABLE_STICK_HARD = "1";
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      writeJsonl(fixture.projDir, "a.jsonl", "SID-A", t0 + 500);
+
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+      });
+      try {
+        const fileB = writeJsonl(fixture.projDir, "b.jsonl", "SID-B", t0 + 5000);
+        handle?.rescan?.();
+        // Legacy behaviour: migrate to the newer file.
+        expect(handle?.getLockedJsonlPath?.()).toBe(fileB);
+        expect(handle?.getSessionId?.()).toBe("SID-B");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.EVO_DISABLE_STICK_HARD;
+      else process.env.EVO_DISABLE_STICK_HARD = prev;
+      fixture.restore();
+    }
+  });
+});
+
+describe("jsonlWatcher — B1 exact binding (expectedSessionId)", () => {
+  it("binds ONLY to the JSONL whose sessionId matches, ignoring a newer other session", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      // Another window's session is NEWER by mtime …
+      writeJsonl(fixture.projDir, "other.jsonl", "OTHER-SID", t0 + 3000);
+      // … but ours is the one we injected.
+      const mine = writeJsonl(fixture.projDir, "mine.jsonl", "MINE-SID", t0 + 1000);
+
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+        expectedSessionId: "MINE-SID",
+      });
+      try {
+        expect(handle?.getLockedJsonlPath?.()).toBe(mine);
+        expect(handle?.getSessionId?.()).toBe("MINE-SID");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  it("stays unbound until the matching sessionId appears", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      writeJsonl(fixture.projDir, "other.jsonl", "OTHER-SID", t0 + 1000);
+
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+        expectedSessionId: "MINE-SID",
+      });
+      try {
+        expect(handle?.getLockedJsonlPath?.()).toBe("");
+        // Our injected session finally writes its transcript.
+        const mine = writeJsonl(fixture.projDir, "mine.jsonl", "MINE-SID", t0 + 2000);
+        handle?.rescan?.();
+        expect(handle?.getLockedJsonlPath?.()).toBe(mine);
+        expect(handle?.getSessionId?.()).toBe("MINE-SID");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+});
+
+describe("jsonlWatcher — B1 ownership gate (canBindSession)", () => {
+  it("skips a session owned by another live proxy and binds the next free one", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      // The freshest file is owned by another proxy …
+      writeJsonl(fixture.projDir, "owned.jsonl", "OWNED-SID", t0 + 3000);
+      // … the older one is free for us.
+      const free = writeJsonl(fixture.projDir, "free.jsonl", "FREE-SID", t0 + 1000);
+
+      const seen: string[] = [];
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+        canBindSession: (sid) => {
+          seen.push(sid);
+          return sid !== "OWNED-SID";
+        },
+      });
+      try {
+        expect(handle?.getLockedJsonlPath?.()).toBe(free);
+        expect(handle?.getSessionId?.()).toBe("FREE-SID");
+        // The gate was consulted for the owned session first (newest), then ours.
+        expect(seen).toContain("OWNED-SID");
+        expect(seen).toContain("FREE-SID");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  it("defers binding when the candidate sessionId is not yet readable", () => {
+    const fixture = makeFakeHomeAndProject();
+    try {
+      if (!homedirRedirectWorks(fixture.fakeHome)) return;
+      const t0 = Date.now();
+      // Empty file: header/sessionId not yet flushed.
+      const empty = path.join(fixture.projDir, "empty.jsonl");
+      fs.writeFileSync(empty, "");
+      fs.utimesSync(empty, (t0 + 1000) / 1000, (t0 + 1000) / 1000);
+
+      const handle = setupJsonlWatcher({
+        cwd: fixture.fakeCwd,
+        onEntry: () => {},
+        onRotation: () => {},
+        proxyStartTimeOverride: t0,
+        canBindSession: () => true,
+      });
+      try {
+        // Ownership-gated path requires a readable sessionId → deferred.
+        expect(handle?.getLockedJsonlPath?.()).toBe("");
+      } finally {
+        handle?.close();
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+});
