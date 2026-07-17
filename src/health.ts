@@ -104,10 +104,19 @@ export function checkNativesLoadable(): HealthCheck {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Parser = require("tree-sitter");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const JavaScript = require("tree-sitter-javascript");
     const parser = new Parser();
-    parser.setLanguage(JavaScript);
+    // Load AND bind every grammar the AST diff can use (episodeLifecycle drives
+    // js/ts/tsx/python). A grammar whose native binding is present-but-broken only
+    // throws on setLanguage, so checking javascript alone would pass self-check
+    // and then crash mid-session on the first python/typescript file.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    parser.setLanguage(require("tree-sitter-javascript"));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    parser.setLanguage(require("tree-sitter-python"));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const TypeScript = require("tree-sitter-typescript");
+    parser.setLanguage(TypeScript.typescript);
+    parser.setLanguage(TypeScript.tsx);
   } catch (err) {
     return { name: "native-load", ok: false, detail: `tree-sitter: ${errMsg(err)}` };
   }
