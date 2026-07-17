@@ -34,6 +34,8 @@ const suites = [
   ["CONCURRENCY / STATUSLINE (G,E)", ["harness-concurrency.mjs"]],
   ["SELF-CHECK (H1-H4)", ["harness-selfcheck.mjs"]],
   ["SELF-CHECK broken-python (H5)", ["harness-selfcheck-py.mjs"]],
+  ["SECRET-MASKING all persisted sites (H7ext)", ["harness-h7ext.mjs"]],
+  ["SECRET-MASKING evo-run path (H7run)", ["harness-h7run.mjs"]],
 ];
 for (const [label, [file, ...rest]] of suites) {
   const s = step(label, [script(file), "--work", WORK, ...rest]);

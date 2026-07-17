@@ -40,9 +40,18 @@ describe("redactSecretText — standalone credential shapes", () => {
     expect(redactSecretText(`token ${t}`)).toBe("token [REDACTED]");
   });
 
-  it("masks sk- and sk-ant- API keys", () => {
+  it("masks sk-, sk-ant-, sk-proj-, sk-svcacct- API keys (real, long bodies)", () => {
     expect(redactSecretText("sk-ant-api03-" + "a".repeat(40))).toBe("[REDACTED]");
-    expect(redactSecretText("use sk-" + "b".repeat(32) + " now")).toBe("use [REDACTED] now");
+    expect(redactSecretText("use sk-" + "b".repeat(48) + " now")).toBe("use [REDACTED] now");
+    expect(redactSecretText("sk-proj-" + "c".repeat(30))).toBe("[REDACTED]");
+    expect(redactSecretText("sk-svcacct-" + "d".repeat(30))).toBe("[REDACTED]");
+  });
+
+  it("does NOT mask short benign sk- words (tightened body length)", () => {
+    // Bodies under the 24-char minimum are ordinary words, not keys.
+    for (const benign of ["sk-cli", "sk-based", "sk-based-tool", "use the sk-lang here"]) {
+      expect(redactSecretText(benign)).toBe(benign);
+    }
   });
 
   it("masks Google API keys and Slack tokens", () => {

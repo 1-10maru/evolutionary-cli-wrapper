@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+### Fixed
+- The `evo run` path now honors `capture.promptText`: when prompt-text capture is disabled, the prompt-submitted event no longer stores a preview of your prompt in the local database (it previously persisted one unconditionally, bypassing the privacy flag). When enabled, the preview stays secret-masked.
+
+### Changed
+- Tightened the standalone `sk-…` secret pattern used when masking stored text: it now requires a real key-length body and recognizes `sk-proj-`/`sk-svcacct-` in addition to `sk-ant-`, so short benign words like `sk-cli` are no longer masked while real API keys still are.
+
+### Internal
+- Adopted the secret-masking behavioral gates into `scripts/qa/` as permanent suites wired into `run-all`: **H7ext** checks masking across every persisted text site (turn input/previews, episode + prompt-profile previews, and `episode_events.details_json`), and **H7run** checks the `evo run` prompt-submitted event path.
+- Stabilized the flaky Windows interpreter-shim wedge test (raised its timeout budget and added one retry) so loaded-runner contention no longer false-fails CI; a genuine `/exit`-hang regression still fails.
+
 ## v3.6.5 (2026-07-18)
 
 _Patch release promoted from `v3.6.5-rc.1`. Privacy + hygiene: prompt/output text stored in the local tracking database is secret-masked before write (across every persisted text site), startup sweeps orphaned atomic-write temp files, and the v3.6.0 `SQLITE_BUSY` notes are consolidated into one narrative._

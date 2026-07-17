@@ -361,6 +361,7 @@ const itWin = process.platform === "win32" ? it : it.skip;
 describe("interpreter-shim stdin wedge (Windows)", () => {
   itWin(
     "does not hang when the resolved command is a PowerShell shim that pipes stdin",
+    { timeout: 75_000, retry: 1 },
     async () => {
       const cwd = makeProjectDir("evo-ps1-wedge-");
       // A fast-exit-1 fake CLI the shim invokes. A .cmd stands in for the real
@@ -400,19 +401,19 @@ describe("interpreter-shim stdin wedge (Windows)", () => {
 
       // spawnWrapper leaves the wrapper's own stdin OPEN, and the wrapper runs
       // non-attach (non-TTY) so it must close the PowerShell child's stdin.
-      // 25s budget: hosted-runner pwsh/cmd cold starts + suite contention were
-      // measured to stack past the old 15s on bad runs (local worst under a
-      // spawn-storm: 2.8s; CI cold-start estimates add 6-12s). A genuine wedge
-      // still fails — and the timeout diagnostics say which case it was.
+      // 45s budget + one retry: a genuine /exit-hang regression is INFINITE, so
+      // even a generous timeout still catches it, while a loaded hosted runner
+      // (pwsh/cmd cold starts + suite contention stacking the ~3s local chain
+      // past 25s/30s on bad runs) no longer false-fails. The timeout diagnostics
+      // still say which case it was, and a real wedge fails all attempts.
       const result = await spawnWrapper({
         cwd,
         proxyArgs: ["--bad-flag-xyz"],
-        timeoutMs: 25_000,
+        timeoutMs: 45_000,
         markerPath,
       });
       expect(result.code).toBe(1);
     },
-    40_000,
   );
 });
 
