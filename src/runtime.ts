@@ -84,6 +84,7 @@ export async function runEpisode(options: RunOptions): Promise<{
   artifacts: EpisodeArtifacts;
 }> {
   const cwd = path.resolve(options.cwd);
+  const config = ensureEvoConfig(cwd);
   const cli = detectCli(options.command[0], options.cliOverride);
   const promptText = collectPromptText(options);
   const promptProfile = extractPromptProfile(promptText);
@@ -103,8 +104,10 @@ export async function runEpisode(options: RunOptions): Promise<{
     createEvent("prompt_submitted", "wrapper", {
       promptHash: promptProfile.promptHash,
       promptLength: promptProfile.promptLength,
-      // Secret-mask before this preview is persisted into episode_events.details_json.
-      promptPreview: redactSecretText(promptProfile.preview),
+      // Honor capture.promptText (mirrors the DB text columns): store nothing
+      // when disabled; otherwise secret-mask before this preview is persisted
+      // into episode_events.details_json.
+      promptPreview: config.capture.promptText ? redactSecretText(promptProfile.preview) : "",
     }),
   ];
   const usageObservations: UsageObservation[] = [];
@@ -300,7 +303,6 @@ export async function runEpisode(options: RunOptions): Promise<{
       }
     : null;
 
-  const config = ensureEvoConfig(cwd);
   if (config.retention.compactOnRun) {
     db.compactRawEpisodes();
   }

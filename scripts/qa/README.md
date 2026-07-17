@@ -38,6 +38,8 @@ node scripts/qa/harness-render.mjs     --work <sandbox> [A|B|D|F|all]
 node scripts/qa/harness-concurrency.mjs --work <sandbox>
 node scripts/qa/harness-selfcheck.mjs  --work <sandbox>
 node scripts/qa/harness-selfcheck-py.mjs --work <sandbox>
+node scripts/qa/harness-h7ext.mjs      --work <sandbox>
+node scripts/qa/harness-h7run.mjs      --work <sandbox>
 node scripts/qa/latency.mjs            --work <sandbox> [--baseline <old/dist/evo.bundle.cjs>]
 ```
 
@@ -77,6 +79,8 @@ The `docs/RELEASE_PROCESS.md` interactive matrix maps to these checks:
 | Statusline strictness | `harness-concurrency.mjs` | `E1_...`, `E2_foreign_session_silent` |
 | Launch fallback + self-check | `harness-selfcheck.mjs` | `H1`..`H4d` |
 | Broken-parser (all-grammar) | `harness-selfcheck-py.mjs` | `H5a`..`H5d` |
+| Secret-masking (all persisted sites) | `harness-h7ext.mjs` | `H7ext_*` (turns/episodes/prompt_profiles/episode_events) |
+| Secret-masking (`evo run` path) | `harness-h7run.mjs` | `H7run_*` (prompt_submitted event) |
 | Startup latency | `latency.mjs` | median/mean first-byte, optional delta |
 
 ## Safety rules (enforced by the harness; do not bypass)

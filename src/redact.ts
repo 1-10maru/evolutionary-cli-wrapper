@@ -67,8 +67,11 @@ const STANDALONE_SECRET_RES: RegExp[] = [
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   // GitHub personal access / OAuth / app tokens: ghp_, gho_, ghu_, ghs_, ghr_.
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
-  // OpenAI / Anthropic style keys: sk-… and sk-ant-… (underscore/dash body).
-  /\bsk-(?:ant-)?[A-Za-z0-9]{2,}-?[A-Za-z0-9_-]{16,}\b/g,
+  // OpenAI / Anthropic style keys: sk-…, sk-ant-…, sk-proj-…, sk-svcacct-…
+  // Requires a >=24-char body after an optional known provider prefix, so short
+  // benign `sk-` words (e.g. "sk-cli", "sk-based") are not masked while real
+  // keys (which are far longer) still are.
+  /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{24,}\b/g,
   // Google API keys: AIza + 35 url-safe chars.
   /\bAIza[0-9A-Za-z_-]{35}\b/g,
   // Slack tokens: xoxb-/xoxp-/xoxa-/xoxr-/xoxs- + dash-delimited body.
