@@ -18,7 +18,7 @@ import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
 import { runAdviceCommand } from "./cli/advice";
 import { runInstallStatusline } from "./cli/installStatusline";
-import { quickHealthReport } from "./health";
+import { quickHealthReport, writeSelfCheckState } from "./health";
 import { maybeRunFirstRunPrompt } from "./firstRunPrompt";
 import {
   getShellStatus,
@@ -305,13 +305,20 @@ program
     // catches present-but-unloadable natives (ABI mismatch, corrupt .node) that
     // a file check cannot see, because native loading is now lazy.
     const health = quickHealthReport();
+    // Record the result to the inspectable self-check state file so `evo doctor`
+    // can surface it later (written on both healthy and failed startups so the
+    // record always reflects the latest reality). Best-effort; never throws.
+    writeSelfCheckState(health);
     if (!health.ok) {
       const failed = health.checks.filter((c) => !c.ok);
       const summary = failed.map((c) => `${c.name}: ${c.detail ?? "failed"}`).join("; ");
       cliResolveLog.error("wrapper self-check failed; falling back to real claude", { summary });
+      // User-facing warning (Japanese). Node writes UTF-8 to stderr, so this is
+      // safe on modern terminals; the generated shim fallbacks stay ASCII for
+      // cmd.exe compatibility.
       process.stderr.write(
-        `evo: self-check failed (${summary}); running claude directly. ` +
-          `Run 'evo doctor --quick' for details, or set EVO_PROXY_ACTIVE=1 to always bypass Evo.\n`,
+        `evo: ラッパーの自己診断に失敗したため、素の claude で起動します (${summary})。` +
+          `詳細は 'evo doctor'。回避するには EVO_PROXY_ACTIVE=1 を設定してください。\n`,
       );
       await runTransparentPassthrough(cwd, cli, args, "self-check");
       return;

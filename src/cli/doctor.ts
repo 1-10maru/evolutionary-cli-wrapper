@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { quickHealthReport, type HealthCheck, type HealthReport } from "../health";
+import { quickHealthReport, readSelfCheckState, type HealthCheck, type HealthReport } from "../health";
 
 export interface DoctorOptions {
   json?: boolean;
@@ -45,6 +45,14 @@ interface LiveStateInfo {
   raw?: Record<string, unknown>;
 }
 
+interface SelfCheckInfo {
+  found: boolean;
+  ok?: boolean;
+  at?: number;
+  ageSeconds?: number;
+  failed?: string[];
+}
+
 export interface DoctorReport {
   versions: VersionInfo;
   env: EnvVarEntry[];
@@ -52,6 +60,7 @@ export interface DoctorReport {
   recentLogs: LogSummary;
   errorSummary: { errors24h: number; warns24h: number };
   liveState: LiveStateInfo;
+  selfCheck: SelfCheckInfo;
   criticalIssues: string[];
 }
 
@@ -297,10 +306,28 @@ function collectLiveState(cwd: string): LiveStateInfo {
   }
 }
 
+// ── Self-check state (written by the proxy path) ───────────────────────────
+
+function collectSelfCheck(): SelfCheckInfo {
+  const state = readSelfCheckState();
+  if (!state) return { found: false };
+  const ageSeconds = typeof state.at === "number" ? Math.floor((Date.now() - state.at) / 1000) : undefined;
+  const failed = Array.isArray(state.checks)
+    ? state.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail ?? "failed"}`)
+    : [];
+  return { found: true, ok: state.ok, at: state.at, ageSeconds, failed };
+}
+
 // ── Report assembly ────────────────────────────────────────────────────────
 
 function computeCritical(report: Omit<DoctorReport, "criticalIssues">): string[] {
   const issues: string[] = [];
+  if (report.selfCheck.found && report.selfCheck.ok === false) {
+    const reasons = (report.selfCheck.failed ?? []).join("; ");
+    issues.push(
+      `Last wrapper self-check FAILED${reasons ? ` (${reasons})` : ""}: claude launched via the fallback (real CLI, no Evo). Run 'evo doctor --quick' and reinstall the affected native dependency.`,
+    );
+  }
   const shimCheck = report.files.find((f) => f.label === "evo shim on PATH");
   const evoHomeCheck = report.files.find((f) => f.label.startsWith(".evo/ (global home)"));
   const statuslineCheck = report.files.find((f) => f.label === "statusline.py");
@@ -331,6 +358,7 @@ export function buildReport(opts: DoctorOptions): DoctorReport {
     recentLogs: logs,
     errorSummary: { errors24h: logs.errorCount24h, warns24h: logs.warnCount24h },
     liveState,
+    selfCheck: collectSelfCheck(),
   };
   const criticalIssues = computeCritical(partial);
   return { ...partial, criticalIssues };
@@ -423,6 +451,25 @@ function renderText(report: DoctorReport): string {
     lines.push(`  ${pad("updatedAt", 10)} ${fresh ? green(ageStr) : yellow(ageStr)}`);
   } else {
     lines.push(`  ${pad("found", 10)} ${dim("no (no active proxy session)")}`);
+  }
+  lines.push("");
+
+  // Self-check (last wrapper startup self-check result)
+  lines.push(bold("Wrapper Self-check (last startup)"));
+  lines.push(sep);
+  if (!report.selfCheck.found) {
+    lines.push(`  ${pad("status", 10)} ${dim("no record yet (proxy not run since install)")}`);
+  } else {
+    const age = report.selfCheck.ageSeconds;
+    const ageStr = age !== undefined ? `${age}s ago` : "(unknown)";
+    if (report.selfCheck.ok) {
+      lines.push(`  ${pad("status", 10)} ${green("ok")} ${dim(ageStr)}`);
+    } else {
+      lines.push(`  ${pad("status", 10)} ${red("FAILED")} ${dim(ageStr)}`);
+      for (const reason of report.selfCheck.failed ?? []) {
+        lines.push(`  ${red("!")} ${reason}`);
+      }
+    }
   }
   lines.push("");
 
