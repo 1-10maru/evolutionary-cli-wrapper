@@ -173,7 +173,7 @@ When the statusline is rendered through the `evo` CLI (`evo statusline`), it per
 | `EVO_PROXY_ACTIVE` | unset | Set to `1` by the proxy when spawning the real `claude`, used for re-entry detection. |
 | `EVO_FORCE_NORMAL` | unset | Force full (non-lightweight) tracking regardless of cwd heuristics. Wins over `EVO_FORCE_LIGHT`. |
 | `EVO_FORCE_LIGHT` | unset | Force lightweight tracking regardless of cwd heuristics. |
-| `EVO_BIND_SESSION_ID` | unset | When `1`, the proxy injects `--session-id <uuid>` into the launched `claude` so the tracker binds to that exact session — best precision when you run several Claude Code windows in one folder. Requires a `claude` that accepts `--session-id`. |
+| `EVO_BIND_SESSION_ID` | unset | When `1`, the proxy injects `--session-id <uuid>` into the launched `claude` so the tracker binds to that exact session — best precision when you run several Claude Code windows in one folder. Requires a `claude` that accepts `--session-id`; skipped for `claude` subcommands (`mcp`/`config`/`doctor`/…). |
 | `EVO_DISABLE_STICK_HARD` | unset | When `1`, restores the pre-3.6.9 behavior where the tracker may re-attach to a newer session's transcript in the same folder (escape hatch; not recommended). |
 
 </details>
