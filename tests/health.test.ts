@@ -157,4 +157,26 @@ describe("selfCheckStatePath / persistence", () => {
     process.env.EVO_HOME = root;
     expect(readSelfCheckState()).toBeNull();
   });
+
+  it("readSelfCheckState tolerates a corrupt/partial file (returns null, never throws)", () => {
+    const root = makeRoot();
+    process.env.EVO_HOME = root;
+    const p = selfCheckStatePath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "{ this is not json");
+    expect(() => readSelfCheckState()).not.toThrow();
+    expect(readSelfCheckState()).toBeNull();
+  });
+
+  it("writeSelfCheckState overwrites a prior (even corrupt) state atomically", () => {
+    const root = makeRoot();
+    process.env.EVO_HOME = root;
+    const p = selfCheckStatePath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "garbage");
+    writeSelfCheckState({ ok: true, checks: [{ name: "native-load", ok: true }] });
+    const state = readSelfCheckState();
+    expect(state?.ok).toBe(true);
+    expect(fs.existsSync(p + ".tmp")).toBe(false);
+  });
 });

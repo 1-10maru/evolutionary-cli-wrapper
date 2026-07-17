@@ -49,7 +49,7 @@ const countNodeFiles = (dir) => { let n = 0; const walk = (d) => { for (const e 
 
   // H5a: broken-python proxy → single warning line + exec mock, exit 0.
   const h5 = await proxy(BROKEN_PY, ["-p", "x"], { MOCK_MODE: "exit0", MOCK_TAG: "h5py" });
-  const warnLines = h5.err.split(/\r?\n/).filter((l) => /self-check failed|自己診断|素の claude/.test(l));
+  const warnLines = h5.err.split(/\r?\n/).filter((l) => /wrapper self-check failed/.test(l));
   const loadFailInWarn = /native-load/.test(h5.err) && /tree-sitter/.test(h5.err);
   const namesPython = /python/i.test(h5.err); // now expected: per-grammar naming
   const mockRan = /\[MOCK:h5py:exit0\]/.test(h5.out);

@@ -439,6 +439,18 @@ function getSiblingCommandCandidates(commandPath: string, cli: SupportedCli): st
 }
 
 function persistResolvedCommand(cwd: string, shellHome: string, cli: SupportedCli, resolved: string): void {
+  // TRUST GUARD: never cache a resolution that lives under an agent/QA
+  // scratchpad tree into config. A stale QA mock persisted here was once baked
+  // into the generated shims (real terminals would have launched the mock). Warn
+  // once and KEEP the prior value; resolution rejects such candidates too, so
+  // this is defense-in-depth for any path that reaches here.
+  if (isTempResidentTarget(resolved)) {
+    shellResolveLog.warn("refusing to persist a temp/scratchpad-resident resolved command; keeping prior value", {
+      cli,
+      resolved,
+    });
+    return;
+  }
   const persistFor = (targetCwd: string): void => {
     const config = ensureEvoConfig(targetCwd);
     if (config.shellIntegration.originalCommandMap[cli] === resolved) return;

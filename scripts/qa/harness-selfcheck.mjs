@@ -59,10 +59,12 @@ const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); }
   // + mock claude runs, exit 0. Raw bytes.
   const h1 = await proxy(BROKEN, ["-p", "x"], { MOCK_MODE: "exit0", MOCK_TAG: "hbroke" });
   const errUtf8 = h1.err.toString("utf8");
-  const warnLineArr = errUtf8.split(/\r?\n/).filter((l) => l.length > 0 && /self-check failed|自己診断|素の claude/.test(l));
-  const hasJapanese = /[぀-ヿ一-鿿]/.test(errUtf8);
+  const warnLineArr = errUtf8.split(/\r?\n/).filter((l) => l.length > 0 && /wrapper self-check failed/.test(l));
+  // The user-facing warning is ASCII/English for cmd.exe/codepage parity — assert
+  // it contains ONLY ASCII bytes so it can never mojibake on a legacy console.
+  const asciiOnly = warnLineArr.length === 1 && /^[\x00-\x7f]*$/.test(warnLineArr[0]);
   const mockRan = /\[MOCK:hbroke:exit0\]/.test(h1.out.toString("utf8"));
-  rec("H1_broken_fallback_warning_1line", h1.code === 0 && warnLineArr.length === 1 && hasJapanese && mockRan ? "PASS" : "FAIL", `exit=${h1.code} warnLines=${warnLineArr.length} hasJapanese=${hasJapanese} mockRan=${mockRan}`);
+  rec("H1_broken_fallback_warning_1line", h1.code === 0 && warnLineArr.length === 1 && asciiOnly && mockRan ? "PASS" : "FAIL", `exit=${h1.code} warnLines=${warnLineArr.length} asciiOnly=${asciiOnly} mockRan=${mockRan}`);
   const hex = h1.err.slice(0, 24).toString("hex");
   fs.writeFileSync(path.join(P.results, "H1_stderr_raw.txt"), `--- stderr UTF-8 ---\n${errUtf8}\n--- first24 bytes hex ---\n${hex}\n`);
   console.log(`     [H1 warning UTF-8] ${warnLineArr[0] || "(none)"}`);
