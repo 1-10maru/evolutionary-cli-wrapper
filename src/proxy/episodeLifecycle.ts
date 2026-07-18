@@ -16,7 +16,14 @@ import {
   renderMascotTurnLine,
   computeLiveIdealStateGauge,
 } from "../mascot";
-import { detectLiveSignals, generateTopAdvice, pickTipForModel } from "../signalDetector";
+import {
+  detectLiveSignals,
+  escalateAdvice,
+  generateTopAdvice,
+  pickTipForModel,
+  resolveEscalation,
+  type AdviceEscalationLevel,
+} from "../signalDetector";
 import { resolveProxyModel } from "../promptingGuidance";
 import { computeLiveGrade } from "../sessionGrade";
 import { extractPromptProfile } from "../promptProfile";
@@ -110,15 +117,23 @@ export interface ProxyLiveState {
   promptScoreWindow?: number[];
   /**
    * v3.6: per-session advice fire memory, keyed by `${signalKind}:${target}`.
-   * The 1st and 2nd fire of the same kind+target render as advice; the 3rd+ is
-   * suppressed (falls through to a rotating tip) so an identical nudge doesn't
-   * repeat on every edit. Lazily initialized on the first advice refresh.
+   * v3.7 (B3): repeated fires of the same kind+target no longer just suppress —
+   * coaching signals ESCALATE through copy levels (1 → 2 → 3) before finally
+   * rotating to tips; praise kinds keep the legacy suppress-at-3. Thresholds
+   * and copy live in signalDetector (resolveEscalation / escalateAdvice).
+   * Lazily initialized on the first advice refresh.
    */
   signalFireCounts?: Map<string, number>;
+  /**
+   * v3.7 (B3): escalation level of the advice currently held in `advice` /
+   * `adviceDetail`. 0 when the slot shows a rotating tip (no signal, or the
+   * signal was suppressed); 1-3 when a signal's advice is rendered. Surfaced
+   * in the live-state payload as `adviceEscalationLevel` for observability.
+   */
+  adviceEscalationLevel?: number;
 }
 
 const PROMPT_SCORE_WINDOW_CAP = 20;
-const SIGNAL_FIRE_SUPPRESS_AT = 3; // suppress the 3rd+ identical kind+target
 
 const TURN_NOISE_PATTERNS = [
   /no stdin data received in \d+s/i,
@@ -204,11 +219,16 @@ export function refreshLiveAdvice(
 
   const topAdvice = generateTopAdvice(signals);
 
-  // v3.6: per-session fire memory. Suppress the 3rd+ fire of the SAME
-  // kind+target so an identical nudge doesn't repeat on every edit; the 1st
-  // and 2nd render as today. A different target (different file/symbol) has its
-  // own counter and is never suppressed by another target's fires.
+  // v3.6: per-session fire memory keyed by kind+target. A different target
+  // (different file/symbol) has its own counter and is never affected by
+  // another target's fires.
+  // v3.7 (B3): instead of plainly suppressing the 3rd+ fire, coaching signals
+  // ESCALATE: fires 1-2 render the normal copy, 3-4 render a stronger
+  // "this keeps happening" variant, 5-6 the strongest variant, and only 7+
+  // falls through to the rotating tips (anti-nagging). Praise kinds keep the
+  // legacy suppress-at-3 (no escalation copy makes sense for praise).
   let showAdvice = !!topAdvice;
+  let escalationLevel: AdviceEscalationLevel = 1;
   if (topAdvice) {
     const ctx = topAdvice.signal.context;
     const target =
@@ -219,15 +239,19 @@ export function refreshLiveAdvice(
     if (!liveState.signalFireCounts) liveState.signalFireCounts = new Map();
     const fired = (liveState.signalFireCounts.get(key) ?? 0) + 1;
     liveState.signalFireCounts.set(key, fired);
-    if (fired >= SIGNAL_FIRE_SUPPRESS_AT) showAdvice = false;
+    const escalation = resolveEscalation(topAdvice.signal.kind, fired);
+    escalationLevel = escalation.level;
+    if (escalation.suppress) showAdvice = false;
   }
 
   if (topAdvice && showAdvice) {
-    liveState.advice = topAdvice.headline;
-    liveState.adviceDetail = topAdvice.detail;
-    liveState.signalKind = topAdvice.signal.kind;
-    liveState.beforeExample = topAdvice.beforeExample ?? "";
-    liveState.afterExample = topAdvice.afterExample ?? "";
+    const advice = escalateAdvice(topAdvice, escalationLevel);
+    liveState.advice = advice.headline;
+    liveState.adviceDetail = advice.detail;
+    liveState.signalKind = advice.signal.kind;
+    liveState.beforeExample = advice.beforeExample ?? "";
+    liveState.afterExample = advice.afterExample ?? "";
+    liveState.adviceEscalationLevel = escalationLevel;
   } else {
     // No signal fired (or it was suppressed by fire memory) — show a rotating
     // tip from the tips library, layering in guidance for the session's model.
@@ -242,6 +266,7 @@ export function refreshLiveAdvice(
     liveState.signalKind = "tip";
     liveState.beforeExample = tip.beforeExample ?? "";
     liveState.afterExample = tip.afterExample ?? "";
+    liveState.adviceEscalationLevel = 0;
   }
 
   // Update session grade
@@ -298,6 +323,9 @@ export function buildLiveStatePayload(
     comboCount: liveState.comboCount,
     adviceDetail: liveState.adviceDetail,
     signalKind: liveState.signalKind,
+    // v3.7 (B3): escalation level of the currently rendered advice.
+    // 0 = rotating tip (no signal / suppressed), 1-3 = signal advice level.
+    adviceEscalationLevel: liveState.adviceEscalationLevel ?? 0,
     beforeExample: liveState.beforeExample,
     afterExample: liveState.afterExample,
     lastExitCode: liveState.lastExitCode,
@@ -439,8 +467,11 @@ export function resetLiveStateOnRotation(liveState: ProxyLiveState): void {
   liveState.lastFirstPassGreen = true;
   // v3.6: a rotation is a fresh session — reset the live gauge window and the
   // advice fire memory so neither carries over from the previous session.
+  // v3.7 (B3): the escalation level derives from the fire memory, so it resets
+  // with it — a new session always starts back at normal (level 1) phrasing.
   liveState.promptScoreWindow = [];
   liveState.signalFireCounts = new Map();
+  liveState.adviceEscalationLevel = 0;
   // sessionId is intentionally NOT cleared here — callers (jsonl rotation
   // handler) update it explicitly with the new session's ID after reset.
   // Clearing it here would create a brief window where the live-state

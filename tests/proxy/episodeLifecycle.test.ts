@@ -228,59 +228,114 @@ describe("buildLiveStatePayload", () => {
   });
 });
 
-describe("advice fire memory (repeat suppression)", () => {
+describe("advice fire memory (escalation, v3.7 B3)", () => {
   function reviseTarget(liveState: ProxyLiveState, file: string): void {
     // Force a same_file_revisit signal for `file` (>= threshold of 3).
     liveState.filePatchCounts = new Map([[file, 3]]);
     liveState.lastFile = file;
   }
 
-  it("renders the 1st and 2nd fire, suppresses the 3rd+ of the same target", () => {
+  it("escalates the same target through levels 1 → 2 → 3 and only suppresses at the 7th fire", () => {
     const liveState = makeLiveState();
     const config = makeConfig();
     reviseTarget(liveState, "/abs/a.ts");
 
+    // Fires 1-2: level 1 (normal copy).
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("same_file_revisit");
+    expect(liveState.adviceEscalationLevel).toBe(1);
+    const level1Advice = liveState.advice;
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.adviceEscalationLevel).toBe(1);
+    expect(liveState.advice).toBe(level1Advice);
+
+    // Fires 3-4: level 2 ("this keeps happening" frame) — still advice, NOT a tip.
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("same_file_revisit");
-    // 3rd identical fire → suppressed → falls through to a rotating tip.
+    expect(liveState.adviceEscalationLevel).toBe(2);
+    expect(liveState.advice).not.toBe(level1Advice);
+    expect(liveState.advice).toContain("続いてる");
+    const level2Advice = liveState.advice;
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.adviceEscalationLevel).toBe(2);
+    expect(liveState.advice).toBe(level2Advice);
+
+    // Fires 5-6: level 3 (strongest copy).
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("same_file_revisit");
+    expect(liveState.adviceEscalationLevel).toBe(3);
+    expect(liveState.advice).not.toBe(level2Advice);
+    refreshLiveAdvice(liveState, config);
+    expect(liveState.adviceEscalationLevel).toBe(3);
+
+    // 7th+ fire: finally suppressed → rotating tip (anti-nagging).
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("tip");
-    // Still suppressed on the 4th.
+    expect(liveState.adviceEscalationLevel).toBe(0);
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("tip");
   });
 
-  it("does not suppress a DIFFERENT target (own counter)", () => {
+  it("keeps before/after examples through escalated levels", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+    reviseTarget(liveState, "/abs/a.ts");
+    refreshLiveAdvice(liveState, config); // #1
+    const baseBefore = liveState.beforeExample;
+    refreshLiveAdvice(liveState, config); // #2
+    refreshLiveAdvice(liveState, config); // #3 → level 2
+    expect(liveState.adviceEscalationLevel).toBe(2);
+    expect(liveState.beforeExample).toBe(baseBefore);
+    expect(liveState.afterExample).not.toBe("");
+  });
+
+  it("tracks a DIFFERENT target with its own counter (starts back at level 1)", () => {
     const liveState = makeLiveState();
     const config = makeConfig();
 
     reviseTarget(liveState, "/abs/a.ts");
     refreshLiveAdvice(liveState, config); // a.ts #1
     refreshLiveAdvice(liveState, config); // a.ts #2
-    refreshLiveAdvice(liveState, config); // a.ts #3 → suppressed
-    expect(liveState.signalKind).toBe("tip");
+    refreshLiveAdvice(liveState, config); // a.ts #3 → level 2
+    expect(liveState.adviceEscalationLevel).toBe(2);
 
-    // A different file starts its own count → renders as advice again.
+    // A different file starts its own count → back to normal phrasing.
     reviseTarget(liveState, "/abs/b.ts");
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("same_file_revisit");
+    expect(liveState.adviceEscalationLevel).toBe(1);
   });
 
-  it("resets fire memory on JSONL rotation", () => {
+  it("resets fire memory AND escalation level on JSONL rotation", () => {
     const liveState = makeLiveState();
     const config = makeConfig();
     reviseTarget(liveState, "/abs/a.ts");
-    refreshLiveAdvice(liveState, config);
-    refreshLiveAdvice(liveState, config);
-    refreshLiveAdvice(liveState, config);
-    expect(liveState.signalKind).toBe("tip"); // suppressed
+    for (let i = 0; i < 7; i++) refreshLiveAdvice(liveState, config);
+    expect(liveState.signalKind).toBe("tip"); // suppressed at 7th
 
     resetLiveStateOnRotation(liveState);
+    expect(liveState.adviceEscalationLevel).toBe(0);
     reviseTarget(liveState, "/abs/a.ts"); // rotation cleared filePatchCounts
     refreshLiveAdvice(liveState, config);
     expect(liveState.signalKind).toBe("same_file_revisit"); // fires again
+    expect(liveState.adviceEscalationLevel).toBe(1); // back to normal phrasing
+  });
+
+  it("praise kinds do NOT escalate and keep the legacy suppress-at-3", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+    // Base state fires first_pass_success (turns=0, firstPassGreen=true).
+    refreshLiveAdvice(liveState, config); // #1
+    expect(liveState.signalKind).toBe("first_pass_success");
+    expect(liveState.adviceEscalationLevel).toBe(1);
+    const praise = liveState.advice;
+    refreshLiveAdvice(liveState, config); // #2 — same copy, no escalation
+    expect(liveState.signalKind).toBe("first_pass_success");
+    expect(liveState.adviceEscalationLevel).toBe(1);
+    expect(liveState.advice).toBe(praise);
+    refreshLiveAdvice(liveState, config); // #3 → suppressed (legacy)
+    expect(liveState.signalKind).toBe("tip");
+    expect(liveState.adviceEscalationLevel).toBe(0);
   });
 
   it("drops the raw N回目 counter from the same_file_revisit headline", () => {
@@ -289,5 +344,21 @@ describe("advice fire memory (repeat suppression)", () => {
     refreshLiveAdvice(liveState, makeConfig());
     expect(liveState.signalKind).toBe("same_file_revisit");
     expect(liveState.advice).not.toMatch(/回目/);
+  });
+
+  it("exposes adviceEscalationLevel in the live-state payload", () => {
+    const liveState = makeLiveState();
+    const config = makeConfig();
+    reviseTarget(liveState, "/abs/a.ts");
+    refreshLiveAdvice(liveState, config);
+    refreshLiveAdvice(liveState, config);
+    refreshLiveAdvice(liveState, config); // level 2
+    const payload = buildLiveStatePayload(liveState, makeMascot());
+    expect(payload.adviceEscalationLevel).toBe(2);
+  });
+
+  it("payload defaults adviceEscalationLevel to 0 before any advice refresh", () => {
+    const payload = buildLiveStatePayload(makeLiveState(), makeMascot());
+    expect(payload.adviceEscalationLevel).toBe(0);
   });
 });
