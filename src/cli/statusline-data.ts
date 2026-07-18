@@ -94,11 +94,13 @@ export function gradeColor(g: string): string {
 }
 
 export function gradeLabel(g: string): string {
+  // Byte-identical to statusline.py `_grade_label` (the reference renderer C1
+  // consolidates onto). C is "もう一息", not "標準".
   const map: Record<string, string> = {
     S: "✨S 神",
     A: "⭐A 上手",
     B: "● B 良好",
-    C: "○ C 標準",
+    C: "○ C もう一息",
     D: "△ D がんばろう",
   };
   return map[g] ?? g;

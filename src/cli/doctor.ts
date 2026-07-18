@@ -184,6 +184,56 @@ function findOnPath(names: string[]): string | null {
   return null;
 }
 
+/** Peek `statusLine.command` from ~/.claude/settings.json; "" if absent/bad. */
+function readStatusLineCommand(settingsPath: string): string {
+  try {
+    if (!fs.existsSync(settingsPath)) return "";
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    if (!raw.trim()) return "";
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const sl = parsed.statusLine;
+    if (sl && typeof sl === "object") {
+      const cmd = (sl as Record<string, unknown>).command;
+      return typeof cmd === "string" ? cmd : "";
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Recognize a valid EvoPet statusline install in EITHER construction:
+ *   1. TS single-file — settings.json statusLine.command wires `evo statusline`
+ *      (the current install target renders the whole line; no python file).
+ *   2. legacy Python single-file / split wrapper — a deployed base_statusline.py
+ *      (also the wrapper's token-only base), or a wrapper command in settings.
+ * Returns an OK FileCheck for whichever is found, else a `missing` one.
+ */
+function detectStatuslineWiring(home: string, evoHome: string): FileCheck {
+  const label = "statusline renderer";
+  const settingsPath = path.join(home, ".claude", "settings.json");
+  const command = readStatusLineCommand(settingsPath);
+
+  // TS wiring (or an `evo statusline` wrapper command) — no python file needed.
+  if (/\bevo\s+statusline\b|statusline-wrapper/i.test(command)) {
+    return { label, path: settingsPath, status: "ok", detail: `settings.json statusLine → ${command}` };
+  }
+
+  // Legacy Python renderer / wrapper token-only base on disk.
+  const pyCandidates = [
+    path.join(home, ".claude", "base_statusline.py"),
+    path.join(evoHome, "base_statusline.py"),
+  ];
+  const pyFound = pyCandidates.find((p) => fs.existsSync(p));
+  if (pyFound) {
+    const readable = checkReadable(label, pyFound);
+    return { ...readable, detail: readable.detail ?? "legacy Python renderer" };
+  }
+
+  return { label, path: settingsPath, status: "missing", detail: "run evo install-statusline" };
+}
+
 function collectFileChecks(cwd: string): FileCheck[] {
   const home = os.homedir();
   const evoHome = process.env.EVO_HOME ?? path.join(home, ".claude");
@@ -192,17 +242,12 @@ function collectFileChecks(cwd: string): FileCheck[] {
   // .evo/ in EVO_HOME
   checks.push(checkDirExists(".evo/ (global home)", path.join(evoHome, ".evo")));
 
-  // statusline.py
-  const statuslineCandidates = [
-    path.join(home, ".claude", "base_statusline.py"),
-    path.join(evoHome, "base_statusline.py"),
-  ];
-  const statuslineFound = statuslineCandidates.find((p) => fs.existsSync(p));
-  if (statuslineFound) {
-    checks.push(checkReadable("statusline.py", statuslineFound));
-  } else {
-    checks.push({ label: "statusline.py", path: statuslineCandidates[0], status: "missing", detail: "run evo install-statusline" });
-  }
+  // statusline renderer — recognize BOTH supported constructions:
+  //   • TS single-file: settings.json statusLine.command = "evo statusline --full"
+  //     (the current `evo install-statusline` target — deploys NO python file).
+  //   • legacy Python single-file / split wrapper: a deployed base_statusline.py
+  //     (the wrapper's token-only base is also this file), or a wrapper command.
+  checks.push(detectStatuslineWiring(home, evoHome));
 
   // ~/.claude/projects/
   checks.push(checkDirExists("~/.claude/projects/", path.join(home, ".claude", "projects")));
@@ -331,14 +376,14 @@ function computeCritical(report: Omit<DoctorReport, "criticalIssues">): string[]
   }
   const shimCheck = report.files.find((f) => f.label === "evo shim on PATH");
   const evoHomeCheck = report.files.find((f) => f.label.startsWith(".evo/ (global home)"));
-  const statuslineCheck = report.files.find((f) => f.label === "statusline.py");
+  const statuslineCheck = report.files.find((f) => f.label === "statusline renderer");
 
   const shimMissing = shimCheck?.status === "missing";
   const evoHomeMissing = evoHomeCheck?.status === "missing";
   const statuslineMissing = statuslineCheck?.status === "missing";
 
   if (shimMissing && statuslineMissing && evoHomeMissing) {
-    issues.push("Evo appears not to be installed: shim not on PATH, statusline.py missing, .evo/ home missing. Run: npm install -g evolutionary-cli-wrapper && evo install-statusline");
+    issues.push("Evo appears not to be installed: shim not on PATH, statusline not wired, .evo/ home missing. Run: npm install -g evolutionary-cli-wrapper && evo install-statusline");
   }
 
   return issues;

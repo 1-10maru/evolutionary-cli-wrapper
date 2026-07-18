@@ -105,7 +105,7 @@ evo doctor
 |---------|---------------|
 | Versions | `evo`, `node`, `npm`, `python`, OS, arch |
 | EVO_* Environment | All `EVO_*` env vars; sensitive ones (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`) are masked |
-| File Checks | `.evo/` home dir, statusline.py, `~/.claude/projects/`, evo shim on PATH, `.evo/logs/` |
+| File Checks | `.evo/` home dir, statusline renderer (TS `evo statusline --full` wiring or a legacy `base_statusline.py`), `~/.claude/projects/`, evo shim on PATH, `.evo/logs/` |
 | Error Summary (last 24h) | Count of ERROR and WARN events across all rotated logs |
 | Recent WARN+ | Last up to 10 WARN/ERROR lines from today's log |
 | Live State | `updatedAt` and age of `.evo/live-state.json`; "no" if no active proxy session |

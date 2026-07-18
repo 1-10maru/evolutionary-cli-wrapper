@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("install-statusline", () => {
-  it("deploys statusline.py and writes settings.json with --yes", async () => {
+  it("wires settings.json at the TS renderer (evo statusline --full) and deploys no python file", async () => {
     const home = makeTempHome();
     const messages: string[] = [];
 
@@ -37,18 +37,17 @@ describe("install-statusline", () => {
       log: (msg) => messages.push(msg),
     });
 
-    const deployed = path.join(home, ".claude", "base_statusline.py");
+    const legacyPy = path.join(home, ".claude", "base_statusline.py");
     const settings = path.join(home, ".claude", "settings.json");
 
-    expect(fs.existsSync(deployed)).toBe(true);
+    // C1: no python renderer is deployed anymore.
+    expect(fs.existsSync(legacyPy)).toBe(false);
     expect(fs.existsSync(settings)).toBe(true);
 
     const json = JSON.parse(fs.readFileSync(settings, "utf8"));
     expect(json.statusLine.type).toBe("command");
-    expect(json.statusLine.command).toContain("base_statusline.py");
-    expect(json.statusLine.command).toMatch(/^python /);
+    expect(json.statusLine.command).toBe("evo statusline --full");
 
-    expect(result.deployedTo).toBe(deployed);
     expect(result.settingsUpdated).toBe(true);
     // No prior settings.json existed, so no backup should be created.
     expect(result.settingsBackup).toBeUndefined();
@@ -79,10 +78,42 @@ describe("install-statusline", () => {
     const backupRaw = fs.readFileSync(result.settingsBackup!, "utf8");
     expect(JSON.parse(backupRaw).statusLine.command).toBe("ccusage");
 
-    // settings.json now points at evopet, but other keys preserved.
+    // settings.json now points at the TS renderer, but other keys preserved.
     const newJson = JSON.parse(fs.readFileSync(settings, "utf8"));
-    expect(newJson.statusLine.command).toContain("base_statusline.py");
+    expect(newJson.statusLine.command).toBe("evo statusline --full");
     expect(newJson.otherKey).toBe(42);
+  });
+
+  it("migrates a legacy Python single-file install to the TS wiring and removes the orphaned script", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const legacyPy = path.join(claudeDir, "base_statusline.py");
+    fs.writeFileSync(legacyPy, "# full python renderer placeholder\n");
+    const settings = path.join(claudeDir, "settings.json");
+    fs.writeFileSync(
+      settings,
+      JSON.stringify({
+        statusLine: { type: "command", command: `python "${legacyPy.replace(/\\/g, "/")}"` },
+        keepThis: 1,
+      }),
+    );
+
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+
+    expect(result.settingsUpdated).toBe(true);
+    const json = JSON.parse(fs.readFileSync(settings, "utf8"));
+    expect(json.statusLine.command).toBe("evo statusline --full");
+    expect(json.keepThis).toBe(1);
+    // The orphaned legacy renderer is cleaned up on migration.
+    expect(fs.existsSync(legacyPy)).toBe(false);
+    // The prior settings were backed up.
+    expect(result.settingsBackup).toBeDefined();
   });
 
   it("is idempotent: second run with same config writes nothing new", async () => {
@@ -142,8 +173,8 @@ describe("install-statusline", () => {
     });
 
     expect(result.settingsUpdated).toBe(false);
-    // statusline.py is still deployed (it's harmless), but settings.json untouched.
-    expect(fs.existsSync(path.join(home, ".claude", "base_statusline.py"))).toBe(true);
+    // C1 deploys no python file, and settings.json is left untouched on decline.
+    expect(fs.existsSync(path.join(home, ".claude", "base_statusline.py"))).toBe(false);
     const json = JSON.parse(fs.readFileSync(settings, "utf8"));
     expect(json.statusLine.command).toBe("ccusage");
   });
@@ -265,7 +296,31 @@ describe("install-statusline — wrapper construction guard (A2)", () => {
 
     expect(result.noop).toBeUndefined();
     expect(result.settingsUpdated).toBe(true);
-    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(true);
+    const json = JSON.parse(fs.readFileSync(path.join(claudeDir, "settings.json"), "utf8"));
+    expect(json.statusLine.command).toBe("evo statusline --full");
+  });
+
+  it("re-running over its own TS wiring is idempotent (not self-detected as a wrapper)", async () => {
+    const home = makeTempHome();
+    const claudeDir = path.join(home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // Simulate a prior TS install: the command contains `evo statusline`, which
+    // the wrapper detector keys on — the installer must exempt its OWN command.
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify({ statusLine: { type: "command", command: "evo statusline --full" } }, null, 2),
+    );
+    const result = await runInstallStatusline({
+      yes: true,
+      packageRoot: REPO_ROOT,
+      homeDir: home,
+      log: () => {},
+    });
+    // Already correct → no-op write, but NOT a wrapper-guard noop.
+    expect(result.noop).toBeUndefined();
+    expect(result.settingsUpdated).toBe(false);
+    const json = JSON.parse(fs.readFileSync(path.join(claudeDir, "settings.json"), "utf8"));
+    expect(json.statusLine.command).toBe("evo statusline --full");
   });
 });
 
@@ -348,6 +403,7 @@ describe("install-statusline — non-standard wrapper NAME detection (#34)", () 
 
     expect(result.noop).toBeUndefined();
     expect(result.settingsUpdated).toBe(true);
-    expect(fs.existsSync(path.join(claudeDir, "base_statusline.py"))).toBe(true);
+    const json = JSON.parse(fs.readFileSync(path.join(claudeDir, "settings.json"), "utf8"));
+    expect(json.statusLine.command).toBe("evo statusline --full");
   });
 });

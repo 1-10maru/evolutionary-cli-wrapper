@@ -1,28 +1,47 @@
 // `evo install-statusline` — the END-USER, single-file statusline installer.
 //
-// It deploys the FULL `statusline.py` (token line + EvoPet) to
-// `~/.claude/base_statusline.py` and points settings.json at it directly. This
-// is one of two supported constructions:
-//   • single-file (THIS command): full renderer, no wrapper. For end users who
-//     just want EvoPet in their statusline.
+// It points Claude Code's settings.json `statusLine` at the TypeScript renderer
+// `evo statusline --full`, which renders the COMPLETE statusline (token line +
+// EvoPet block) from one process (C1). It no longer deploys the legacy Python
+// `statusline.py`; that file stays in the package only for backward compat with
+// setups installed by older versions. This is one of two supported
+// constructions:
+//   • single-file (THIS command): the TS renderer `evo statusline --full`. For
+//     end users who just want EvoPet in their statusline.
 //   • split "wrapper": a TOKEN-ONLY base + `evo statusline`, joined by a wrapper
 //     script. Deployed by `npm run setup` for the dev / hand-built setup.
 // The two must not clobber each other: this command DETECTS an existing wrapper
-// construction (see looksLikeWrapperConstruction) and refuses to overwrite it,
-// so a full renderer is never stacked on top of a token-only base (which would
-// render EvoPet twice).
+// construction (see looksLikeWrapperConstruction) and refuses to overwrite it —
+// while carefully exempting its OWN `evo statusline --full` command, which
+// contains the substring `evo statusline` the wrapper detector keys on.
+//
+// Backward compat: a setup installed by an older version (settings.json points
+// `python "…/base_statusline.py"`) keeps working untouched until the user
+// re-runs this command, which then migrates it to the TS wiring.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { getDisplayModeFile } from "./display";
 
+// The exact statusLine.command this installer writes: the TS renderer in full
+// mode. `evo` resolves via the shim on PATH (the same mechanism the split
+// wrapper's `evo statusline` and `evo doctor`'s PATH check rely on).
+export const EVO_STATUSLINE_COMMAND = "evo statusline --full";
+
+/** True only for our OWN single-file TS command (exact match). Used to exempt
+ *  it from the wrapper detector, which would otherwise match its embedded
+ *  `evo statusline` substring and treat our own wiring as a hand-built wrapper. */
+function isOwnTsCommand(command: unknown): boolean {
+  return typeof command === "string" && command.trim() === EVO_STATUSLINE_COMMAND;
+}
+
 export interface InstallStatuslineOptions {
   yes?: boolean;
   uninstall?: boolean;
   /**
-   * Override the package root used to locate `statusline.py`.
-   * Defaults to two levels up from this compiled file (dist/cli/ → dist/ → repo root).
+   * @deprecated No longer used — the installer deploys no package file (it
+   * wires `evo statusline --full`). Kept for call-site/back-compat only.
    */
   packageRoot?: string;
   /**
@@ -40,20 +59,19 @@ export interface InstallStatuslineOptions {
 }
 
 interface ResolvedPaths {
-  statuslineSrc: string;
   claudeDir: string;
-  statuslineDst: string;
+  /** Legacy Python renderer path — no longer deployed, but cleaned up on
+   *  uninstall/migration when it was left by an older single-file install. */
+  legacyStatuslineDst: string;
   settingsPath: string;
 }
 
 function resolvePaths(opts: InstallStatuslineOptions): ResolvedPaths {
-  const packageRoot = opts.packageRoot ?? path.resolve(__dirname, "..", "..");
   const home = opts.homeDir ?? os.homedir();
   const claudeDir = path.join(home, ".claude");
   return {
-    statuslineSrc: path.join(packageRoot, "statusline.py"),
     claudeDir,
-    statuslineDst: path.join(claudeDir, "base_statusline.py"),
+    legacyStatuslineDst: path.join(claudeDir, "base_statusline.py"),
     settingsPath: path.join(claudeDir, "settings.json"),
   };
 }
@@ -77,20 +95,6 @@ function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-/**
- * Statusline command we deploy. We use literal `python` (not `python3`):
- * - On Windows, `python3` is rarely on PATH; `python` is the standard launcher.
- * - On macOS / Linux, modern installs alias `python` to Python 3, and most users
- *   running Claude Code already have it. The existing install/evopet-install.sh
- *   uses the same form, so we stay consistent.
- */
-function buildStatuslineCommand(deployPath: string): string {
-  // Use forward slashes for portability inside the JSON string. Python on
-  // Windows accepts forward slashes in path arguments.
-  const normalized = deployPath.replace(/\\/g, "/");
-  return `python "${normalized}"`;
-}
-
 interface DesiredStatusline {
   type: "command";
   command: string;
@@ -102,9 +106,13 @@ function statuslineMatches(existing: unknown, desired: DesiredStatusline): boole
   return obj.type === desired.type && obj.command === desired.command;
 }
 
+/** True for a statusLine command THIS installer owns: the TS renderer, or the
+ *  legacy Python single-file renderer from an older install. Used to skip the
+ *  "overwrite?" prompt (migrating our own install is not a foreign command) and
+ *  to gate uninstall cleanup. */
 function looksLikeEvopetCommand(command: unknown): boolean {
   if (typeof command !== "string") return false;
-  return /base_statusline\.py/i.test(command);
+  return isOwnTsCommand(command) || /base_statusline\.py/i.test(command);
 }
 
 // The EvoPet statusline can be deployed two ways, for two audiences:
@@ -204,24 +212,23 @@ export async function runInstallStatusline(
     return uninstall({ paths, log });
   }
 
-  if (!fs.existsSync(paths.statuslineSrc)) {
-    throw new Error(
-      `statusline.py not found at ${paths.statuslineSrc}. Reinstall the evolutionary-cli-wrapper package.`,
-    );
-  }
-
-  // A2: never clobber a hand-built / setup-deployed WRAPPER construction. If the
-  // current statusLine.command runs a wrapper (or `evo statusline`), the base is
-  // token-only and deploying the full renderer would double-render EvoPet — so
-  // skip entirely and leave the user's wiring untouched.
+  // A2 / #34 / #116: never clobber a hand-built / setup-deployed WRAPPER
+  // construction. If the current statusLine.command runs a wrapper (or an
+  // `evo statusline` inside a script), the base is token-only and re-pointing
+  // it would double-render or break the user's wiring — so skip entirely.
+  // BUT exempt our OWN `evo statusline --full` command: it contains the
+  // substring `evo statusline` the wrapper detector keys on, yet it is the
+  // single-file TS install this command manages (re-running must stay
+  // idempotent, not self-detect as a wrapper).
   const existingCommand = readStatusLineCommand(paths.settingsPath);
   const home = options.homeDir ?? os.homedir();
   if (
-    looksLikeWrapperConstruction(existingCommand) ||
-    // #34: also catch wrappers with NON-STANDARD names — the command string may
-    // not mention `statusline-wrapper` / `evo statusline`, but the script it
-    // runs does. Content-based, best-effort, read-only.
-    scriptContentLooksLikeWrapper(existingCommand, home)
+    !isOwnTsCommand(existingCommand) &&
+    (looksLikeWrapperConstruction(existingCommand) ||
+      // #34: also catch wrappers with NON-STANDARD names — the command string
+      // may not mention `statusline-wrapper` / `evo statusline`, but the script
+      // it runs does. Content-based, best-effort, read-only.
+      scriptContentLooksLikeWrapper(existingCommand, home))
   ) {
     log(
       "Detected an existing wrapper-based statusline (statusLine.command runs a " +
@@ -232,11 +239,14 @@ export async function runInstallStatusline(
     return { settingsUpdated: false, noop: true };
   }
 
+  const desired: DesiredStatusline = {
+    type: "command",
+    command: EVO_STATUSLINE_COMMAND,
+  };
+
   if (!options.yes) {
     log(`This will:`);
-    log(`  - Copy ${paths.statuslineSrc}`);
-    log(`         → ${paths.statuslineDst}`);
-    log(`  - Update ${paths.settingsPath} (backup created first)`);
+    log(`  - Wire ${paths.settingsPath} statusLine → "${EVO_STATUSLINE_COMMAND}" (backup created first)`);
     const ans = await askPrompt("Proceed? [y/N] ");
     if (!isAffirmative(ans)) {
       log("Aborted.");
@@ -245,13 +255,6 @@ export async function runInstallStatusline(
   }
 
   fs.mkdirSync(paths.claudeDir, { recursive: true });
-  fs.copyFileSync(paths.statuslineSrc, paths.statuslineDst);
-  log(`Copied statusline.py → ${paths.statuslineDst}`);
-
-  const desired: DesiredStatusline = {
-    type: "command",
-    command: buildStatuslineCommand(paths.statuslineDst),
-  };
 
   let parsed: Record<string, unknown> = {};
   let settingsExisted = false;
@@ -275,24 +278,30 @@ export async function runInstallStatusline(
   if (statuslineMatches(existingStatusline, desired)) {
     log(`settings.json statusLine already correct, skipping write.`);
     log(``);
-    log(`Files written:`);
-    log(`  ${paths.statuslineDst}`);
     log(`Next step: restart your Claude Code session.`);
-    return { deployedTo: paths.statuslineDst, settingsUpdated: false };
+    return { settingsUpdated: false };
   }
+
+  // Whether the prior command was the legacy Python single-file renderer — if
+  // so we migrate it to the TS wiring and clean up the now-orphaned script.
+  const priorCommand =
+    existingStatusline && typeof existingStatusline === "object"
+      ? (existingStatusline as Record<string, unknown>).command
+      : undefined;
+  const migratingFromLegacyPython =
+    typeof priorCommand === "string" && /base_statusline\.py/i.test(priorCommand);
 
   if (
     existingStatusline &&
     typeof existingStatusline === "object" &&
-    !looksLikeEvopetCommand((existingStatusline as Record<string, unknown>).command) &&
+    !looksLikeEvopetCommand(priorCommand) &&
     !options.yes
   ) {
-    const cur = (existingStatusline as Record<string, unknown>).command;
-    log(`Existing statusLine command found: ${String(cur)}`);
+    log(`Existing statusLine command found: ${String(priorCommand)}`);
     const ans = await askPrompt("Overwrite with evopet's statusline? [y/N] ");
     if (!isAffirmative(ans)) {
-      log("Kept existing statusLine. statusline.py was deployed but settings.json was not modified.");
-      return { deployedTo: paths.statuslineDst, settingsUpdated: false };
+      log("Kept existing statusLine. settings.json was not modified.");
+      return { settingsUpdated: false };
     }
   }
 
@@ -305,7 +314,20 @@ export async function runInstallStatusline(
 
   parsed.statusLine = desired;
   fs.writeFileSync(paths.settingsPath, JSON.stringify(parsed, null, 2) + "\n");
-  log(`Updated ${paths.settingsPath}`);
+  log(`Updated ${paths.settingsPath} → statusLine "${EVO_STATUSLINE_COMMAND}"`);
+
+  // Migration cleanup: remove the orphaned legacy Python renderer we (an older
+  // version) had deployed. Only when the prior command actually pointed at it,
+  // so we never delete a token-only base still used by a wrapper (the wrapper
+  // guard already returned above for those).
+  if (migratingFromLegacyPython && fs.existsSync(paths.legacyStatuslineDst)) {
+    try {
+      fs.unlinkSync(paths.legacyStatuslineDst);
+      log(`Removed orphaned legacy renderer ${paths.legacyStatuslineDst}`);
+    } catch {
+      // Best-effort; a leftover file is inert now that settings points at TS.
+    }
+  }
 
   // Initialise display mode to "expansion" for first-time installs so EvoPet
   // is visible immediately. Existing users who already wrote a mode file keep
@@ -323,13 +345,11 @@ export async function runInstallStatusline(
 
   log(``);
   log(`Files written:`);
-  log(`  ${paths.statuslineDst}`);
   log(`  ${paths.settingsPath}`);
   if (backupPath) log(`Backup created: ${backupPath}`);
   log(`Next step: restart your Claude Code session.`);
 
   return {
-    deployedTo: paths.statuslineDst,
     settingsBackup: backupPath,
     settingsUpdated: true,
   };
@@ -347,13 +367,13 @@ function uninstall({
   deployedTo?: string;
   settingsBackup?: string;
 } {
+  // Clean up the legacy Python renderer if a prior (older-version) install left
+  // one. The current installer deploys no file, so this is best-effort cleanup.
   let removedFile = false;
-  if (fs.existsSync(paths.statuslineDst)) {
-    fs.unlinkSync(paths.statuslineDst);
+  if (fs.existsSync(paths.legacyStatuslineDst)) {
+    fs.unlinkSync(paths.legacyStatuslineDst);
     removedFile = true;
-    log(`Removed ${paths.statuslineDst}`);
-  } else {
-    log(`No file at ${paths.statuslineDst}, skipping.`);
+    log(`Removed legacy renderer ${paths.legacyStatuslineDst}`);
   }
 
   // Find the most recent backup and restore it.
@@ -390,6 +410,6 @@ function uninstall({
   return {
     settingsUpdated: restored,
     uninstalled: true,
-    deployedTo: removedFile ? paths.statuslineDst : undefined,
+    deployedTo: removedFile ? paths.legacyStatuslineDst : undefined,
   };
 }
