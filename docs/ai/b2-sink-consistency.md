@@ -56,8 +56,13 @@ before unlinking an mtime-expired session file:
 - owner marker present + pid **alive** (and marker not aged out) → **skip**
   (`skippedLive` counter);
 - no marker / dead pid / aged-out marker → reclaim by mtime as before;
-- liveness probe throws → **keep the file** (conservative fail-open; the next
-  GC pass retries). GC itself still never throws.
+- `hasLiveOwner` never throws: an unreadable/corrupt marker resolves to
+  "not confirmably live → reclaimable". Reclaiming on a transient marker-read
+  failure is safe and **self-healing** — a live proxy recreates its
+  `sessionTarget` on its next `writeLiveStateDual`, so at most one stale
+  generation is dropped and immediately rewritten. (The injectable
+  `hasLiveOwnerFn` seam is only for tests; if a caller *did* pass a throwing
+  probe, GC keeps the file that pass.) GC itself still never throws.
 
 ## Reader rules (`src/proxy/liveStateReader.ts`)
 
@@ -65,13 +70,27 @@ before unlinking an mtime-expired session file:
 
 1. **Parse tolerance** — missing / unreadable / corrupt / non-object
    candidates are skipped; if none survive, returns `undefined`.
-2. **Live-pid preference** — confirmed-live `writerPid` (rank 2) beats
-   legacy/pid-less payloads (rank 1) beats confirmed-dead writers (rank 0).
-3. **Freshness within a rank** — same-writer pairs order by `seq`
-   (clock-step-proof); cross-writer pairs order by `writtenAt`
-   (`updatedAt` fallback), then `seq`.
-4. **Tie** — the earlier path in `candidatePaths` wins, so callers list their
-   preferred sink first (per-session file, then cwd, then home).
+2. **Live-pid preference** — only candidates of the highest liveness rank
+   present survive: confirmed-live `writerPid` (rank 2) beats legacy/pid-less
+   payloads (rank 1) beats confirmed-dead writers (rank 0).
+3. **Two-level freshness reduction (total, order-independent)** — group the
+   survivors by `writerPid`; reduce each same-writer group to its highest
+   `seq` member (transitive within a writer, clock-step-proof). Legacy
+   (pid-less) candidates are each their own singleton. Then compare the group
+   representatives cross-writer by `writtenAt` (→ `seq` → earliest index).
+
+   Why two levels and not one hybrid pairwise comparator: a comparator that
+   used `seq` for same-writer pairs and `writtenAt` for cross-writer pairs is
+   **non-transitive** under a backward clock step (gen N has an older wall
+   clock than gen N-1 of the same writer). A naive max-scan over a
+   non-transitive relation is order-dependent, which would let selection flap
+   between reads and let two consumers with different sink orderings disagree
+   — violating the module contract. Reducing per writer first eliminates the
+   intransitive pairs before any cross-writer comparison.
+4. **Tie** — the earlier path in `candidatePaths` wins only as the final
+   deterministic tiebreak; it does not otherwise affect the result. Callers
+   still list their preferred sink first (per-session file, then cwd, then
+   home).
 
 The statusline lane will wire this helper into `statusline.py` /
 `src/cli/statusline.ts`; those files are intentionally untouched here.

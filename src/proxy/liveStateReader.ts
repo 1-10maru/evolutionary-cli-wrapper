@@ -100,50 +100,102 @@ function livenessRank(
   }
 }
 
+/** Candidate paired with its original index (final deterministic tiebreak). */
+interface RankedCandidate {
+  candidate: LiveStateCandidate;
+  index: number;
+}
+
 /**
- * Compare freshness of two candidates of EQUAL liveness rank. Positive means
- * `a` is fresher. Same-writer pairs use seq (authoritative within one
- * writer); cross-writer pairs use writtenAt with seq as final tiebreaker.
+ * Cross-writer comparison of two group representatives. Positive means `a`
+ * wins. Order: writtenAt (wall clock, the only meaningful cross-process
+ * signal), then seq, then the smaller original index (earlier candidatePath).
+ * This is a TOTAL order — it never mixes the same-writer seq rule in, so it is
+ * transitive across the whole rank group (see readFreshestLiveState).
  */
-function freshnessDelta(a: LiveStateCandidate, b: LiveStateCandidate): number {
-  const sameWriter =
-    a.writerPid !== undefined && b.writerPid !== undefined && a.writerPid === b.writerPid;
-  if (sameWriter && a.seq !== undefined && b.seq !== undefined && a.seq !== b.seq) {
-    return a.seq - b.seq;
-  }
-  const at = a.writtenAt ?? -Infinity;
-  const bt = b.writtenAt ?? -Infinity;
-  if (at !== bt) return at - bt;
-  return (a.seq ?? -Infinity) - (b.seq ?? -Infinity);
+function representativeWins(a: RankedCandidate, b: RankedCandidate): boolean {
+  const at = a.candidate.writtenAt ?? -Infinity;
+  const bt = b.candidate.writtenAt ?? -Infinity;
+  if (at !== bt) return at > bt;
+  const as = a.candidate.seq ?? -Infinity;
+  const bs = b.candidate.seq ?? -Infinity;
+  if (as !== bs) return as > bs;
+  return a.index < b.index;
+}
+
+/**
+ * Within one writer group, the representative is the highest-seq member
+ * (authoritative and transitive within a single writer pid, immune to
+ * wall-clock steps). Ties break by writtenAt, then earliest index.
+ */
+function sameWriterWins(a: RankedCandidate, b: RankedCandidate): boolean {
+  const as = a.candidate.seq ?? -Infinity;
+  const bs = b.candidate.seq ?? -Infinity;
+  if (as !== bs) return as > bs;
+  const at = a.candidate.writtenAt ?? -Infinity;
+  const bt = b.candidate.writtenAt ?? -Infinity;
+  if (at !== bt) return at > bt;
+  return a.index < b.index;
 }
 
 /**
  * Read every path in `candidatePaths`, drop the unusable ones, and return the
- * freshest candidate per the module-level selection rules (live-pid preference
- * first, then seq/writtenAt freshness). Earlier paths win exact ties, so
- * callers should list their preferred sink first (e.g. the per-session file
- * before the shared legacy sinks). Returns undefined when no candidate is
- * usable. Never throws.
+ * freshest candidate per the module-level selection rules. Returns undefined
+ * when no candidate is usable. Never throws.
+ *
+ * Selection is a TOTAL, order-independent function of the candidate SET (the
+ * only role `candidatePaths` order plays is the final exact-tie break):
+ *   1. Keep only candidates of the highest liveness rank present
+ *      (2 live > 1 legacy-pidless > 0 dead).
+ *   2. Two-level reduction — group survivors by writerPid; reduce each
+ *      same-writer group to its highest-seq member (`sameWriterWins`, which is
+ *      transitive within a writer and clock-step-proof). Legacy (pid-less)
+ *      candidates are each their own singleton group.
+ *   3. Compare the group representatives cross-writer by writtenAt → seq →
+ *      earliest index (`representativeWins`, a total order that never mixes in
+ *      the same-writer seq rule).
+ *
+ * The two-level split is deliberate: a single hybrid pairwise comparator that
+ * used seq for same-writer pairs and writtenAt for cross-writer pairs would be
+ * NON-transitive under a backward clock step (gen N older wall-clock than gen
+ * N-1 of the same writer), making a naive max-scan order-dependent. Reducing
+ * per writer first removes the intransitive pairs before any cross-writer
+ * comparison happens.
  */
 export function readFreshestLiveState(
   candidatePaths: string[],
   options: ReadFreshestOptions = {},
 ): LiveStateCandidate | undefined {
   const isPidAliveFn = options.isPidAliveFn ?? isPidAlive;
-  let best: LiveStateCandidate | undefined;
-  let bestRank = -1;
-  for (const p of candidatePaths) {
+
+  // Parse + rank, keeping original index.
+  const ranked: { rc: RankedCandidate; rank: number }[] = [];
+  candidatePaths.forEach((p, index) => {
     const candidate = parseLiveStateCandidate(p);
-    if (!candidate) continue;
-    const rank = livenessRank(candidate, isPidAliveFn);
-    if (
-      best === undefined ||
-      rank > bestRank ||
-      (rank === bestRank && freshnessDelta(candidate, best) > 0)
-    ) {
-      best = candidate;
-      bestRank = rank;
-    }
+    if (!candidate) return;
+    ranked.push({ rc: { candidate, index }, rank: livenessRank(candidate, isPidAliveFn) });
+  });
+  if (ranked.length === 0) return undefined;
+
+  // 1. Highest liveness rank wins outright.
+  const maxRank = Math.max(...ranked.map((r) => r.rank));
+  const top = ranked.filter((r) => r.rank === maxRank).map((r) => r.rc);
+
+  // 2. Reduce each writer group to its highest-seq representative. Pid-less
+  //    (legacy) candidates each form their own singleton keyed by index so
+  //    they are never merged with one another.
+  const reps = new Map<string, RankedCandidate>();
+  for (const rc of top) {
+    const key =
+      rc.candidate.writerPid !== undefined ? `pid:${rc.candidate.writerPid}` : `legacy:${rc.index}`;
+    const existing = reps.get(key);
+    if (!existing || sameWriterWins(rc, existing)) reps.set(key, rc);
   }
-  return best;
+
+  // 3. Pick the freshest representative cross-writer (total order).
+  let best: RankedCandidate | undefined;
+  for (const rep of reps.values()) {
+    if (!best || representativeWins(rep, best)) best = rep;
+  }
+  return best?.candidate;
 }

@@ -179,11 +179,19 @@ export function writeLiveStateDual(options: WriteLiveStateOptions): void {
  * B2: mtime alone is NOT sufficient to declare a session file dead — after an
  * OS sleep or clock step, a file a live proxy still writes can look ancient.
  * Before unlinking, the B1 owner registry (`.evo/sessions/.owners/<sid>`) is
- * consulted: a file whose owner pid is confirmed alive is always skipped.
- * Files with no owner marker, a dead owner, or an aged-out marker remain
- * reclaimable by mtime as before. If the liveness probe itself throws, the
- * file is conservatively KEPT (skipping a delete is always safe; the next GC
- * pass retries). Test seam: `hasLiveOwnerFn` (defaults to the real registry).
+ * consulted via `hasLiveOwner`: a file whose owner pid is CONFIRMED alive is
+ * always skipped. Files with no owner marker, a dead owner, or an aged-out
+ * marker remain reclaimable by mtime as before.
+ *
+ * Note on the real registry's uncertainty handling: `hasLiveOwner` never
+ * throws — internally an unreadable/corrupt marker resolves to `false`
+ * ("not confirmably live → reclaimable"), so a transient marker read failure
+ * on an mtime-expired file WILL reclaim it. That is safe and self-healing:
+ * a live proxy recreates its `sessionTarget` on its very next
+ * `writeLiveStateDual`, so at worst one stale generation is dropped and
+ * immediately rewritten. The `hasLiveOwnerFn` seam is injectable for tests;
+ * if a caller passes a probe that DOES throw, this function keeps the file
+ * that pass (a skipped delete is always safe).
  */
 export function gcOldSessionFiles(
   cwd: string,

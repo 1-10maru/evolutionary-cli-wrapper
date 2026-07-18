@@ -151,6 +151,34 @@ describe("readFreshestLiveState — freshness ordering", () => {
     const c = readFreshestLiveState([oldLegacy, newLegacy], { isPidAliveFn: alive });
     expect(c?.path).toBe(newLegacy);
   });
+
+  it("selection is order-INDEPENDENT under a non-transitive clock step (reviewer repro)", () => {
+    // The X/Y/Z reproducer that broke a hybrid pairwise comparator:
+    //   X: pid 100, seq 10, writtenAt 1000
+    //   Y: pid 100, seq  5, writtenAt 3000  (backward clock step gen5→gen10)
+    //   Z: pid 200, seq  1, writtenAt 2000
+    // Two-level reduction: writer 100 reduces to X (max seq); then X vs Z by
+    // writtenAt → X(1000) < Z(2000) → Z wins, for EVERY path permutation.
+    const dir = makeDir();
+    const X = seed(dir, "X.json", { turns: 10, seq: 10, writerPid: 100, writtenAt: 1000 });
+    const Y = seed(dir, "Y.json", { turns: 5, seq: 5, writerPid: 100, writtenAt: 3000 });
+    const Z = seed(dir, "Z.json", { turns: 1, seq: 1, writerPid: 200, writtenAt: 2000 });
+    const permutations: string[][] = [
+      [X, Y, Z],
+      [X, Z, Y],
+      [Y, X, Z],
+      [Y, Z, X],
+      [Z, X, Y],
+      [Z, Y, X],
+    ];
+    const winners = permutations.map(
+      (paths) => readFreshestLiveState(paths, { isPidAliveFn: alive })?.path,
+    );
+    // Every permutation yields the SAME winner...
+    expect(new Set(winners).size).toBe(1);
+    // ...and it is Z (writer-100 representative X has the older wall clock).
+    expect(winners[0]).toBe(Z);
+  });
 });
 
 describe("readFreshestLiveState — live-pid preference", () => {
