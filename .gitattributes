@@ -1,0 +1,6 @@
+# The statusline dictionary asset and the Python renderer that embeds it are
+# compared BYTE-FOR-BYTE (scripts/gen-statusline-dict.mjs --check, enforced by
+# tests/statusline-dict.test.ts). Force LF in every working copy so Windows
+# autocrlf checkouts cannot break the equality.
+statusline.py text eol=lf
+src/data/*.json text eol=lf
