@@ -1,8 +1,12 @@
 // sync-claude-docs.mjs
 //
-// Fetch Anthropic's public Claude Code docs, extract bullets, and rewrite
-// AUTO-GENERATED marker blocks inside statusline.py. Rule-based only - no LLM,
-// no Claude API. Designed to run weekly via GitHub Actions.
+// Fetch Anthropic's public Claude Code docs, extract bullets, and rewrite the
+// AUTO-synced tip groups inside src/data/statusline-dict.json (the single
+// source of truth for the EvoPet dictionary — B4). After updating the JSON it
+// regenerates the embedded dictionary section of statusline.py via
+// scripts/gen-statusline-dict.mjs, so the Python renderer and the TypeScript
+// renderer (which imports the JSON directly) stay byte-identical. Rule-based
+// only - no LLM, no Claude API. Designed to run weekly via GitHub Actions.
 //
 // Usage:
 //   node scripts/sync-claude-docs.mjs           # fetch + rewrite
@@ -10,7 +14,7 @@
 //   node scripts/sync-claude-docs.mjs --self-test # use built-in HTML stubs
 //
 // Exit codes:
-//   0  success (whether or not statusline.py changed)
+//   0  success (whether or not the dictionary changed)
 //   1  ALL sources failed to fetch (CI fail-closed)
 //   2  unexpected internal error
 
@@ -20,11 +24,11 @@ import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import TurndownService from 'turndown';
+import { generate as regenerateStatuslineDict, DICT_PATH, STATUSLINE_PATH } from './gen-statusline-dict.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, '..');
-const STATUSLINE_PATH = join(REPO_ROOT, 'statusline.py');
 // Bundled, committed model-aware prompting guidance asset (loaded at runtime by
 // src/promptingGuidance.ts). Regenerated deterministically from the official
 // Anthropic JA prompt-engineering docs — no LLM involved.
@@ -242,11 +246,6 @@ function sanitize(s) {
     }
   }
   return out.replace(/\s+/g, ' ').trim();
-}
-
-// Escape for inclusion in a Python single-quoted string literal.
-function pyEscape(s) {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 // A bullet whose entire content is a single markdown link, e.g.
@@ -664,85 +663,59 @@ function guidanceContentSignature(guidance) {
 }
 
 // -------------------------------------------------------------
-// Marker rewrite
+// Dictionary tip-group rewrite (src/data/statusline-dict.json)
 // -------------------------------------------------------------
 
-// EOL is preserved per-block by rewriteBlock() via the captured [\r\n]+ group,
-// so no whole-file EOL detection is needed.
-
-function buildBlockBody(indent, entries) {
-  if (entries.length === 0) {
-    return (
-      indent +
-      "{'headline': '(同期失敗: 次回 cron で再試行されます)', 'tier': 2, 'category': 'general', 'before': None, 'after': None},"
-    );
-  }
-  return entries
-    .map(
-      (e) =>
-        indent +
-        "{'headline': '" +
-        pyEscape(e.headline) +
-        "', 'tier': " +
-        e.tier +
-        ", 'category': '" +
-        pyEscape(e.category || 'general') +
-        "', 'before': None, 'after': None},"
-    )
-    .join('\n');
+// Serialize the dictionary exactly as committed (2-space indent, trailing NL,
+// LF) so a no-change sync produces a byte-identical file.
+function serializeDict(dict) {
+  return JSON.stringify(dict, null, 2) + '\n';
 }
 
-// Replace the body between START/END for a given source URL. If the source
-// substring is not found, returns the original content unchanged.
-function rewriteBlock(content, sourceUrl, entries, todayUtc) {
-  const escaped = sourceUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(
-    '([ \\t]*)# AUTO-GENERATED:START source=' +
-      escaped +
-      ' fetched=([^\\r\\n]*)([\\r\\n]+)([\\s\\S]*?)([ \\t]*)# AUTO-GENERATED:END',
-    'm'
-  );
-  const m = content.match(re);
-  if (!m) {
-    return { content, found: false, changed: false };
+// Replace the entries of the tipGroup whose `source` matches sourceUrl. The
+// group's `fetched` stamp only advances when the entries actually changed, so
+// a content-identical weekly run produces no diff (and no PR).
+function rewriteDictGroup(dict, sourceUrl, entries, todayUtc) {
+  const group = (dict.tipGroups || []).find((g) => g.source === sourceUrl);
+  if (!group) {
+    return { found: false, changed: false };
   }
-  const indent = m[1];
-  const eol = m[3].includes('\r\n') ? '\r\n' : '\n';
-  const closingIndent = m[5];
-
-  const body = buildBlockBody(indent, entries);
-  const newBlock =
-    indent +
-    '# AUTO-GENERATED:START source=' +
-    sourceUrl +
-    ' fetched=' +
-    todayUtc +
-    eol +
-    body +
-    eol +
-    closingIndent +
-    '# AUTO-GENERATED:END';
-
-  const before = content.slice(0, m.index);
-  const after = content.slice(m.index + m[0].length);
-  const updated = before + newBlock + after;
-  return {
-    content: updated,
-    found: true,
-    changed: updated !== content,
-  };
+  const nextEntries = entries.map((e) => ({
+    headline: e.headline,
+    tier: e.tier,
+    category: e.category || 'general',
+    before: null,
+    after: null,
+  }));
+  const changed = JSON.stringify(group.entries) !== JSON.stringify(nextEntries);
+  if (changed) {
+    group.entries = nextEntries;
+    group.fetched = todayUtc;
+  }
+  return { found: true, changed };
 }
 
 // -------------------------------------------------------------
 // Driver
 // -------------------------------------------------------------
 async function main() {
+  if (!existsSync(DICT_PATH)) {
+    console.error('ERROR: statusline-dict.json not found at ' + DICT_PATH);
+    process.exit(2);
+  }
   if (!existsSync(STATUSLINE_PATH)) {
     console.error('ERROR: statusline.py not found at ' + STATUSLINE_PATH);
     process.exit(2);
   }
-  const original = readFileSync(STATUSLINE_PATH, 'utf-8');
-  let working = original;
+  const originalDictText = readFileSync(DICT_PATH, 'utf-8');
+  const originalPy = readFileSync(STATUSLINE_PATH, 'utf-8');
+  let dict;
+  try {
+    dict = JSON.parse(originalDictText);
+  } catch (e) {
+    console.error('ERROR: statusline-dict.json is not valid JSON: ' + e.message);
+    process.exit(2);
+  }
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 
   let okCount = 0;
@@ -796,17 +769,16 @@ async function main() {
       continue;
     }
 
-    const result = rewriteBlock(working, src.url, entries, today);
+    const result = rewriteDictGroup(dict, src.url, entries, today);
     if (!result.found) {
-      console.warn('[skip] marker block not found for ' + src.url);
+      console.warn('[skip] no tipGroup with source=' + src.url + ' in statusline-dict.json');
       summary.push({
         url: src.url,
-        status: 'marker-missing',
+        status: 'group-missing',
         entries: entries.length,
       });
       continue;
     }
-    working = result.content;
     okCount += 1;
     summary.push({
       url: src.url,
@@ -816,7 +788,8 @@ async function main() {
     });
   }
 
-  const changed = working !== original;
+  const workingDictText = serializeDict(dict);
+  const changed = workingDictText !== originalDictText;
 
   console.log('--- sync-claude-docs summary ---');
   for (const s of summary) {
@@ -843,8 +816,29 @@ async function main() {
   );
 
   if (changed && !DRY_RUN && !SELF_TEST) {
-    writeFileSync(STATUSLINE_PATH, working, 'utf-8');
-    console.log('Wrote ' + STATUSLINE_PATH);
+    writeFileSync(DICT_PATH, workingDictText, 'utf-8');
+    console.log('Wrote ' + DICT_PATH);
+    // Regenerate the embedded dictionary section of statusline.py from the
+    // updated JSON so the Python renderer stays byte-identical to the asset.
+    regenerateStatuslineDict();
+    console.log('Regenerated ' + STATUSLINE_PATH + ' dictionary section');
+    // GitHub Actions only: pre-stage the dictionary asset. The weekly workflow
+    // (.github/workflows/sync-claude-docs.yml) still runs a fixed
+    // `git add statusline.py src/data/prompting-guidance.json`; without staging
+    // the JSON here, the sync PR would commit the regenerated statusline.py
+    // WITHOUT its source asset and fail the CI drift gate. The workflow's
+    // `git checkout -B` keeps the index, so this staged path lands in the sync
+    // commit. TODO(follow-up): add src/data/statusline-dict.json to the
+    // workflow's diff/add lists and drop this block — workflow-file edits need
+    // a `workflow`-scoped token, which the automation account currently lacks.
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      try {
+        execFileSync('git', ['add', DICT_PATH], { cwd: REPO_ROOT, stdio: 'inherit' });
+        console.log('[ci] pre-staged src/data/statusline-dict.json for the sync commit');
+      } catch (e) {
+        console.warn('[ci] failed to pre-stage statusline-dict.json: ' + e.message);
+      }
+    }
   } else if (DRY_RUN && changed) {
     console.log('[dry-run] would write changes (not writing)');
   } else if (!SELF_TEST) {
@@ -905,11 +899,13 @@ async function main() {
     );
   }
 
-  // Self-test post-validation: temporarily write, py_compile, then restore.
+  // Self-test post-validation: temporarily write the JSON, regenerate the
+  // statusline.py section, py_compile it, then restore both files.
   if (SELF_TEST) {
     if (changed) {
       try {
-        writeFileSync(STATUSLINE_PATH, working, 'utf-8');
+        writeFileSync(DICT_PATH, workingDictText, 'utf-8');
+        regenerateStatuslineDict();
         const pyCmd = process.platform === 'win32' ? 'python' : 'python3';
         try {
           execFileSync(pyCmd, ['-m', 'py_compile', STATUSLINE_PATH], {
@@ -918,12 +914,14 @@ async function main() {
           console.log('[self-test] py_compile OK');
         } catch (e) {
           console.error('[self-test] py_compile FAILED');
-          writeFileSync(STATUSLINE_PATH, original, 'utf-8');
+          writeFileSync(DICT_PATH, originalDictText, 'utf-8');
+          writeFileSync(STATUSLINE_PATH, originalPy, 'utf-8');
           process.exit(2);
         }
       } finally {
-        writeFileSync(STATUSLINE_PATH, original, 'utf-8');
-        console.log('[self-test] restored statusline.py to pre-self-test state');
+        writeFileSync(DICT_PATH, originalDictText, 'utf-8');
+        writeFileSync(STATUSLINE_PATH, originalPy, 'utf-8');
+        console.log('[self-test] restored statusline-dict.json + statusline.py to pre-self-test state');
       }
     } else {
       console.log('[self-test] no changes generated; nothing to validate');

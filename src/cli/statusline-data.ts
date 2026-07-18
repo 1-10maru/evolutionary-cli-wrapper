@@ -1,18 +1,33 @@
 /**
  * Pure data exports for the EvoPet statusline subcommand.
  *
- * COMMENTS and TIPS are auto-extracted verbatim from
- * ~/.claude/base_statusline.py (pre-slim HEAD version) — see
- * statusline-data-raw.ts for the raw extraction.
+ * COMMENTS and TIPS are loaded from `src/data/statusline-dict.json` — the
+ * SINGLE SOURCE OF TRUTH for the hand-curated dictionary, shared with the
+ * Python renderer (`statusline.py` embeds the same JSON text via
+ * scripts/gen-statusline-dict.mjs, drift-checked in CI). Edit the JSON, not
+ * this file, to change dictionary content.
  *
  * BOOST_MESSAGES, polarity sets, and grade label/color maps are ported
  * from the same Python source. Do NOT add or remove entries without
  * explicit user instruction — content is curated.
  */
 
-import { COMMENTS_DATA, TIPS_DATA } from "./statusline-data-raw";
+import dictData from "../data/statusline-dict.json";
 
 export type Mood = "start" | "early" | "working" | "busy" | "critical";
+
+/** Shape of the shared dictionary asset (src/data/statusline-dict.json). */
+export interface StatuslineDict {
+  version: number;
+  comments: Record<Mood, string[]>;
+  tipGroups: Array<{
+    name: string;
+    /** Present on the AUTO-synced groups (scripts/sync-claude-docs.mjs). */
+    source?: string;
+    fetched?: string;
+    entries: Tip[];
+  }>;
+}
 
 export const ANSI = {
   R: "\x1b[0m",
@@ -45,15 +60,27 @@ export const BOOST_MESSAGES: readonly string[] = [
   "\u{1f9f9} 長くなってきたら/clearでリセット。コンテキストは有限資源、軽い方が精度は上がる",
 ];
 
-export const COMMENTS: Readonly<Record<Mood, readonly string[]>> = COMMENTS_DATA;
-
 export type Tip = {
   headline: string;
   before: string | null;
   after: string | null;
+  /** Tier-weight hint carried by the AUTO-synced groups (1 core / 2 default / 3 niche). */
+  tier?: number;
+  /** Signal category carried by the AUTO-synced groups (e.g. "context"). */
+  category?: string;
 };
 
-export const TIPS: readonly Tip[] = TIPS_DATA;
+/** The shared dictionary asset, typed. */
+export const STATUSLINE_DICT: StatuslineDict = dictData as unknown as StatuslineDict;
+
+export const COMMENTS: Readonly<Record<Mood, readonly string[]>> =
+  STATUSLINE_DICT.comments;
+
+/** All tips, in dictionary order: hand-curated groups first, then the
+ *  AUTO-synced official-docs groups — exactly the Python renderer's `_TIPS`. */
+export const TIPS: readonly Tip[] = STATUSLINE_DICT.tipGroups.flatMap(
+  (g) => g.entries,
+);
 
 export function gradeColor(g: string): string {
   const map: Record<string, string> = {
