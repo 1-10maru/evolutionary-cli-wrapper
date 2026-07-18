@@ -100,6 +100,7 @@ Commands most users touch:
 |---|---|
 | `evo install-statusline` | Deploy `statusline.py` to `~/.claude/` and wire it into `settings.json`. `--yes` skips prompts, `--uninstall` reverts. |
 | `evo stats` | Show your EvoPet rank, growth gauge, and episode history. |
+| `evo status [--watch] [--interval N]` | Read-only one-screen status: EvoPet identity + growth gauge, current quality/streak, live session binding, quick health summary, and recent-episode summary. `--watch` re-renders every N seconds (default 5) until Ctrl+C. Never writes any state. |
 | `evo pet list` | List the available EvoPet species. |
 | `evo pet choose <id>` | Set your pet species (e.g. `evo pet choose cat`). |
 | `evo display [mode]` | Toggle the statusline layout: `minimum`, `expansion`, or `toggle`. No arg prints the current mode. |
