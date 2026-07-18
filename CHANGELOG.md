@@ -4,6 +4,42 @@
 
 ## Unreleased
 
+## v3.6.9 (2026-07-18)
+
+_Patch release promoted from `v3.6.9-rc.1`. Fixes the multi-window session "hijack" where the tracker could re-attach to another Claude Code window's session in the same directory, and folds in a small privacy/hygiene batch (verification-command masking, non-standard statusline-wrapper detection, and a legacy `evo doctor` self-check fallback)._
+
+### Added
+- **Opt-in exact session binding.** Set `EVO_BIND_SESSION_ID=1` and the wrapper injects a `--session-id <uuid>` into the `claude` it launches, so the tracker binds to that exact session's transcript from the start — the most precise fix when you run several Claude Code windows in the same folder. Strictly opt-in and safe: it does nothing for a non-`claude` CLI, when you already pass your own `--session-id`, when resuming/continuing (`-c`/`--continue`/`-r`/`--resume`), for `--help`/`--version`, or for `claude` subcommands (`mcp`/`config`/`doctor`/…); in any of those it falls back to the default binding. (Requires a `claude` that accepts `--session-id`.)
+
+### Fixed
+- **Multi-window session attribution.** With several Claude Code windows open in the same directory, the tracker could migrate its lock to a newer window's transcript, misattributing turns, tool calls, and grade to the wrong session's EvoPet (corrupting both the live statusline and the recorded episode). The tracker now **binds to its own session and stays there**: once locked it never re-attaches to a different transcript in the same directory. A per-session owner registry under `<project>/.evo/sessions/.owners/` (keyed by session id + pid, with dead-process cleanup) keeps parallel windows from claiming each other's session. This is the recording-side root fix complementing the earlier display-side mitigation. All registry operations fail open: a broken or unwritable registry degrades to the previous binding strength instead of stopping tracking. Escape hatch: `EVO_DISABLE_STICK_HARD=1` restores the previous behavior.
+- **Verification events no longer store the raw command.** The test/build verification event persisted the raw executed command into the local database while its output previews were already secret-masked; the stored `command` is now masked too (the command actually run is unchanged), so a token passed on a command line can't linger in `.evo/evolutionary.db`.
+- **`evo install-statusline` detects non-standard wrapper setups.** The guard that avoids clobbering an existing wrapper-based statusline previously only matched standard wrapper names in `statusLine.command`. It now also does a best-effort, read-only peek into the referenced script(s) for wrapper markers, so a hand-built wrapper with a non-standard script name is left intact instead of being overwritten (which would render EvoPet twice).
+
+### Changed
+- **`evo doctor` reads the legacy self-check location as a fallback.** When the primary `<EVO_HOME>/.evo/` self-check state is absent or unreadable, `doctor` now falls back to the pre-v3.6.4 `~/.claude/.evo-selfcheck.json` (read-only; the primary always wins when present), so a self-check written by an older build is still surfaced.
+
+### Internal
+- Tightened the wording of the live-tree / QA discipline rule in the repo `CLAUDE.md` (review nit from #100/#101) and added a `docs/ai/raw-hash-design.md` design memo (indexed in `docs/ai/README.md`).
+- B1 binding logic is fully unit-tested (stick-hard non-migration, exact-binding, owner claim/conflict/stale-pid reclaim/GC, injection gating + fallbacks incl. subcommand skip); all binding operations are best-effort / fail-open so a broken registry degrades to prior behavior rather than blocking tracking. Design doc: `docs/ai/b1-session-binding.md`.
+
+## v3.6.9-rc.1 (2026-07-18)
+
+### Added
+- **Opt-in exact session binding.** Set `EVO_BIND_SESSION_ID=1` and the wrapper injects a `--session-id <uuid>` into the `claude` it launches, so the tracker binds to that exact session's transcript from the start — the most precise fix when you run several Claude Code windows in the same folder. Strictly opt-in and safe: it does nothing for a non-`claude` CLI, when you already pass your own `--session-id`, when resuming/continuing (`-c`/`--continue`/`-r`/`--resume`), for `--help`/`--version`, or for `claude` subcommands (`mcp`/`config`/`doctor`/…); in any of those it falls back to the default binding. (Requires a `claude` that accepts `--session-id`.)
+
+### Fixed
+- **Multi-window session attribution.** With several Claude Code windows open in the same directory, the tracker could migrate its lock to a newer window's transcript, misattributing turns, tool calls, and grade to the wrong session's EvoPet (corrupting both the live statusline and the recorded episode). The tracker now **binds to its own session and stays there**: once locked it never re-attaches to a different transcript in the same directory. A per-session owner registry under `<project>/.evo/sessions/.owners/` (keyed by session id + pid, with dead-process cleanup) keeps parallel windows from claiming each other's session. This is the recording-side root fix complementing the earlier display-side mitigation. All registry operations fail open: a broken or unwritable registry degrades to the previous binding strength instead of stopping tracking. Escape hatch: `EVO_DISABLE_STICK_HARD=1` restores the previous behavior.
+- **Verification events no longer store the raw command.** The test/build verification event persisted the raw executed command into the local database while its output previews were already secret-masked; the stored `command` is now masked too (the command actually run is unchanged), so a token passed on a command line can't linger in `.evo/evolutionary.db`.
+- **`evo install-statusline` detects non-standard wrapper setups.** The guard that avoids clobbering an existing wrapper-based statusline previously only matched standard wrapper names in `statusLine.command`. It now also does a best-effort, read-only peek into the referenced script(s) for wrapper markers, so a hand-built wrapper with a non-standard script name is left intact instead of being overwritten (which would render EvoPet twice).
+
+### Changed
+- **`evo doctor` reads the legacy self-check location as a fallback.** When the primary `<EVO_HOME>/.evo/` self-check state is absent or unreadable, `doctor` now falls back to the pre-v3.6.4 `~/.claude/.evo-selfcheck.json` (read-only; the primary always wins when present), so a self-check written by an older build is still surfaced.
+
+### Internal
+- Tightened the wording of the live-tree / QA discipline rule in the repo `CLAUDE.md` (review nit from #100/#101) and added a `docs/ai/raw-hash-design.md` design memo (indexed in `docs/ai/README.md`).
+- B1 binding logic is fully unit-tested (stick-hard non-migration, exact-binding, owner claim/conflict/stale-pid reclaim/GC, injection gating + fallbacks incl. subcommand skip); all binding operations are best-effort / fail-open so a broken registry degrades to prior behavior rather than blocking tracking. Design doc: `docs/ai/b1-session-binding.md`.
+
 ## v3.6.8 (2026-07-18)
 
 _Patch release promoted from `v3.6.8-rc.1`. Dependency maintenance: `commander` 14 → 15 and `better-sqlite3` 12.9 → 12.11, with no user-facing behavior change; also documents the compressed risk-tiered release-gate flow._
