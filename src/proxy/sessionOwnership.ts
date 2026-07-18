@@ -223,6 +223,28 @@ export function releaseOwnership(cwd: string, sessionId: string, pid: number): v
 }
 
 /**
+ * B2: true iff `sessionId` has an owner marker held by a CONFIRMED live pid
+ * (marker exists, parses, is not aged out, and its pid is alive).
+ *
+ * Used by the session-file GC (`gcOldSessionFiles`) so that mtime alone can
+ * never justify unlinking a file a live proxy is still writing (e.g. after a
+ * long OS sleep or clock skew the mtime may look ancient while the owner is
+ * very much alive). Any error degrades to `false` ("no live owner") — the
+ * caller is responsible for treating ITS OWN errors conservatively.
+ */
+export function hasLiveOwner(cwd: string, sessionId: string): boolean {
+  try {
+    const file = ownerFilePath(cwd, sessionId);
+    const rec = readOwnerRecord(file);
+    if (!rec) return false;
+    if (markerIsStaleByAge(file)) return false;
+    return isPidAlive(rec.pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Best-effort sweep of owner markers left by dead pids (or aged-out markers).
  * Safe to call opportunistically at proxy startup. Never throws.
  */
