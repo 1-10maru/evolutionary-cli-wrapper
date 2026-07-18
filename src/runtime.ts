@@ -43,7 +43,8 @@ function collectPromptText(options: RunOptions): string {
   return options.command.join(" ");
 }
 
-async function runShellCommand(
+/** Exported for tests (verification-event masking); not part of the public API. */
+export async function runShellCommand(
   cwd: string,
   command: string,
   eventType: "test_run" | "build_run",
@@ -69,7 +70,10 @@ async function runShellCommand(
       resolve({
         exitCode: exitCode ?? 1,
         event: createEvent(eventType, "verification", {
-          command,
+          // Secret-mask the persisted command line too — test/build commands can
+          // carry inline secrets (e.g. `TOKEN=... npm test`). The RAW command is
+          // still what gets executed above; only the persisted copy is masked.
+          command: redactSecretText(command),
           exitCode: exitCode ?? 1,
           // Secret-mask the persisted command output (it can echo tokens).
           stdoutPreview: redactSecretText(stdout.slice(-400)),

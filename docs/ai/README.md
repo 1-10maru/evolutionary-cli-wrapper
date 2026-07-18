@@ -11,6 +11,7 @@ This directory contains documents intended primarily for AI agents (Claude, Code
 - [DECISIONS.md](./DECISIONS.md) — 仕様判断の理由ログ
 - [REVIEW_PLAYBOOK.md](./REVIEW_PLAYBOOK.md) — 差分レビュー観点
 - [issue-intake.md](./issue-intake.md) — `evo issue show` の使い方と読み取り対象
+- [raw-hash-design.md](./raw-hash-design.md) — prompt/input ハッシュを RAW テキストに対して取る設計の理由と脅威モデル
 - [knowledge/](./knowledge/) — 環境依存・運用事故の再発防止ノウハウ
 
 Human-facing docs (roadmap, contributing, versioning) live one level up under `docs/`.

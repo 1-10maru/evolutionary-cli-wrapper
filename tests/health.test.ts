@@ -8,6 +8,7 @@ import {
   checkBundlePresent,
   checkNativeClosurePresent,
   checkNativesLoadable,
+  legacySelfCheckStatePath,
   quickHealthReport,
   readSelfCheckState,
   selfCheckStatePath,
@@ -154,18 +155,57 @@ describe("selfCheckStatePath / persistence", () => {
 
   it("readSelfCheckState returns null when absent", () => {
     const root = makeRoot();
+    const fakeHome = makeRoot(); // isolate the legacy fallback from the real ~/.claude
     process.env.EVO_HOME = root;
-    expect(readSelfCheckState()).toBeNull();
+    expect(readSelfCheckState(fakeHome)).toBeNull();
   });
 
   it("readSelfCheckState tolerates a corrupt/partial file (returns null, never throws)", () => {
     const root = makeRoot();
+    const fakeHome = makeRoot(); // isolate the legacy fallback from the real ~/.claude
     process.env.EVO_HOME = root;
     const p = selfCheckStatePath();
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, "{ this is not json");
-    expect(() => readSelfCheckState()).not.toThrow();
-    expect(readSelfCheckState()).toBeNull();
+    expect(() => readSelfCheckState(fakeHome)).not.toThrow();
+    expect(readSelfCheckState(fakeHome)).toBeNull();
+  });
+
+  it("falls back to the legacy ~/.claude location when the primary file is absent", () => {
+    const evoHome = makeRoot();
+    const fakeHome = makeRoot();
+    process.env.EVO_HOME = evoHome;
+    // Only the LEGACY file exists (pre-upgrade state).
+    const legacy = legacySelfCheckStatePath(fakeHome);
+    expect(legacy).toBe(path.join(fakeHome, ".claude", ".evo-selfcheck.json"));
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(
+      legacy,
+      JSON.stringify({ ok: false, checks: [{ name: "native-load", ok: false, detail: "legacy state" }], at: 123 }),
+    );
+    const state = readSelfCheckState(fakeHome);
+    expect(state).not.toBeNull();
+    expect(state!.ok).toBe(false);
+    expect(state!.checks[0].detail).toBe("legacy state");
+  });
+
+  it("primary path wins over the legacy file when both exist", () => {
+    const evoHome = makeRoot();
+    const fakeHome = makeRoot();
+    process.env.EVO_HOME = evoHome;
+    const legacy = legacySelfCheckStatePath(fakeHome);
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, JSON.stringify({ ok: false, checks: [], at: 1 }));
+    writeSelfCheckState({ ok: true, checks: [{ name: "native-load", ok: true }] });
+    const state = readSelfCheckState(fakeHome);
+    expect(state!.ok).toBe(true);
+  });
+
+  it("returns null when neither primary nor legacy exists", () => {
+    const evoHome = makeRoot();
+    const fakeHome = makeRoot();
+    process.env.EVO_HOME = evoHome;
+    expect(readSelfCheckState(fakeHome)).toBeNull();
   });
 
   it("writeSelfCheckState overwrites a prior (even corrupt) state atomically", () => {
