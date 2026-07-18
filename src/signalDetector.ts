@@ -477,6 +477,190 @@ function shortPath(filePath: string): string {
   return parts.length > 2 ? parts.slice(-2).join("/") : filePath;
 }
 
+// ── Advice escalation (v3.7 / B3) ──
+//
+// Repeated fires of the SAME kind+target used to be plainly suppressed at the
+// 3rd fire — guidance disappeared exactly when the user was stuck repeating the
+// same mistake. Instead, coaching signals now escalate through levels:
+//
+//   fires 1-2  → level 1: normal phrasing (the base headline/detail above)
+//   fires 3-4  → level 2: stronger, "this keeps happening" frame
+//   fires 5-6  → level 3: strongest phrasing (stop-and-regroup)
+//   fires 7+   → suppressed: falls through to the rotating tips to avoid nagging
+//
+// Praise kinds (good_structure / first_pass_success / improving_trend) do NOT
+// escalate — a "this keeps happening" frame makes no sense for praise — and
+// keep the legacy suppress-at-3 behaviour so repeated praise doesn't nag either.
+
+export type AdviceEscalationLevel = 1 | 2 | 3;
+
+/** Fire count at which an escalatable signal moves to level 2 copy. */
+export const ESCALATION_LEVEL2_AT = 3;
+/** Fire count at which an escalatable signal moves to level 3 copy. */
+export const ESCALATION_LEVEL3_AT = 5;
+/** Fire count at which an escalatable signal is finally suppressed (tips). */
+export const ESCALATION_SUPPRESS_AT = 7;
+/** Legacy suppression point for non-escalatable (praise) kinds. */
+export const PRAISE_SUPPRESS_AT = 3;
+
+const NON_ESCALATABLE_KINDS: ReadonlySet<AdviceSignalKind> = new Set([
+  "good_structure",
+  "first_pass_success",
+  "improving_trend",
+]);
+
+export interface EscalationResolution {
+  /** Copy level to render when not suppressed. */
+  level: AdviceEscalationLevel;
+  /** True when this fire should fall through to the rotating tips. */
+  suppress: boolean;
+}
+
+/**
+ * Map a per-session fire count (1-based: 1 = first fire of this kind+target)
+ * to an escalation level / suppression decision.
+ */
+export function resolveEscalation(
+  kind: AdviceSignalKind,
+  fireCount: number,
+): EscalationResolution {
+  if (NON_ESCALATABLE_KINDS.has(kind)) {
+    return { level: 1, suppress: fireCount >= PRAISE_SUPPRESS_AT };
+  }
+  if (fireCount >= ESCALATION_SUPPRESS_AT) return { level: 3, suppress: true };
+  if (fireCount >= ESCALATION_LEVEL3_AT) return { level: 3, suppress: false };
+  if (fireCount >= ESCALATION_LEVEL2_AT) return { level: 2, suppress: false };
+  return { level: 1, suppress: false };
+}
+
+// Escalated copy lives HERE, next to the base headline/detail dictionaries, so
+// all user-facing advice text stays in one module. Tone mirrors the base copy
+// (friendly coach, です/ます detail + casual headline). Level 2 = "続いてるよ"
+// frame; level 3 = strongest, urges a hard stop / change of approach.
+
+function escalatedHeadline(signal: AdviceSignal, level: 2 | 3): string | null {
+  const ctx = signal.context;
+  const file = typeof ctx.file === "string" ? shortPath(ctx.file) : "";
+
+  switch (signal.kind) {
+    case "prompt_too_vague":
+      return level === 2
+        ? "短い指示が続いてるよ — ファイル名と期待結果を書こう"
+        : "ここで一度手を止めよう — 次の指示は3点セットで";
+    case "same_file_revisit":
+      return level === 2
+        ? file
+          ? `${file} の修正がまだ続いてるよ — 伝え方を変えよう`
+          : "同じファイルの修正がまだ続いてるよ — 伝え方を変えよう"
+        : "修正ループの真っ最中 — 一度止まって整理しよう";
+    case "same_function_revisit":
+      return level === 2
+        ? "同じ関数のやり直しが続いてるよ — 失敗の理由を添えよう"
+        : "この関数で足踏み中 — アプローチごと変えよう";
+    case "scope_creep":
+      return level === 2
+        ? "変更の広がりが続いてるよ — 今回は1ファイルだけ"
+        : "広がりすぎ — 一度区切ってコミットしよう";
+    case "no_success_criteria":
+      return level === 2
+        ? "完了条件のない指示が続いてるよ — 1行だけ足そう"
+        : "そのやり直し、完了条件の1行で止められるよ";
+    case "approval_fatigue":
+      return level === 2
+        ? "承認ラッシュが続いてるよ — allowlist を設定しよう"
+        : "承認疲れが慢性化 — 今すぐ設定を見直そう";
+    case "error_spiral":
+      return level === 2
+        ? "エラー連鎖がまだ続いてるよ — 同じ手を繰り返さないで"
+        : "エラー沼にはまってる — 一度巻き戻そう";
+    case "retry_loop":
+      return level === 2
+        ? "リトライが重なってるよ — 前提から疑おう"
+        : "ぐるぐるが止まらない — 問題を分解し直そう";
+    case "long_session_no_commit":
+      return level === 2
+        ? "コミットなしの長時間作業が続いてるよ — ここで区切ろう"
+        : "そろそろ本当にコミットしよう — 未保存が積み上がってるよ";
+    case "high_tool_ratio":
+      return level === 2
+        ? "ツール多用がまだ続いてるよ — 対象を直接指定しよう"
+        : "探索コストがかさんでる — 指示をピンポイントに変えよう";
+    default:
+      return null; // praise kinds have no escalated copy
+  }
+}
+
+function escalatedDetail(signal: AdviceSignal, level: 2 | 3): string | null {
+  const ctx = signal.context;
+  const file = typeof ctx.file === "string" ? shortPath(ctx.file) : "";
+
+  switch (signal.kind) {
+    case "prompt_too_vague":
+      return level === 2
+        ? "曖昧な指示が繰り返されています。毎回AIが推測から始めるので、同じ寄り道が続いています。次の1回だけでいいので「対象ファイル + 現状 + 期待」の3点を書いて送ってみてください。"
+        : "短い指示のままではこの流れは変わりません。次の指示だけでいいので、「どのファイルの」「何が起きていて」「どうなれば完了か」を1行ずつ書いてから送ってください。それだけで結果が変わります。";
+    case "same_file_revisit":
+      return level === 2
+        ? `${file || "同じファイル"} の修正が何度も続いています。同じ頼み方の繰り返しは同じ結果になりがちです。「試したこと」「なぜダメだったか」を添えて、別の切り口で依頼してみてください。`
+        : `${file || "このファイル"} の修正ループが解消していません。一度手を止めて、「現状 / 期待 / これまで試したこと / NG条件」を箇条書きにしてから、まとめて1回で依頼し直すのが最短です。`;
+    case "same_function_revisit":
+      return level === 2
+        ? "同じ関数への修正が繰り返されています。前回の失敗がAIに伝わっていない可能性が高いです。「さっき○○を試したけど△△だった」と失敗内容を明示して依頼してください。"
+        : "同じ関数の修正がずっと続いています。同じ方針の微修正では抜けられないサインです。「別の実装方針を2案出して」のように、設計や前提から見直す依頼に切り替えてみてください。";
+    case "scope_creep":
+      return level === 2
+        ? "複数ファイルへの変更が続いています。「このファイル以外は触らない」と制約を1行入れるだけで、変更の散らばりを止められます。"
+        : "変更範囲の拡大が止まっていません。ここで一度コミットして区切りを作り、残りは「1ファイルずつ」個別の指示に分けて進めるのが安全です。";
+    case "no_success_criteria":
+      return level === 2
+        ? "完了条件のない依頼が繰り返されています。「○○が通ればOK」の1行がないと、AIは終わりを判断できずやり直しが増えます。次の指示に必ず1行足してみてください。"
+        : "完了条件なしの依頼が続いています。この1行を書く習慣だけで手戻りは大きく減ります。まず次の1回、「完了条件: ○○」を末尾に足してから送ってください。";
+    case "approval_fatigue":
+      return level === 2
+        ? "ツール承認の連続が繰り返されています。よく使うコマンドを allowlist に追加すれば、この手間は恒久的になくなります。"
+        : "承認の連続が常態化しています。作業を数分止めてでも allowlist を整備する方が、トータルでは確実に速くなります。";
+    case "error_spiral":
+      return level === 2
+        ? "エラーの連続が解消していません。同じ修正の再試行は同じエラーに戻りがちです。エラーメッセージ全文を貼って、原因の調査から依頼し直してください。"
+        : "エラーの連鎖が長引いています。ここは一度 git で直前の正常な状態まで巻き戻し、小さいステップで進め直すのが結局最短です。";
+    case "retry_loop":
+      return level === 2
+        ? "リトライの繰り返しが続いています。「試したこと」と「その結果」を整理して伝えると、AIが同じルートを避けられます。"
+        : "リトライループが解消していません。一度立ち止まり、問題を「現状 / 期待 / 制約」に分解して、ゼロから依頼を書き直してください。";
+    case "long_session_no_commit":
+      return level === 2
+        ? "作業時間がかなり伸びています。今の変更をコミットして区切りを作っておくと、この後に失敗があっても安全に戻れます。"
+        : "未コミットの変更が長時間積み上がっています。何かあった時に失う作業量が大きくなりすぎています。今すぐ一度コミットしてください。";
+    case "high_tool_ratio":
+      return level === 2
+        ? "探索的なツール使用が続いています。「ファイル名 + 行番号 + 関数名」まで指定すると、探索をほぼゼロにできます。"
+        : "ツールの多用が解消していません。指示のたびに広い探索が走ってトークンを消費しています。対象箇所を自分で特定してから、ピンポイントで依頼する形に切り替えてください。";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Return `advice` re-phrased for the given escalation level. Level 1 (or a
+ * kind without escalated copy, i.e. praise) returns the input unchanged.
+ * Before/after examples are kept as-is — they are already concrete.
+ */
+export function escalateAdvice(
+  advice: ActionableAdvice,
+  level: AdviceEscalationLevel,
+): ActionableAdvice {
+  if (level <= 1) return advice;
+  const lv = level as 2 | 3;
+  const headline = escalatedHeadline(advice.signal, lv);
+  const detail = escalatedDetail(advice.signal, lv);
+  if (headline === null && detail === null) return advice;
+  return {
+    ...advice,
+    headline: headline ?? advice.headline,
+    detail: detail ?? advice.detail,
+  };
+}
+
 // ── Main entry: convert signals to actionable advice ──
 
 export function generateActionableAdvice(
