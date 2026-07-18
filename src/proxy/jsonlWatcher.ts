@@ -58,6 +58,12 @@ export interface JsonlWatcherHandle {
   getSessionId?: () => string | undefined;
   /** Test-only / diagnostic accessor: returns the currently-locked JSONL path, "" if none. */
   getLockedJsonlPath?: () => string;
+  /**
+   * Test-only / diagnostic hook: synchronously re-run the scan+flush that the
+   * 5 s safety poll performs. Lets tests drive the stick-hard/binding logic
+   * deterministically without waiting on chokidar events or the interval.
+   */
+  rescan?: () => void;
 }
 
 export interface JsonlWatcherOptions {
@@ -73,6 +79,22 @@ export interface JsonlWatcherOptions {
    * "JSONL was modified before proxy startup" condition without sleeping.
    */
   proxyStartTimeOverride?: number;
+  /**
+   * B1 exact-binding: when set (via opt-in `--session-id` injection), the
+   * watcher binds ONLY to the JSONL whose header `sessionId` equals this value,
+   * ignoring every other transcript in the same cwd. This removes all binding
+   * ambiguity in a multi-window cwd. When unset, binding falls back to the
+   * ownership-gated freshest-file heuristic below.
+   */
+  expectedSessionId?: string;
+  /**
+   * B1 owner registry gate. Before locking a candidate whose sessionId is
+   * known, the watcher asks this callback whether it may bind. The callback
+   * (backed by the `.evo/sessions/.owners` registry) returns false when the
+   * session is owned by another live proxy, so parallel windows never steal
+   * each other's session. Only consulted when `expectedSessionId` is unset.
+   */
+  canBindSession?: (sessionId: string) => boolean;
 }
 
 /**
@@ -109,8 +131,18 @@ function readSessionIdFromJsonl(jsonlPath: string): string | undefined {
   }
 }
 
+/**
+ * B1 escape hatch: setting EVO_DISABLE_STICK_HARD=1 reverts to the pre-B1
+ * migrating behaviour (bind to the freshest post-start JSONL, re-binding to a
+ * newer file in the same cwd). Left as an ops-visible safety valve in case the
+ * stick-hard policy ever needs to be turned off in the field without a release.
+ */
+function stickHardDisabled(): boolean {
+  return process.env.EVO_DISABLE_STICK_HARD === "1";
+}
+
 export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle | null {
-  const { cwd, onEntry, onRotation, proxyStartTimeOverride } = opts;
+  const { cwd, onEntry, onRotation, proxyStartTimeOverride, expectedSessionId, canBindSession } = opts;
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return null;
 
@@ -156,8 +188,8 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
    * (prior sessions) are intentionally skipped — this is what makes the
    * userMessages counter session-scoped instead of cwd-scoped.
    */
-  const findFreshestPostStartJsonl = (): { path: string; mtime: number } | null => {
-    let best: { path: string; mtime: number } | null = null;
+  const listFreshPostStartJsonls = (): Array<{ path: string; mtime: number }> => {
+    const fresh: Array<{ path: string; mtime: number }> = [];
     try {
       for (const entry of fs.readdirSync(projectDir)) {
         if (!entry.endsWith(".jsonl")) continue;
@@ -183,9 +215,7 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
         }
         // Skip files written before the proxy started (prior session leftovers).
         if (stat.mtimeMs < mtimeFloor) continue;
-        if (!best || stat.mtimeMs > best.mtime) {
-          best = { path: fullPath, mtime: stat.mtimeMs };
-        }
+        fresh.push({ path: fullPath, mtime: stat.mtimeMs });
       }
     } catch (err) {
       const n = normalizeErr(err);
@@ -195,7 +225,12 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
         message: n.message,
       });
     }
-    return best;
+    // Newest first: the freshest candidate is tried first, but — critically for
+    // the multi-window case — if it is owned by another proxy we fall through to
+    // the next one instead of giving up (a single freshest-only scan would
+    // otherwise leave us unable to bind our own, older-by-mtime session).
+    fresh.sort((a, b) => b.mtime - a.mtime);
+    return fresh;
   };
 
   const closeWatcherOnly = (): void => {
@@ -290,15 +325,37 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
   };
 
   /**
-   * Decide whether the given JSONL path should become (or replace) the
-   * locked target. Rotation triggers on:
-   *   - first lock (no prior locked path), OR
-   *   - candidate path differs from locked path, OR
-   *   - candidate sessionId differs from locked sessionId (defensive: catches
-   *     `claude -c` reusing the same JSONL filename across sessions, which
-   *     shouldn't happen in normal Claude Code operation but we guard anyway).
+   * B1 binding gate: decide whether a candidate sessionId may be locked.
+   *   - exact-binding (`expectedSessionId` set): only the injected session id.
+   *   - ownership gate (`canBindSession` set): a readable, claimable id.
+   *   - neither (legacy/tests): always allowed.
+   */
+  const sessionIsBindable = (candidateSid: string | undefined): boolean => {
+    if (expectedSessionId !== undefined) {
+      // Exact binding: require the header id to match our injected id. An
+      // unreadable id (undefined) is deferred until it becomes readable.
+      return candidateSid === expectedSessionId;
+    }
+    if (canBindSession) {
+      // Ownership gate: we must know the id to claim it; defer if unknown.
+      if (!candidateSid) return false;
+      return canBindSession(candidateSid);
+    }
+    return true;
+  };
+
+  /**
+   * Decide whether the given JSONL path should become (or replace) the locked
+   * target.
    *
-   * Returns true if the locked target was changed.
+   * B1 bind-first-stick-hard: once locked to a session's JSONL, the watcher
+   * NEVER migrates to a different file in the same cwd (which previously caused
+   * the "乗り移り" attribution bug when a second Claude window wrote a newer
+   * transcript). The only in-place change we still honour is the same-file
+   * filename-reuse guard (a `claude -c` reusing one JSONL across sessions).
+   * The pre-B1 migrating behaviour remains available via EVO_DISABLE_STICK_HARD.
+   *
+   * Returns true if the locked target was (re)set.
    */
   const considerLockCandidate = (fullPath: string): boolean => {
     let stat: fs.Stats;
@@ -323,54 +380,95 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
     // Reject pre-startup files outright.
     if (stat.mtimeMs < mtimeFloor) return false;
 
-    // If we already have a lock, only consider replacement when:
-    //   (a) it's a different file with newer mtime, OR
-    //   (b) same file but its sessionId changed (filename reuse guard)
     if (lockedJsonlPath) {
       if (fullPath === lockedJsonlPath) {
-        // Same file. Re-extract sessionId only if we don't already have one
-        // (covers the case where the file existed at lock time but was empty).
-        if (!lockedSessionId) {
-          const sid = readSessionIdFromJsonl(fullPath);
-          if (sid && sid !== lockedSessionId) {
-            // Late-arriving sessionId — this is initial population, not a rotation.
-            lockedSessionId = sid;
-            proxyJsonlWatchLog.info("jsonl sessionId resolved", {
-              path: fullPath,
-              sessionId: sid,
-            });
+        // Same file. Resolve a late-arriving sessionId (file was empty at lock
+        // time) or handle same-file filename reuse (id changed under one name).
+        const sid = readSessionIdFromJsonl(fullPath);
+        if (sid && !lockedSessionId) {
+          lockedSessionId = sid;
+          proxyJsonlWatchLog.info("jsonl sessionId resolved", {
+            path: fullPath,
+            sessionId: sid,
+          });
+        } else if (sid && lockedSessionId && sid !== lockedSessionId) {
+          // Same file, new session id (filename reuse). Only rotate in place if
+          // the new id is still bindable (exact/ownership gate).
+          if (!sessionIsBindable(sid)) {
+            if (stat.mtimeMs > lockedMtime) lockedMtime = stat.mtimeMs;
+            return false;
           }
+          const oldSessionId = lockedSessionId;
+          lockedSessionId = sid;
+          lockedMtime = stat.mtimeMs;
+          jsonlReadOffset = 0; // re-read from the start of the reused file
+          onRotation(sid);
+          proxyJsonlWatchLog.info("jsonl locked", {
+            oldPath: fullPath,
+            newPath: fullPath,
+            oldSessionId,
+            newSessionId: sid,
+            reason: "same_file_session_id_changed",
+          });
+          return true;
         }
         // Update mtime tracker so future non-rotating updates don't churn logs.
         if (stat.mtimeMs > lockedMtime) lockedMtime = stat.mtimeMs;
         return false;
       }
+      // Different file while already locked.
+      if (!stickHardDisabled()) {
+        // bind-first-stick-hard: never migrate to another session's file.
+        proxyJsonlWatchLog.debug("stick-hard: ignoring newer JSONL in same cwd", {
+          lockedPath: lockedJsonlPath,
+          candidate: fullPath,
+        });
+        return false;
+      }
+      // Legacy escape-hatch: only migrate to a strictly newer file.
       if (stat.mtimeMs <= lockedMtime) return false;
     }
 
-    const newSessionId = readSessionIdFromJsonl(fullPath);
-    const sessionIdChanged =
-      lockedSessionId !== undefined &&
-      newSessionId !== undefined &&
-      newSessionId !== lockedSessionId;
-    const pathChanged = fullPath !== lockedJsonlPath;
-    if (lockedJsonlPath && !pathChanged && !sessionIdChanged) return false;
+    // Not locked yet (or legacy migration): read the candidate id and gate it.
+    const candidateSid = readSessionIdFromJsonl(fullPath);
+    if (!sessionIsBindable(candidateSid)) {
+      if (expectedSessionId === undefined && canBindSession && candidateSid) {
+        proxyJsonlWatchLog.debug("owner-registry: session owned elsewhere, skipping", {
+          candidate: fullPath,
+          sessionId: candidateSid,
+        });
+      }
+      return false;
+    }
 
     const oldPath = lockedJsonlPath;
     const oldSessionId = lockedSessionId;
     lockedJsonlPath = fullPath;
-    lockedSessionId = newSessionId;
+    lockedSessionId = candidateSid;
     lockedMtime = stat.mtimeMs;
     jsonlReadOffset = 0; // read new file from start
-    onRotation(newSessionId);
+    onRotation(candidateSid);
     proxyJsonlWatchLog.info("jsonl locked", {
       oldPath,
       newPath: fullPath,
       oldSessionId,
-      newSessionId,
-      reason: oldPath ? (sessionIdChanged ? "session_id_changed" : "path_changed") : "initial_lock",
+      newSessionId: candidateSid,
+      reason: oldPath ? "migrated" : "initial_lock",
     });
     return true;
+  };
+
+  /**
+   * Scan the project dir and lock onto the first bindable fresh JSONL. Once
+   * locked, stick-hard makes this a no-op (we never migrate). Used by the
+   * initial scan and the 5 s safety poll; per-file watcher events call
+   * considerLockCandidate directly.
+   */
+  const tryLockFromScan = (): void => {
+    if (lockedJsonlPath && !stickHardDisabled()) return; // already bound; stick hard
+    for (const cand of listFreshPostStartJsonls()) {
+      if (considerLockCandidate(cand.path)) break;
+    }
   };
 
   // Debounced flush: collapses rapid bursts of writes from the wrapped CLI.
@@ -398,18 +496,17 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
   // the 5s safety poll below. This is the key behavior change: we never
   // bind to a stale prior-session JSONL just because it has the newest
   // mtime in the project dir.
-  const initial = findFreshestPostStartJsonl();
-  if (initial) {
-    considerLockCandidate(initial.path);
+  tryLockFromScan();
+  if (lockedJsonlPath) {
     // Skip past existing content — we don't want to re-emit a session's
     // own startup events that landed slightly before our scan.
     try {
-      jsonlReadOffset = fs.statSync(initial.path).size;
+      jsonlReadOffset = fs.statSync(lockedJsonlPath).size;
     } catch (err) {
       const n = normalizeErr(err);
       if (n.code !== "ENOENT") {
         proxyJsonlStatLog.warn("initial jsonl stat failed", {
-          path: initial.path,
+          path: lockedJsonlPath,
           errno: n.code,
           message: n.message,
         });
@@ -495,8 +592,7 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
   // writeLiveState — that is event-driven (see onEntry callback,
   // finalizeTurn, episode end).
   jsonlPollTimer = setInterval(() => {
-    const fresh = findFreshestPostStartJsonl();
-    if (fresh) considerLockCandidate(fresh.path);
+    tryLockFromScan();
     processNewLines();
   }, 5000);
   if (typeof jsonlPollTimer.unref === "function") jsonlPollTimer.unref();
@@ -512,6 +608,10 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
     },
     getLockedJsonlPath(): string {
       return lockedJsonlPath;
+    },
+    rescan(): void {
+      tryLockFromScan();
+      processNewLines();
     },
   };
 }

@@ -95,6 +95,7 @@ Open a bug report at https://github.com/1-10maru/evolutionary-cli-wrapper/issues
 
 ## Known interactions
 
+- **Multiple Claude Code windows in the same folder**: EvoPet binds each proxy to its own session and stays there, so parallel windows no longer misattribute one session's activity to another's statusline (as of v3.6.9). If you still see a window's EvoPet reflecting the wrong session, set `EVO_BIND_SESSION_ID=1` — the proxy then injects a `--session-id` into the `claude` it launches so the tracker binds to that exact session from the start (requires a `claude` that accepts `--session-id`).
 - **Conda / Miniconda** on Windows: cmd.exe AutoRun integration was disabled in earlier versions due to a conda_hook conflict. EvoPet still works via PowerShell / bash profile shims.
 - **WSL2**: works (treated as a Linux distro). WSL1 is not supported.
 - **Cygwin / MSYS**: not officially supported. EvoPet on these may not render correctly due to terminal capability differences.
