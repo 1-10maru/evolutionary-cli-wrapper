@@ -389,6 +389,35 @@ describe("mascot", () => {
     expect(update.nextStage).toBe("egg");
   });
 
+  it("stage level index follows the canonical egg→legend ladder", () => {
+    // stageIndex now derives from the ISG curve (single authoritative curve);
+    // the visible level (index+1) must stay 1..5 in ladder order.
+    const stages: Array<[MascotProfile["stage"], number]> = [
+      ["egg", 1],
+      ["sprout", 2],
+      ["buddy", 3],
+      ["wizard", 4],
+      ["legend", 5],
+    ];
+    for (const [stage, level] of stages) {
+      const profile: MascotProfile = {
+        speciesId: "chick",
+        nickname: "EvoPet",
+        stage,
+        totalBondExp: 0,
+        mood: "sleepy",
+        streakDays: 0,
+        lastSeenAt: null,
+        favoriteHintStyle: "none",
+        lastMessages: [],
+        comboCount: 0,
+        bestCombo: 0,
+        recentEpisodes: [],
+      };
+      expect(renderMascotState(profile).level).toBe(level);
+    }
+  });
+
   it("progressPercent rises with high-quality episodes on egg stage", () => {
     const goodRecord: RecentEpisodeRecord = {
       promptScore: 95,
@@ -416,5 +445,144 @@ describe("mascot", () => {
     const state = renderMascotState(profile);
     // ISG should reach 100 when gate met, regardless of being on egg stage.
     expect(state.progressPercent).toBe(100);
+  });
+});
+
+// B6 regression suite: the legacy cumulative-EXP curve is retired; ISG is the
+// single authoritative growth curve. Existing data written by pre-v3.1
+// versions (EXP-derived stage, high totalBondExp, no recentEpisodes field)
+// must keep loading and updating without crashes or stage corruption, and
+// totalBondExp must keep accumulating (it is display-only, not a stage driver).
+describe("mascot — legacy EXP-curve data compatibility", () => {
+  function seedProfile(home: string, profile: Record<string, unknown>): void {
+    fs.mkdirSync(path.join(home, ".evo"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".evo", "mascot.json"), JSON.stringify(profile));
+  }
+
+  function setup(): { home: string; project: string } {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "evo-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "evo-project-"));
+    tempDirs.push(home, project);
+    process.env.EVO_HOME = home;
+    return { home, project };
+  }
+
+  it("loads a pre-v3.1 profile (EXP-era stage, no recentEpisodes) without crashing", () => {
+    const { home, project } = setup();
+    // Shape written by the EXP-curve era: stage promoted by EXP thresholds
+    // (>=1400 EXP → legend), and no recentEpisodes field at all.
+    seedProfile(home, {
+      speciesId: "cat",
+      nickname: "EvoPet",
+      stage: "legend",
+      totalBondExp: 2000,
+      mood: "happy",
+      streakDays: 7,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 4,
+    });
+
+    const profile = loadMascotProfile(project);
+    expect(profile.stage).toBe("legend"); // kept on load — no silent rewrite
+    expect(profile.totalBondExp).toBe(2000); // EXP preserved
+    expect(profile.recentEpisodes).toEqual([]); // defaulted, not undefined
+
+    const state = renderMascotState(profile);
+    expect(state.level).toBe(5); // legend still renders as level 5
+    expect(state.progressPercent).toBe(-1); // no quality data yet → 測定中
+  });
+
+  it("keeps accumulating totalBondExp while stage is re-derived from ISG only", () => {
+    const { home, project } = setup();
+    seedProfile(home, {
+      speciesId: "dog",
+      nickname: "EvoPet",
+      stage: "wizard", // EXP-era stage (>=720 EXP)
+      totalBondExp: 800,
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+    });
+
+    const lowQuality = { promptScore: 0, sessionGrade: "C", signalKind: "" };
+    const update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+
+    // EXP keeps growing from the legacy total (display-only bookkeeping)...
+    expect(update.totalBondExp).toBeGreaterThan(800);
+    // ...but stage came from ISG, not from the 800+ EXP (which under the
+    // retired curve would have kept wizard/legend).
+    expect(update.nextStage).toBe("egg");
+    expect(update.previousStage).toBe("wizard");
+  });
+
+  it("high legacy EXP alone can never promote the stage", () => {
+    const { home, project } = setup();
+    // Absurdly high EXP, zero-quality history — the retired curve would say
+    // legend; the authoritative ISG curve must say egg.
+    seedProfile(home, {
+      speciesId: "chick",
+      nickname: "EvoPet",
+      stage: "egg",
+      totalBondExp: 999999,
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+    });
+
+    const lowQuality = { promptScore: 10, sessionGrade: "C", signalKind: "" };
+    let update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+    for (let i = 0; i < 3; i++) {
+      update = updateMascotAfterEpisode(project, createSummary(), 0, lowQuality);
+    }
+    expect(update.nextStage).toBe("egg");
+    expect(update.totalBondExp).toBeGreaterThan(999999);
+  });
+
+  it("legacy profile still promotes normally once quality is sustained (ISG path)", () => {
+    const { home, project } = setup();
+    seedProfile(home, {
+      speciesId: "fox",
+      nickname: "EvoPet",
+      stage: "egg",
+      totalBondExp: 1500, // legacy EXP total — must not interfere either way
+      mood: "sleepy",
+      streakDays: 0,
+      lastSeenAt: null,
+      favoriteHintStyle: "none",
+      lastMessages: [],
+      comboCount: 0,
+      bestCombo: 0,
+    });
+
+    const highQuality = { promptScore: 95, sessionGrade: "A", signalKind: "" };
+    let update = updateMascotAfterEpisode(
+      project,
+      createSummary({ structureScore: 5 }),
+      5,
+      highQuality,
+    );
+    let everLeveledUp = update.leveledUp;
+    for (let i = 0; i < 12; i++) {
+      update = updateMascotAfterEpisode(
+        project,
+        createSummary({ structureScore: 5 }),
+        5,
+        highQuality,
+      );
+      everLeveledUp = everLeveledUp || update.leveledUp;
+    }
+    expect(update.nextStage).toBe("legend");
+    expect(everLeveledUp).toBe(true);
   });
 });

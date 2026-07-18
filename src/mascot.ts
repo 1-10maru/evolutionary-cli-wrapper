@@ -22,18 +22,20 @@ const mascotLog = getLogger().child("mascot");
 
 const MASCOT_FILE = "mascot.json";
 
-const STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minExp: number; tone: MascotRenderState["accentTone"] }> = [
-  { stage: "egg", minExp: 0, tone: "info" },
-  { stage: "sprout", minExp: 120, tone: "success" },
-  { stage: "buddy", minExp: 320, tone: "accent" },
-  { stage: "wizard", minExp: 720, tone: "magic" },
-  { stage: "legend", minExp: 1400, tone: "magic" },
-];
-
-// v3.1: Stage progression now driven by Ideal State Gauge (quality), not
-// cumulative totalBondExp. Cumulative EXP inflates indefinitely so users
-// auto-promote to legend regardless of quality. ISG-based stages reflect
-// current sustained prompt quality.
+// The Ideal State Gauge (ISG) is the SINGLE authoritative growth curve.
+//
+// History: v3.0 and earlier drove stage from cumulative totalBondExp via a
+// legacy EXP curve (egg ≥0 / sprout ≥120 / buddy ≥320 / wizard ≥720 /
+// legend ≥1400 EXP). Cumulative EXP inflates indefinitely, so every user
+// auto-promoted to legend regardless of quality. v3.1 switched stage selection
+// to the ISG below, and v3.7 removed the superseded EXP curve entirely.
+//
+// Backward compatibility with legacy data (do not break):
+//   - `totalBondExp` is STILL stored, accumulated (computeSkillExp) and
+//     displayed (累計 EXP in `evo stats` / recap panels). It just never drives
+//     stage. Profiles/DBs written by any older version load unchanged.
+//   - A legacy profile whose `stage` was EXP-derived keeps that stage on load;
+//     the next finalized episode re-derives it from ISG (v3.1 behavior).
 //
 // ISG ranges: egg < 25 / sprout 25-45 / buddy 45-65 / wizard 65-82 / legend 82+
 const ISG_STAGE_THRESHOLDS: Array<{ stage: MascotProfile["stage"]; minIsg: number; tone: MascotRenderState["accentTone"] }> = [
@@ -187,16 +189,6 @@ function ensureMascotDir(cwd: string): void {
   fs.mkdirSync(getGlobalEvoDir(cwd), { recursive: true });
 }
 
-// Legacy: stage by cumulative EXP. Kept for backward compat / data analysis;
-// no longer wired into the live update path as of v3.1.
-function stageForExp(totalBondExp: number): MascotProfile["stage"] {
-  let current = STAGE_THRESHOLDS[0].stage;
-  for (const threshold of STAGE_THRESHOLDS) {
-    if (totalBondExp >= threshold.minExp) current = threshold.stage;
-  }
-  return current;
-}
-
 /**
  * v3.1 stage selector — driven by Ideal State Gauge.
  *
@@ -213,8 +205,10 @@ function stageForIsg(profile: MascotProfile): MascotProfile["stage"] {
   return current;
 }
 
+// Canonical stage ladder order (egg → legend), sourced from the authoritative
+// ISG curve. Drives `level` display and level-up comparisons.
 function stageIndex(stage: MascotProfile["stage"]): number {
-  return STAGE_THRESHOLDS.findIndex((item) => item.stage === stage);
+  return ISG_STAGE_THRESHOLDS.findIndex((item) => item.stage === stage);
 }
 
 function progressPercent(profile: MascotProfile): number {
@@ -295,8 +289,7 @@ export function saveMascotProfile(cwd: string, profile: MascotProfile): void {
 }
 
 export function renderMascotState(profile: MascotProfile): MascotRenderState {
-  // v3.1: tone now sourced from ISG_STAGE_THRESHOLDS since stage itself is
-  // ISG-driven. STAGE_THRESHOLDS is retained for backward compat only.
+  // Tone is sourced from ISG_STAGE_THRESHOLDS — the single stage curve.
   const threshold =
     ISG_STAGE_THRESHOLDS.find((item) => item.stage === profile.stage) ??
     ISG_STAGE_THRESHOLDS[0];
