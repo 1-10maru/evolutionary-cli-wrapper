@@ -16,6 +16,7 @@ import { runLogsCommand } from "./cli/logs";
 import { runDoctor } from "./cli/doctor";
 import { runDisplayCommand } from "./cli/display";
 import { runStatuslineCommand } from "./cli/statusline";
+import { runStatusCommand } from "./cli/status";
 import { runAdviceCommand } from "./cli/advice";
 import { runInstallStatusline } from "./cli/installStatusline";
 import { quickHealthReport, writeSelfCheckState } from "./health";
@@ -514,6 +515,20 @@ program
       },
     });
     console.log(`Default proxy advice mode set to ${mode}.`);
+  });
+
+program
+  .command("status")
+  .description("Read-only one-screen status: EvoPet, quality gauge, live session, quick health, episode history.")
+  .option("--cwd <path>", "Project directory to inspect.", process.cwd())
+  .option("--watch", "Persistent view: re-render every interval until Ctrl+C.", false)
+  .option("--interval <seconds>", "Seconds between renders in --watch mode (default 5).", (v) => parseFloat(v), 5)
+  .action(async (options: Record<string, unknown>) => {
+    await runStatusCommand({
+      cwd: String(options.cwd),
+      watch: Boolean(options.watch),
+      interval: Number(options.interval),
+    });
   });
 
 program

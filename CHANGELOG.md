@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Added
+- **`evo status` — read-only one-screen status view.** Composites EvoPet identity/stage/育成度, the current quality gauge + streak/combo, live session binding info (freshest `.evo/sessions/*.json` / `.evo/live-state.json` in the current folder), a quick health summary (same checks as `evo doctor --quick`), and a recent-episode summary (count / last timestamp / last grade) into a single screen. `--watch` (with `--interval <seconds>`, default 5) keeps it on screen and re-renders until Ctrl+C. The command is strictly read-only: it never creates `.evo/`, never writes mascot/config/DB state, and every section degrades to a "no data" line instead of failing.
+
 ## v3.6.9 (2026-07-18)
 
 _Patch release promoted from `v3.6.9-rc.1`. Fixes the multi-window session "hijack" where the tracker could re-attach to another Claude Code window's session in the same directory, and folds in a small privacy/hygiene batch (verification-command masking, non-standard statusline-wrapper detection, and a legacy `evo doctor` self-check fallback)._
