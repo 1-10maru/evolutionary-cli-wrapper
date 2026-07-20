@@ -890,7 +890,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-07-13",
+      "fetched": "2026-07-20",
       "entries": [
         {
           "headline": "/add-dir — Add a working directory for file access during the current session.",
@@ -942,7 +942,14 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/btw — Ask a quick side question without adding to the conversation",
+          "headline": "/btw — Ask a quick side question without adding to the conversation.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/bug — Report a bug or share your conversation.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1110,7 +1117,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/feedback — Submit feedback, report a bug, or share your conversation.",
+          "headline": "/feedback — Send product feedback about Claude Code.",
           "tier": 1,
           "category": "general",
           "before": null,
@@ -1131,7 +1138,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/fork — Spawn a forked subagent: a background subagent that inherits the full conversation and works on the directive while you keep going.",
+          "headline": "/fork — Copy the current conversation into a new background session and keep working here.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1341,7 +1348,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/remote-control — Make this session available for remote control from claude.ai.",
+          "headline": "/remote-control — Make this session available for Remote Control from claude.ai.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1488,7 +1495,14 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/tasks — View and manage everything running in the background.",
+          "headline": "/subtask — Spawn a forked subagent: a background subagent that inherits the full conversation and works on the task while you keep working.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/tasks — View and manage background work in the current session, including subagents that have finished.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1544,7 +1558,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/upgrade — Open the upgrade page to switch to a higher plan tier",
+          "headline": "/upgrade — Open the upgrade page in your browser to switch to a higher plan tier.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1558,7 +1572,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/usage-credits — Configure usage credits to keep working when you hit a limit.",
+          "headline": "/usage-credits — Configure usage credits, or request them from your admin, when you hit a limit.",
           "tier": 2,
           "category": "general",
           "before": null,
