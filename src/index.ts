@@ -631,9 +631,10 @@ program
 
 program
   .command("statusline")
-  .description("Render EvoPet portion of the Claude Code statusline (reads JSON from stdin).")
-  .action(async () => {
-    await runStatuslineCommand();
+  .description("Render the Claude Code statusline from stdin JSON. By default emits only the EvoPet block; --full also renders the token/model/cwd line.")
+  .option("--full", "Render the complete statusline (token line + EvoPet block). This is what `evo install-statusline` wires Claude Code at.", false)
+  .action(async (options: Record<string, unknown>) => {
+    await runStatuslineCommand({ full: Boolean(options.full) });
   });
 
 program

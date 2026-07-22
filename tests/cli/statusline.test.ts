@@ -181,7 +181,7 @@ describe("evo statusline (session binding + tags)", () => {
     expect(plain).toContain("MyPet");
   });
 
-  it("renders NOTHING when session_id is known but has no fresh per-session file", () => {
+  it("renders a quiet 待機中 placeholder (never another session's state) when session_id is known but has no fresh per-session file", () => {
     const { home, cwd } = makeTempDirs();
     // A per-session file for a DIFFERENT session must not leak.
     writeSessionFile(cwd, "sid-other", "OtherPet");
@@ -190,14 +190,16 @@ describe("evo statusline (session binding + tags)", () => {
       path.join(cwd, ".evo", "live-state.json"),
       JSON.stringify({ nickname: "LegacyPet", updatedAt: Date.now() - 1000 }),
     );
-    const { stdout, plain } = runStatusline(
+    const { plain } = runStatusline(
       baseStdin(cwd, { session_id: "sid-ghost" }),
       home,
       cwd,
     );
+    // Parity with statusline.py: a bound session with no data of its own shows
+    // the neutral "待機中" marker — but STILL never another session's state.
+    expect(plain).toContain("待機中");
     expect(plain).not.toContain("OtherPet");
     expect(plain).not.toContain("LegacyPet");
-    expect(stdout.trim()).toBe("");
   });
 
   it("derives the sid from transcript_path when session_id is absent", () => {

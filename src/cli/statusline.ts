@@ -25,6 +25,8 @@ import {
   gradeLabel,
   pickMoodPool,
 } from "./statusline-data";
+import { renderTokenLine } from "./statuslineToken";
+import { readFreshestLiveState } from "../proxy/liveStateReader";
 import { getUpdateNotice } from "../updateCheck";
 import { getEligibleGuidanceTips, tipTag } from "../promptingGuidance";
 
@@ -255,7 +257,22 @@ function resolveStatuslineModel(data: StatuslineInput): string | null {
 // Main handler
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function runStatuslineCommand(): Promise<void> {
+export interface StatuslineCommandOptions {
+  /**
+   * When true, render the COMPLETE statusline: the token line (`model · usage
+   * · cwd`) followed by the EvoPet block — parity with the single-file
+   * `statusline.py`. This is what `evo install-statusline` wires Claude Code
+   * at (C1). When false (the default, used by the split-wrapper construction),
+   * only the EvoPet block is emitted; a separate token-only base renders the
+   * token line.
+   */
+  full?: boolean;
+}
+
+export async function runStatuslineCommand(
+  options: StatuslineCommandOptions = {},
+): Promise<void> {
+  const fullMode = options.full === true;
   // Parse stdin JSON. Tolerate missing/malformed input — never throw.
   let data: StatuslineInput = {};
   const raw = readStdinSync();
@@ -350,247 +367,302 @@ export async function runStatuslineCommand(): Promise<void> {
 
   const isSessionStart = (selfState.calls ?? 0) === 1;
 
-  // If display mode is minimum, emit nothing (proxy still updated above for
-  // continuity when user toggles back to expansion).
-  if (displayMode === "minimum") {
+  // Display mode "minimum" hides the EvoPet block. In split (EvoPet-only) mode
+  // that means emit nothing at all. In full mode the token line still renders
+  // (you keep model/context/cwd; only the pet is hidden), so we don't bail —
+  // we just skip building the EvoPet block below.
+  const renderEvopet = displayMode !== "minimum";
+  if (!renderEvopet && !fullMode) {
     return;
-  }
-
-  // ── Proxy data resolution ──
-  // Only accept data within the freshness window (10s — matches the proxy's
-  // 10s heartbeat and the Python renderer's fresh cutoff).
-  let evo: ProxyData | null = null;
-  let evoSource: "proxy" | null = null;
-  const FRESH_MS = 10000;
-  if (sid) {
-    // Strict per-session binding: read ONLY <cwd>/.evo/sessions/<sid>.json.
-    // A miss/stale here renders NOTHING (handled below) — we never fall back
-    // to the shared sinks, which any parallel proxy in this cwd overwrites.
-    const perSessionPath = path.join(cwd, ".evo", "sessions", `${sid}.json`);
-    const candidate = safeReadJson<ProxyData>(perSessionPath);
-    if (candidate) {
-      const updatedAt = asNumberOr(candidate.updatedAt, 0) as number;
-      if (nowMs - updatedAt < FRESH_MS) {
-        evo = candidate;
-        evoSource = "proxy";
-      }
-    }
-  } else {
-    // Sessionless legacy path: read the shared sinks, newest cwd-local first.
-    for (const tryPath of [
-      path.join(cwd, ".evo", "live-state.json"),
-      path.join(os.homedir(), ".claude", ".evo-live.json"),
-    ]) {
-      const candidate = safeReadJson<ProxyData>(tryPath);
-      if (!candidate) continue;
-      const updatedAt = asNumberOr(candidate.updatedAt, 0) as number;
-      if (nowMs - updatedAt < FRESH_MS) {
-        evo = candidate;
-        evoSource = "proxy";
-        break;
-      }
-    }
-    // Suppress shared-sink data for the first two ticks of a session — its
-    // cumulative state from a prior session is meaningless on a fresh start.
-    // (Per-session files are session-scoped, so this only applies here.)
-    if (evo && (selfState.calls ?? 0) <= 2) {
-      evo = null;
-      evoSource = null;
-    }
   }
 
   const { R, DIM, BOLD, EVO_ACCENT, EVO_INFO, EVO_WARN, EVO_GREEN, EVO_RED, EVO_GOLD } = ANSI;
 
-  // ── Build display ──
-  let line1Bits: string[] = [];
-  let line2 = "";
+  // ── Build the EvoPet block (skipped entirely in minimum mode) ──
+  // In full mode, minimum still emits the token line below; the EvoPet block
+  // is simply left empty here.
+  let evoBlockText = "";
 
-  if (evo && evoSource === "proxy") {
-    // ═══ Full proxy data ═══
-    const avatar = (typeof evo.avatar === "string" && evo.avatar) || "🐣";
-    const nick = clip((typeof evo.nickname === "string" && evo.nickname) || "EvoPet", 24);
-    const bond = asNumberOr(evo.bond, 0) as number;
-    const isg =
-      evo.idealStateGauge === null || evo.idealStateGauge === undefined
-        ? -1
-        : (asNumberOr(evo.idealStateGauge, -1) as number);
-    const grade = asString(evo.sessionGrade);
-    const ps = asNumberOr(evo.promptScore, 0) as number;
-    const signal = asString(evo.signalKind);
-    const advice = asString(evo.advice);
-    const detail = asString(evo.adviceDetail);
-    const before = asString(evo.beforeExample);
-    const after = asString(evo.afterExample);
+  if (renderEvopet) {
+    // ── Proxy data resolution ──
+    // Freshness matches the Python renderer: data <10s old renders live
+    // ("proxy"); 10s–5min old renders the full layout DIMMED with a "(待機中)"
+    // marker ("proxy_stale"), so EvoPet doesn't vanish during a long tool call;
+    // older than 5min is ignored.
+    const FRESH_MS = 10000; // <10s → live
+    const FRESH_WINDOW_MS = 300000; // ≤5min → accepted (rendered dim when >10s)
+    let evo: ProxyData | null = null;
+    let evoSource: "proxy" | "proxy_stale" | null = null;
 
-    const gc = gradeColor(grade);
-    line1Bits = [`${avatar} ${BOLD}${EVO_ACCENT}${nick}${R}`];
-
-    if (grade && !gradeContradicts(grade, signal)) {
-      line1Bits.push(`${gc}${BOLD}${gradeLabel(grade)}${R}`);
-    }
-
-    // Line 1 essentials only: grade / 指示の質 / 育成度 (max 3 chips after the
-    // name). 会話回数 and combo were dropped from the cramped statusline; they
-    // remain available in `evo stats`.
-    if (ps > 0) {
-      if (ps >= 80) {
-        line1Bits.push(`📝 ${EVO_GREEN}${BOLD}指示の質: とても良い!${R}`);
-      } else if (ps >= 60) {
-        line1Bits.push(`📝 ${EVO_INFO}${BOLD}指示の質: 良好${R}`);
-      } else if (ps >= 40) {
-        line1Bits.push(`📝 ${EVO_WARN}${BOLD}指示の質: もう少し具体的に${R}`);
-      } else {
-        line1Bits.push(`📝 ${EVO_RED}${BOLD}指示の質: 曖昧すぎるかも${R}`);
+    if (sid) {
+      // Strict per-session binding: read ONLY <cwd>/.evo/sessions/<sid>.json.
+      // A miss/stale here renders the quiet placeholder below — we never fall
+      // back to the shared sinks, which any parallel proxy in this cwd
+      // overwrites (that cross-pane bleed is exactly what strict binding fixes).
+      const perSessionPath = path.join(cwd, ".evo", "sessions", `${sid}.json`);
+      const candidate = safeReadJson<ProxyData>(perSessionPath);
+      if (candidate) {
+        const age = nowMs - (asNumberOr(candidate.updatedAt, 0) as number);
+        if (age < FRESH_WINDOW_MS) {
+          evo = candidate;
+          evoSource = age < FRESH_MS ? "proxy" : "proxy_stale";
+        }
+      }
+    } else {
+      // Sessionless legacy path: resolve the freshest generation across the
+      // shared sinks via readFreshestLiveState (B2). It parses each sink,
+      // prefers live-writer payloads, and breaks ties by seq/writtenAt — so
+      // when parallel sessions clobber the shared sinks we pick a coherent
+      // newest payload instead of whichever file we happened to read first.
+      const candidate = readFreshestLiveState([
+        path.join(cwd, ".evo", "live-state.json"),
+        path.join(os.homedir(), ".claude", ".evo-live.json"),
+      ]);
+      if (candidate) {
+        const age = nowMs - (asNumberOr(candidate.payload.updatedAt, 0) as number);
+        if (age < FRESH_WINDOW_MS) {
+          evo = candidate.payload as ProxyData;
+          evoSource = age < FRESH_MS ? "proxy" : "proxy_stale";
+        }
+      }
+      // Suppress shared-sink data for the first two ticks of a session — its
+      // cumulative state from a prior session is meaningless on a fresh start.
+      // (Per-session files are session-scoped, so this only applies here.)
+      if (evo && (selfState.calls ?? 0) <= 2) {
+        evo = null;
+        evoSource = null;
       }
     }
 
-    // Growth: prefer ISG when available; -1 = no data yet (show "測定中")
-    if (isg >= 0) {
-      line1Bits.push(`${BOLD}${EVO_GREEN}育成度 ${isg}%${R}`);
-    } else if (isg === -1) {
-      line1Bits.push(`${DIM}育成度 測定中${R}`);
-    } else if (bond < 100) {
-      line1Bits.push(`${BOLD}${EVO_GREEN}育成度 ${bond}%${R}`);
-    }
+    const isStale = evoSource === "proxy_stale";
+    // Dim a chip only when the proxy data is stale (belt-and-suspenders for a
+    // long tool call): the whole layout is preserved but subdued.
+    const dimIfStale = (s: string): string => (isStale ? `${DIM}${s}${R}` : s);
 
-    // ── Line 2: signal-driven advice ──
-    const NEG_SET = new Set([
-      "prompt_too_vague",
-      "same_file_revisit",
-      "same_function_revisit",
-      "scope_creep",
-      "no_success_criteria",
-      "approval_fatigue",
-      "error_spiral",
-      "retry_loop",
-      "high_tool_ratio",
-    ]);
-    const POS_SET = new Set(["good_structure", "first_pass_success", "improving_trend"]);
+    let line1Bits: string[] = [];
+    let line2 = "";
+    // The quiet bound-session placeholder must never be overridden by the
+    // session-start boost (it stays a neutral "waiting" marker).
+    let quietPlaceholder = false;
 
-    // Truncate by meaning: headline/detail to a line budget (pointer when the
-    // headline is elided), before/after examples to tight column budgets so
-    // the EvoPet block stays at ~2 lines instead of wrapping into noise.
-    const adviceC = clip(advice, 72, { pointer: true });
-    const detailC = clip(detail, 76);
-    const b = clip(before, 28);
-    const a = clip(after, 44);
+    if (evo && evoSource) {
+      // ═══ Full proxy data (live or stale-dimmed) ═══
+      const avatar = (typeof evo.avatar === "string" && evo.avatar) || "🐣";
+      const nick = clip((typeof evo.nickname === "string" && evo.nickname) || "EvoPet", 24);
+      const bond = asNumberOr(evo.bond, 0) as number;
+      const isg =
+        evo.idealStateGauge === null || evo.idealStateGauge === undefined
+          ? -1
+          : (asNumberOr(evo.idealStateGauge, -1) as number);
+      const grade = asString(evo.sessionGrade);
+      const ps = asNumberOr(evo.promptScore, 0) as number;
+      const signal = asString(evo.signalKind);
+      const advice = asString(evo.advice);
+      const detail = asString(evo.adviceDetail);
+      const before = asString(evo.beforeExample);
+      const after = asString(evo.afterExample);
 
-    if (signal && NEG_SET.has(signal)) {
-      if (before && after) {
-        line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+      const gc = gradeColor(grade);
+      line1Bits = [dimIfStale(`${avatar} ${BOLD}${EVO_ACCENT}${nick}${R}`)];
+
+      // Always-on essentials row (never thins out): grade / 指示の質 / 育成度,
+      // each with a dim placeholder when its datum isn't computed yet. Grade is
+      // suppressed to the placeholder when its polarity contradicts the signal
+      // (TS refinement over the Python renderer, which always shows the label).
+      if (grade && !gradeContradicts(grade, signal)) {
+        line1Bits.push(dimIfStale(`${gc}${BOLD}${gradeLabel(grade)}${R}`));
+      } else {
+        line1Bits.push(`${DIM}評価 —${R}`);
+      }
+
+      if (ps > 0) {
+        if (ps >= 80) {
+          line1Bits.push(dimIfStale(`📝 ${EVO_GREEN}${BOLD}指示の質: とても良い!${R}`));
+        } else if (ps >= 60) {
+          line1Bits.push(dimIfStale(`📝 ${EVO_INFO}${BOLD}指示の質: 良好${R}`));
+        } else if (ps >= 40) {
+          line1Bits.push(dimIfStale(`📝 ${EVO_WARN}${BOLD}指示の質: もう少し具体的に${R}`));
+        } else {
+          line1Bits.push(dimIfStale(`📝 ${EVO_RED}${BOLD}指示の質: 曖昧すぎるかも${R}`));
+        }
+      } else {
+        line1Bits.push(`${DIM}📝 指示の質: 計測中${R}`);
+      }
+
+      // Growth: prefer ISG when available; -1 = no data yet (show "-").
+      if (isg >= 0) {
+        line1Bits.push(dimIfStale(`${BOLD}${EVO_GREEN}育成度 ${isg}%${R}`));
+      } else if (isg === -1) {
+        line1Bits.push(`${DIM}育成度 -${R}`);
+      } else if (bond < 100) {
+        line1Bits.push(dimIfStale(`${BOLD}${EVO_GREEN}育成度 ${bond}%${R}`));
+      } else {
+        // Residual fallback (e.g. bond ≥ 100 with no ISG): keep the row full.
+        line1Bits.push(`${DIM}育成度 -${R}`);
+      }
+
+      // Append the "(待機中)" lagging marker as the last chip when stale.
+      if (isStale) {
+        line1Bits.push(`${DIM}(待機中)${R}`);
+      }
+
+      // ── Line 2: signal-driven advice ──
+      const NEG_SET = new Set([
+        "prompt_too_vague",
+        "same_file_revisit",
+        "same_function_revisit",
+        "scope_creep",
+        "no_success_criteria",
+        "approval_fatigue",
+        "error_spiral",
+        "retry_loop",
+        "high_tool_ratio",
+      ]);
+      const POS_SET = new Set(["good_structure", "first_pass_success", "improving_trend"]);
+
+      // Truncate by meaning: headline/detail to a line budget (pointer when the
+      // headline is elided), before/after examples to tight column budgets so
+      // the EvoPet block stays at ~2 lines instead of wrapping into noise.
+      const adviceC = clip(advice, 72, { pointer: true });
+      const detailC = clip(detail, 76);
+      const b = clip(before, 28);
+      const a = clip(after, 44);
+
+      if (signal && NEG_SET.has(signal)) {
+        if (before && after) {
+          line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+        } else if (advice) {
+          line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}`;
+          if (detail) {
+            line2 += `\n   ${BOLD}${detailC}${R}`;
+          }
+        }
+      } else if (POS_SET.has(signal)) {
+        line2 = `✨ ${EVO_GREEN}${BOLD}${adviceC}${R}`;
+        if (detail) {
+          line2 += `\n   ${BOLD}${detailC}${R}`;
+        }
+      } else if (signal === "tip" && advice) {
+        if (before && after) {
+          line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+        } else {
+          line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}`;
+          if (detail) {
+            line2 += `\n   ${BOLD}${detailC}${R}`;
+          }
+        }
       } else if (advice) {
-        line2 = `⚠️ ${EVO_WARN}${BOLD}${adviceC}${R}`;
-        if (detail) {
-          line2 += `\n   ${BOLD}${detailC}${R}`;
-        }
+        line2 = `💡 ${BOLD}${EVO_INFO}${adviceC}${R}`;
       }
-    } else if (POS_SET.has(signal)) {
-      line2 = `✨ ${EVO_GREEN}${BOLD}${adviceC}${R}`;
-      if (detail) {
-        line2 += `\n   ${BOLD}${detailC}${R}`;
+
+      // When there's no advice line, append a dim 5-band mood comment (parity
+      // with the Python renderer) so line 2 isn't blank.
+      if (!line2) {
+        const calls = (selfState.calls ?? 1) as number;
+        const pool = pickMoodPool(currCtx);
+        const mood = pool[calls % pool.length];
+        line1Bits.push(`${DIM}${mood}${R}`);
       }
-    } else if (signal === "tip" && advice) {
-      if (before && after) {
-        line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${b}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${a}"${R}`;
+    } else if (sid) {
+      // ═══ Known session, no fresh per-session state → quiet placeholder ═══
+      // Deliberately does NOT borrow the self-tracked tip rotation or the
+      // shared sinks: a bound session with no data of its own renders only a
+      // neutral marker (never another session's state). Child/teammate sessions
+      // (no tracked file) land here. Parity with the Python "待機中" placeholder.
+      line1Bits = [`🦊 ${BOLD}${EVO_ACCENT}EvoPet${R}`, `${DIM}待機中${R}`];
+      quietPlaceholder = true;
+    } else {
+      // ═══ No session id — self-tracked fallback (sessionless legacy path) ═══
+      const avatar = "🦊";
+      const nick = "EvoPet";
+      const calls = (selfState.calls ?? 1) as number;
+      line1Bits = [`${avatar} ${BOLD}${EVO_ACCENT}${nick}${R}`];
+
+      const pool = pickMoodPool(currCtx);
+      const comment = pool[calls % pool.length];
+
+      if (currCtx >= 80) {
+        line1Bits.push(`${EVO_RED}${BOLD}${comment}${R}`);
+      } else if (currCtx >= 60) {
+        line1Bits.push(`${BOLD}${EVO_WARN}${comment}${R}`);
       } else {
-        line2 = `💡 ${EVO_INFO}${BOLD}${adviceC}${R}`;
-        if (detail) {
-          line2 += `\n   ${BOLD}${detailC}${R}`;
-        }
+        line1Bits.push(`${BOLD}${EVO_GREEN}${comment}${R}`);
       }
-    } else if (advice) {
-      line2 = `💡 ${BOLD}${EVO_INFO}${adviceC}${R}`;
+
+      line1Bits.push(`${DIM}${calls}回目${R}`);
+
+      // Tip rotation — merge the static library ([汎用]) with model-aware
+      // guidance tips ([公式] base / [<model>向け] model-specific). Each tip
+      // headline is prefixed with its provenance tag so the user can tell
+      // model-tuned advice from the generic/official libraries.
+      const guidanceTips = getEligibleGuidanceTips(modelId);
+      const tipPool: Array<{
+        headline: string;
+        tag: string;
+        before?: string | null;
+        after?: string | null;
+        detail?: string;
+      }> = [
+        ...TIPS.map((t) => ({
+          headline: t.headline,
+          tag: tipTag("generic"),
+          before: t.before,
+          after: t.after,
+        })),
+        ...guidanceTips.map((t) => ({
+          headline: t.headline,
+          tag: tipTag(t.source, t.audience),
+          detail: t.detail,
+        })),
+      ];
+      const tip = tipPool[calls % tipPool.length];
+      const th = clip(`${tip.tag} ${tip.headline}`, 72, { pointer: true });
+      const tb = tip.before;
+      const ta = tip.after;
+      if (tb && ta) {
+        const tbD = clip(tb, 28);
+        const taD = clip(ta, 44);
+        line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${tbD}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${taD}"${R}`;
+      } else if (tip.detail) {
+        line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${BOLD}${clip(tip.detail, 76)}${R}`;
+      } else {
+        line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}`;
+      }
     }
-  } else if (!sid) {
-    // ═══ No proxy — self-tracked fallback (sessionless legacy path only) ═══
-    // When a sid IS known but has no fresh per-session state we deliberately
-    // fall through to render nothing (guard below) instead of this fallback.
-    const avatar = "🦊";
-    const nick = "EvoPet";
-    const calls = (selfState.calls ?? 1) as number;
-    line1Bits = [`${avatar} ${BOLD}${EVO_ACCENT}${nick}${R}`];
 
-    const pool = pickMoodPool(currCtx);
-    const comment = pool[calls % pool.length];
-
-    if (currCtx >= 80) {
-      line1Bits.push(`${EVO_RED}${BOLD}${comment}${R}`);
-    } else if (currCtx >= 60) {
-      line1Bits.push(`${BOLD}${EVO_WARN}${comment}${R}`);
-    } else {
-      line1Bits.push(`${BOLD}${EVO_GREEN}${comment}${R}`);
+    // Session-start: override line2 with a boost message (not for the quiet
+    // bound-session placeholder, which stays neutral).
+    if (isSessionStart && !quietPlaceholder) {
+      const boost = BOOST_MESSAGES[Math.floor(nowS) % BOOST_MESSAGES.length];
+      line2 = `${EVO_GOLD}${BOLD}${boost}${R}`;
     }
 
-    line1Bits.push(`${DIM}${calls}回目${R}`);
-
-    // Tip rotation — merge the static library ([汎用]) with model-aware
-    // guidance tips ([公式] base / [<model>向け] model-specific). Each tip
-    // headline is prefixed with its provenance tag so the user can tell
-    // model-tuned advice from the generic/official libraries.
-    const guidanceTips = getEligibleGuidanceTips(modelId);
-    const tipPool: Array<{
-      headline: string;
-      tag: string;
-      before?: string | null;
-      after?: string | null;
-      detail?: string;
-    }> = [
-      ...TIPS.map((t) => ({
-        headline: t.headline,
-        tag: tipTag("generic"),
-        before: t.before,
-        after: t.after,
-      })),
-      ...guidanceTips.map((t) => ({
-        headline: t.headline,
-        tag: tipTag(t.source, t.audience),
-        detail: t.detail,
-      })),
-    ];
-    const tip = tipPool[calls % tipPool.length];
-    const th = clip(`${tip.tag} ${tip.headline}`, 72, { pointer: true });
-    const tb = tip.before;
-    const ta = tip.after;
-    if (tb && ta) {
-      const tbD = clip(tb, 28);
-      const taD = clip(ta, 44);
-      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${DIM}❌${R} ${BOLD}${EVO_RED}"${tbD}"${R} → ${DIM}✅${R} ${BOLD}${EVO_GREEN}"${taD}"${R}`;
-    } else if (tip.detail) {
-      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}\n   ${BOLD}${clip(tip.detail, 76)}${R}`;
-    } else {
-      line2 = `💡 ${EVO_INFO}${BOLD}${th}${R}`;
+    // Assemble the EvoPet block (line 1 + optional line 2). Dim the whole
+    // line 2 too when stale, so fresh-bright advice isn't mixed with dim stats.
+    const blockLines: string[] = [];
+    if (line1Bits.length > 0) blockLines.push(line1Bits.join(SEP));
+    if (line2) blockLines.push(isStale ? `${DIM}${line2}${R}` : line2);
+    if (blockLines.length > 0) {
+      evoBlockText = hardCapVisible(blockLines.join("\n"), EVOPET_BLOCK_MAX_CHARS);
     }
-  }
-
-  // Strict per-session binding: a KNOWN session with no fresh per-session state
-  // renders nothing at all (never another session's state, never a boost/tip).
-  // Child/teammate sessions have no tracked file → they naturally render empty.
-  if (!evo && sid) {
-    return;
-  }
-
-  // Session-start: override line2 with a boost message
-  if (isSessionStart) {
-    const boost = BOOST_MESSAGES[Math.floor(nowS) % BOOST_MESSAGES.length];
-    line2 = `${EVO_GOLD}${BOLD}${boost}${R}`;
   }
 
   // ── Emit ──
-  // Output: line1 (joined with SEP), optional line2 on next line.
-  // Never emit the token/model/cwd line — that's ClaudeConfig's job.
-  // Assemble the EvoPet block (line 1 + optional line 2), then enforce the
-  // absolute hard total-block cap on the joined output as the final backstop.
-  const blockLines: string[] = [];
-  if (line1Bits.length > 0) blockLines.push(line1Bits.join(SEP));
-  if (line2) blockLines.push(line2);
-
+  // Full mode: token line (`model · usage · cwd`) then the EvoPet block on the
+  // next line — parity with statusline.py. Split mode: EvoPet block only (the
+  // token line is rendered by a separate token-only base). An update-available
+  // notice, when present, is appended as a final dim line in both modes.
   const out: string[] = [];
-  if (blockLines.length > 0) {
-    out.push(hardCapVisible(blockLines.join("\n"), EVOPET_BLOCK_MAX_CHARS));
+  if (fullMode) {
+    const tokenLine = renderTokenLine(data, {
+      homeDir: os.homedir(),
+      fallbackCwd: process.cwd(),
+    });
+    out.push(evoBlockText ? `${tokenLine}${SEP}\n${evoBlockText}` : tokenLine);
+  } else if (evoBlockText) {
+    out.push(evoBlockText);
   }
 
-  // Append (last line) an update-available notice when npm has a newer
-  // version. Stale-while-revalidate via updateCheck — never blocks.
   try {
     const notice = getUpdateNotice();
     if (notice) {

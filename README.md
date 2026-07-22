@@ -41,22 +41,23 @@ There are two ways to use this repository:
 
 ## Quick install
 
-> **Prerequisites:** [Node.js](https://nodejs.org) 20 or newer (for the `evo` CLI) and Python 3 on your `PATH` (the deployed statusline is a Python script Claude Code invokes on each render).
+> **Prerequisites:** [Node.js](https://nodejs.org) 20 or newer (the statusline is now rendered by the `evo` CLI itself). Python is **no longer required** for a fresh install; it's only needed if you keep a legacy Python statusline or the dev split-wrapper construction.
 
 ```bash
 npm install -g evolutionary-cli-wrapper
 evo install-statusline
 ```
 
-`evo install-statusline` is interactive by default and does exactly two things:
+`evo install-statusline` is interactive by default and does exactly one thing:
 
-1. Copies the package's `statusline.py` to `~/.claude/base_statusline.py`.
-2. Sets `statusLine` in `~/.claude/settings.json` to
-   `{ "type": "command", "command": "python \"<HOME>/.claude/base_statusline.py\"" }`, preserving every other key. Your existing `settings.json` is backed up to `~/.claude/settings.json.bak.<timestamp>` first, and if the current `statusLine` points at a non-EvoPet command you're prompted before it's replaced.
+- Sets `statusLine` in `~/.claude/settings.json` to
+  `{ "type": "command", "command": "evo statusline --full" }`, preserving every other key. This wires Claude Code straight at the built-in TypeScript renderer, which draws the **complete** statusline — the token/model/context line **and** the EvoPet block — in one process. Your existing `settings.json` is backed up to `~/.claude/settings.json.bak.<timestamp>` first, and if the current `statusLine` points at a non-EvoPet command you're prompted before it's replaced. (`evo` must be on your `PATH` — it is after a global install.)
 
 Then **restart your Claude Code session** to pick up the new statusline. Prefer a no-prompt run for CI or provisioning? Add `--yes`.
 
-> **Note — two statusline constructions.** `evo install-statusline` deploys the **single-file** renderer (the full `statusline.py` as `base_statusline.py`), which is the right choice for most people. Advanced/dev setups instead use a **split "wrapper"** construction — a token-only base plus `evo statusline`, joined by a small wrapper script (this is what `npm run setup` deploys). To avoid rendering EvoPet twice, `evo install-statusline` **detects an existing wrapper setup and leaves it untouched** (it prints a one-line notice and makes no changes) rather than overwriting your wiring.
+> **Upgrading from an older version?** If a previous install wired `python "…/base_statusline.py"`, it keeps working untouched until you re-run `evo install-statusline`. Re-running migrates you to the `evo statusline --full` wiring and removes the now-orphaned `base_statusline.py`. Nothing changes until you choose to re-run it.
+
+> **Note — two statusline constructions.** `evo install-statusline` wires the **single-file** TS renderer (`evo statusline --full`), which is the right choice for most people. Advanced/dev setups instead use a **split "wrapper"** construction — a token-only base plus `evo statusline` (EvoPet-only), joined by a small wrapper script (this is what `npm run setup` deploys). To avoid rendering EvoPet twice, `evo install-statusline` **detects an existing wrapper setup and leaves it untouched** (it prints a one-line notice and makes no changes) rather than overwriting your wiring — while still recognizing its own `evo statusline --full` command so re-running stays idempotent.
 
 Don't want to install globally? Run it once with `npx`:
 
@@ -69,10 +70,10 @@ npx evolutionary-cli-wrapper install-statusline
 | Symptom | Fix |
 |---|---|
 | Statusline is blank after install | Restart the Claude Code session. The default display mode has been `expansion` since v3.5.0; if you're on an older deploy, run `evo display expansion` then `evo install-statusline --yes`. |
-| `python: command not found` on render | The statusline is a Python script. Install Python 3 and make sure `python` resolves on your `PATH`. |
-| Tips didn't change after `npm update -g` | The deployed `~/.claude/base_statusline.py` is a *copy* of the package file — re-run `evo install-statusline --yes` to redeploy the refreshed tips. |
-| The `⚠ update:` notice is noisy / you're offline | The notice comes from the `evo` CLI's own renderer (not the deployed statusline). Set `EVO_NO_UPDATE_CHECK=1` to suppress the registry check and the notice. |
-| You want your old statusline back | `evo install-statusline --uninstall` removes the script and restores the most recent `settings.json` backup. |
+| Statusline shows nothing / `evo: command not found` on render | The renderer is now the `evo` CLI. Make sure `evo` resolves on your `PATH` (it does after `npm install -g evolutionary-cli-wrapper`); `evo doctor` reports whether the shim is found. |
+| Tips didn't change after `npm update -g` | The TS renderer reads the tips straight from the installed package, so a global update takes effect on the next render — no redeploy needed. (Legacy Python installs still deployed a *copy*; re-run `evo install-statusline --yes` to migrate to the TS wiring.) |
+| The `⚠ update:` notice is noisy / you're offline | The notice comes from the `evo` renderer. Set `EVO_NO_UPDATE_CHECK=1` to suppress the registry check and the notice. |
+| You want your old statusline back | `evo install-statusline --uninstall` restores the most recent `settings.json` backup (and removes a legacy `base_statusline.py` if one was left behind). |
 
 ## Getting started
 

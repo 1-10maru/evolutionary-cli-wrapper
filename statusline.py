@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Evo v3.0 statusline — Always-on, self-tracking. Works with or without proxy."""
+"""Evo statusline — Always-on, self-tracking. Works with or without proxy.
+
+LEGACY (compat only). As of C1 the TypeScript renderer is the default single
+renderer: `evo install-statusline` wires Claude Code's settings.json at
+`evo statusline --full` (token line + EvoPet block from one process) and no
+longer deploys this file. This script stays in the package so setups installed
+by older versions keep working untouched until the user re-runs
+`evo install-statusline` (which migrates them to the TS wiring). It is still the
+byte-for-byte parity REFERENCE for the TS renderer, and scripts/token_statusline.py
++ `evo statusline` remain the split-wrapper construction. Do not delete it, and
+keep the hand-curated dictionary in sync via scripts/gen-statusline-dict.mjs.
+"""
 import json, sys, os, time, re
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
