@@ -901,7 +901,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-07-20",
+      "fetched": "2026-07-27",
       "entries": [
         {
           "headline": "/add-dir — Add a working directory for file access during the current session.",
@@ -995,7 +995,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/code-review — Review the current diff for correctness bugs and for reuse, simplification, and efficiency cleanups.",
+          "headline": "/code-review — Review the current diff for correctness bugs and cleanup opportunities.",
           "tier": 2,
           "category": "general",
           "before": null,
