@@ -470,6 +470,24 @@ export function setupJsonlWatcher(opts: JsonlWatcherOptions): JsonlWatcherHandle
         }
         scheduleFlush();
       });
+      // Windows surfaces asynchronous watcher failures (ReadDirectoryChangesW
+      // giving UV_UNKNOWN, i.e. errno -4094) as an 'error' event long after a
+      // successful init, so the try/catch around this block cannot catch them.
+      // Without a listener Node treats it as an unhandled 'error' event and
+      // terminates the whole proxy process, killing the user's live session.
+      // The 5 s safety-net poll below keeps lock tracking alive, so degrading
+      // to a warning is safe.
+      (fw as unknown as { on: (ev: string, cb: (err: unknown) => void) => void }).on(
+        "error",
+        (watchErr: unknown) => {
+          const w = normalizeErr(watchErr);
+          proxyJsonlWatchLog.warn("fs.watch watcher error", {
+            path: projectDir,
+            errno: w.code,
+            message: w.message,
+          });
+        },
+      );
       if (typeof (fw as unknown as { unref?: () => void }).unref === "function") {
         (fw as unknown as { unref: () => void }).unref();
       }
