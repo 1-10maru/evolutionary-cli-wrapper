@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
-import { ChangedFile, FileSnapshot, WorkspaceSnapshot } from "./types";
+import { ChangedFile, FileSnapshot, SkippedFile, WorkspaceSnapshot } from "./types";
 import { hashText } from "./utils/hash";
 
 const DEFAULT_IGNORES = [
@@ -24,6 +24,32 @@ function isPermissionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const code = "code" in error ? String((error as NodeJS.ErrnoException).code ?? "") : "";
   return code === "EPERM" || code === "EACCES" || code === "ENOENT";
+}
+
+/**
+ * A workspace snapshot is a best-effort, advisory scan: a single unreadable
+ * file must never take the wrapper — and therefore the user's live CLI
+ * session — down with it.
+ *
+ * The previous EPERM/EACCES/ENOENT allowlist was too narrow. Real workspaces
+ * produce transient per-file failures the allowlist did not cover, and every
+ * one of them was rethrown out of an async loop with no handler above it:
+ *
+ *   - UNKNOWN (errno -4094) — Windows returns this when a file is replaced or
+ *     locked mid-stat (observed on a docs_cache/*.meta.json being rewritten by
+ *     a background job while the snapshot walked it). This crashed a live
+ *     session in the field.
+ *   - EBUSY / EMFILE / ENFILE / EIO / ELOOP / ENOTDIR / EISDIR / ETIMEDOUT —
+ *     locked files, fd exhaustion, dying network drives, races where a path
+ *     changes type between glob and stat.
+ *
+ * Skipping the file is always the correct response: the file is simply absent
+ * from this snapshot, which at worst under-reports one file's diff.
+ */
+function describeFileError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const code = "code" in error ? String((error as NodeJS.ErrnoException).code ?? "") : "";
+  return code || error.message;
 }
 
 function getIgnorePatterns(cwd: string): string[] {
@@ -71,6 +97,7 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshot>
   });
 
   const files: FileSnapshot[] = [];
+  const skipped: SkippedFile[] = [];
   for (const relativePath of relativePaths) {
     if (ig.ignores(relativePath)) continue;
     const absolutePath = path.join(cwd, relativePath);
@@ -78,16 +105,22 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshot>
     try {
       stat = await fs.promises.stat(absolutePath);
     } catch (error) {
-      if (isPermissionError(error)) continue;
-      throw error;
+      // Never rethrow: a per-file stat failure is skipped, not fatal.
+      if (!isPermissionError(error)) {
+        skipped.push({ relativePath, reason: describeFileError(error) });
+      }
+      continue;
     }
     if (stat.size > MAX_FILE_SIZE) continue;
     let buffer: Buffer;
     try {
       buffer = await fs.promises.readFile(absolutePath);
     } catch (error) {
-      if (isPermissionError(error)) continue;
-      throw error;
+      // Never rethrow: a per-file read failure is skipped, not fatal.
+      if (!isPermissionError(error)) {
+        skipped.push({ relativePath, reason: describeFileError(error) });
+      }
+      continue;
     }
     const isText = isTextBuffer(buffer);
     const content = isText ? buffer.toString("utf8") : undefined;
@@ -106,6 +139,7 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshot>
   return {
     files,
     byRelativePath: new Map(files.map((file) => [file.relativePath, file])),
+    skipped,
   };
 }
 

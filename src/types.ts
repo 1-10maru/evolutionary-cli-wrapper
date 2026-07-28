@@ -202,9 +202,21 @@ export interface FileSnapshot {
   content?: string;
 }
 
+export interface SkippedFile {
+  relativePath: string;
+  /** Errno code (e.g. "UNKNOWN", "EBUSY") or, failing that, the error message. */
+  reason: string;
+}
+
 export interface WorkspaceSnapshot {
   files: FileSnapshot[];
   byRelativePath: Map<string, FileSnapshot>;
+  /**
+   * Files the scan could not read and therefore skipped. Optional so existing
+   * snapshot producers/consumers are unaffected. Diagnostic only — a populated
+   * list is normal on a busy workspace and never indicates failure.
+   */
+  skipped?: SkippedFile[];
 }
 
 export interface ChangedFile {
