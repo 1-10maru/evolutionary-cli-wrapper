@@ -8,6 +8,7 @@ import { assertSafeCommandPath, quoteArgForCmd } from "./proxy/spawnCommand";
 import { ensureEvoConfig, getBinDir, removeEvoData, updateEvoConfig } from "./config";
 import { EvoDatabase } from "./db";
 import { readIssueIntake } from "./issueIntake";
+import { crashLogPath, installCrashGuard, restoreTerminal, writeCrashRecord } from "./crashGuard";
 import { getLogger } from "./logger";
 import { chooseMascotSpecies, formatMascotSpeciesList, loadMascotProfile } from "./mascot";
 import { runProxySession } from "./proxyRuntime";
@@ -185,6 +186,11 @@ async function runTransparentPassthrough(
   // Force exit with the child's code, consistent with the proxied branch.
   process.exit(code);
 }
+
+// Install before any command runs: a crash anywhere below must restore the
+// user's terminal (mouse reporting off, cursor back) and leave a crash record,
+// instead of dumping a raw stack and wedging the shell.
+installCrashGuard();
 
 const program = new Command();
 program.enablePositionalOptions();
@@ -714,7 +720,12 @@ program.parseAsync(process.argv).catch((error: unknown) => {
     code: (error as NodeJS.ErrnoException).code,
     stack: error instanceof Error ? error.stack : undefined,
   });
-  console.error(message);
+  // Record and restore here too: this path exits normally (no uncaught
+  // exception), so the crashGuard error handlers never see it.
+  writeCrashRecord(error, "commandFailure");
+  restoreTerminal();
+  console.error(`evo: ${message}`);
+  console.error(`evo: details recorded at ${crashLogPath()}`);
   process.exitCode = 1;
 });
 
