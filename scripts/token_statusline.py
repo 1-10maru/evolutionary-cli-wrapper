@@ -53,13 +53,13 @@ cwd_display = '…/' + '/'.join(cwd_parts[-2:]) if len(cwd_parts) > 3 else cwd_n
 
 SEP = f' {DIM}·{R} '
 usage = []
-ctx = data.get('context_window', {}).get('used_percentage')
+ctx = (data.get('context_window') or {}).get('used_percentage')
 if ctx is not None:
     usage.append(f'ctx {dot(ctx)}')
-five = data.get('rate_limits', {}).get('five_hour', {}).get('used_percentage')
+five = ((data.get('rate_limits') or {}).get('five_hour') or {}).get('used_percentage')
 if five is not None:
     usage.append(f'5h {dot(five)}')
-week = data.get('rate_limits', {}).get('seven_day', {}).get('used_percentage')
+week = ((data.get('rate_limits') or {}).get('seven_day') or {}).get('used_percentage')
 if week is not None:
     usage.append(f'7d {dot(week)}')
 usage_str = SEP.join(usage)
