@@ -467,7 +467,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-best-practices",
       "source": "https://code.claude.com/docs/en/best-practices",
-      "fetched": "2026-07-13",
+      "fetched": "2026-08-24",
       "entries": [
         {
           "headline": "Claude Code on the web",
@@ -491,7 +491,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "**Across a session**: set the check as a [`/goal` condition](/docs/en/goal). A separate evaluator re-checks it after every turn and Claude keeps working until it holds.",
+          "headline": "**Across a session**: set the check as a [`/goal` condition](/docs/en/goal). A separate evaluator re-checks it after every turn and Claude keeps working until the goal resolves. If Claude stalls, Claude Code eventually stops the run with the goal still set — see [how /goal evaluation works](/docs/en/goal#how-evaluation-works).",
           "tier": 2,
           "category": "verification",
           "before": null,
@@ -571,62 +571,6 @@ _STATUSLINE_DICT = json.loads(r'''
           "headline": "Prefer running single tests, and not the whole test suite, for performance",
           "tier": 1,
           "category": "verification",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "Git workflow: @docs/git-instructions.md",
-          "tier": 1,
-          "category": "specificity",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "Personal overrides: @~/.claude/my-project-instructions.md",
-          "tier": 1,
-          "category": "specificity",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Home folder (`~/.claude/CLAUDE.md`)**: applies to all Claude sessions",
-          "tier": 1,
-          "category": "general",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Project root (`./CLAUDE.md`)**: check into git to share with your team",
-          "tier": 1,
-          "category": "verification",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Project root (`./CLAUDE.local.md`)**: personal project-specific notes; add this file to your `.gitignore` so it isn’t shared with your team",
-          "tier": 1,
-          "category": "specificity",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Parent directories**: useful for monorepos where both `root/CLAUDE.md` and `root/foo/CLAUDE.md` are pulled in automatically",
-          "tier": 1,
-          "category": "general",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Child directories**: Claude pulls in child CLAUDE.md files on demand when it reads a file in those directories",
-          "tier": 1,
-          "category": "general",
-          "before": null,
-          "after": null
-        },
-        {
-          "headline": "**Auto mode**: a separate classifier model reviews commands and blocks only what looks risky: scope escalation, unknown infrastructure, or hostile-content-driven actions. Best when you trust the general direction of a task but don’t want to click through every step",
-          "tier": 2,
-          "category": "general",
           "before": null,
           "after": null
         },
@@ -785,7 +729,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [Restore vs. summarize](/docs/en/checkpointing#restore-vs-summarize).",
+          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [the rewind menu’s summarize options](/docs/en/checkpointing#rewind-and-summarize).",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -799,7 +743,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "For quick questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.",
+          "headline": "For questions that don’t need to stay in context, use [`/btw`](/docs/en/interactive-mode#side-questions-with-%2Fbtw). The answer never enters conversation history, so you can check a detail without growing context.",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -820,14 +764,21 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "[Claude Code on the web](/docs/en/claude-code-on-the-web): run sessions on Anthropic-managed cloud infrastructure in isolated VMs",
+          "headline": "[Claude Code on the web](/docs/en/claude-code-on-the-web): run sessions in the cloud, on Anthropic-managed infrastructure by default",
           "tier": 2,
           "category": "general",
           "before": null,
           "after": null
         },
         {
-          "headline": "[Agent teams](/docs/en/agent-teams): automated coordination of multiple sessions with shared tasks, messaging, and a team lead",
+          "headline": "[Agent view](/docs/en/agent-view): research preview. Run `claude agents` to dispatch sessions that keep running in the background and watch them from one screen",
+          "tier": 2,
+          "category": "exploration",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "[Agent teams](/docs/en/agent-teams): experimental and disabled by default. Automated coordination of multiple sessions with shared tasks, messaging, and a team lead",
           "tier": 2,
           "category": "exploration",
           "before": null,
@@ -901,7 +852,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-07-20",
+      "fetched": "2026-08-24",
       "entries": [
         {
           "headline": "/add-dir — Add a working directory for file access during the current session.",
@@ -921,6 +872,27 @@ _STATUSLINE_DICT = json.loads(r'''
           "headline": "/agents — As of v2.1.198, running /agents prints a reminder to ask Claude to create or manage subagents, or to edit .claude/agents/ or ~/.claude/agents/ directly.",
           "tier": 1,
           "category": "permissions",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/artifacts — List the artifacts you own or that are shared with you, then attach one to the session, open it in your browser, or copy its link.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/auto-mode-setup — Draft autoMode.environment entries from your project and recent sessions, then review the draft and save it to your user settings.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/autocompact — Set the auto-compact window: how full the context window gets before Claude Code compacts automatically.",
+          "tier": 2,
+          "category": "general",
           "before": null,
           "after": null
         },
@@ -953,7 +925,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/btw — Ask a quick side question without adding to the conversation.",
+          "headline": "/btw — Ask a side question about the current session without adding to the conversation.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -967,7 +939,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/cd — Move this session to a new working directory.",
+          "headline": "/cd — Move this session to a new working directory, keeping the conversation and its prompt cache.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -981,7 +953,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/claude-api — Load Claude API reference material for your project’s language (Python, TypeScript, Java, Go, Ruby, C#, PHP, or cURL) and Managed Agents reference.",
+          "headline": "/claude-api — Load Claude API and Managed Agents reference material for your project’s language.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -995,7 +967,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/code-review — Review the current diff for correctness bugs and for reuse, simplification, and efficiency cleanups.",
+          "headline": "/code-review — Review the current diff, or a PR number, branch, or path you pass, for correctness bugs and cleanup opportunities.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1100,7 +1072,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/effort — Set the model effort level.",
+          "headline": "/effort — Set the effort level: low to xhigh, max, ultracode, or auto; status prints it.",
           "tier": 1,
           "category": "general",
           "before": null,
@@ -1156,7 +1128,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/goal — Set a goal: Claude keeps working across turns until the condition is met.",
+          "headline": "/goal — Set a goal: Claude keeps working across turns until the condition is met or the goal clears for another reason.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1191,6 +1163,13 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
+          "headline": "/import — Bring configuration from other coding agents on your machine, currently OpenAI Codex and Google Gemini CLI, into Claude Code, including instruction files, MCP servers, commands, subagents, and skills.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
           "headline": "/init — Initialize project with a CLAUDE.md guide.",
           "tier": 1,
           "category": "exploration",
@@ -1198,7 +1177,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/insights — Generate a report analyzing your Claude Code sessions, including project areas, interaction patterns, and friction points",
+          "headline": "/insights — Generate an HTML report analyzing your recent sessions on this machine: which projects you work in, how you use Claude Code, where things go wrong, and features to try.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1220,6 +1199,13 @@ _STATUSLINE_DICT = json.loads(r'''
         },
         {
           "headline": "/keybindings — Open your keyboard shortcuts file",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/list-agents — List the subagents, agent team teammates, and other Claude Code sessions Claude can message, with the name to use for each.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1254,7 +1240,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/memory — Edit CLAUDE.md memory files, enable or disable auto-memory, and view auto-memory entries",
+          "headline": "/memory — Edit CLAUDE.md files, enable or disable auto memory, and view auto memory entries",
           "tier": 1,
           "category": "context",
           "before": null,
@@ -1387,7 +1373,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/review — Run a fast single-pass, read-only review of a GitHub pull request by number.",
+          "headline": "/review — Alias of /code-review: reviews the current diff, or a PR number, branch, or path you pass, such as /review 1234, and takes the same effort levels and flags.",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -1408,7 +1394,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/run-skill-generator — Teach /run and /verify how to build, launch, and drive your project’s app from a clean environment by writing a per-project skill.",
+          "headline": "/run-skill-generator — Teach /run and /verify how to build, launch, and drive your project’s app from a clean environment by writing a per-project skill",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1422,7 +1408,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/schedule — Create, update, list, or run routines, which execute on Anthropic-managed cloud infrastructure.",
+          "headline": "/schedule — Create, update, list, or run routines, which execute in the cloud.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1436,7 +1422,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/security-review — Analyze pending changes on the current branch for security vulnerabilities.",
+          "headline": "/security-review — Analyze the changes on your current branch for security vulnerabilities.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1527,7 +1513,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/teleport — Pull a Claude Code on the web session into this terminal: opens a picker, then fetches the branch and conversation.",
+          "headline": "/teleport — Pull a Claude Code on the web session into this terminal.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1555,7 +1541,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/ultraplan — Draft a plan in an ultraplan session, review it in your browser, then execute remotely or send it back to your terminal",
+          "headline": "/ultraplan — Removed.",
           "tier": 2,
           "category": "general",
           "before": null,
