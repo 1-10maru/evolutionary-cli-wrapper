@@ -467,7 +467,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-best-practices",
       "source": "https://code.claude.com/docs/en/best-practices",
-      "fetched": "2026-07-13",
+      "fetched": "2026-08-03",
       "entries": [
         {
           "headline": "Claude Code on the web",
@@ -785,7 +785,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [Restore vs. summarize](/docs/en/checkpointing#restore-vs-summarize).",
+          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [the rewind menu’s summarize options](/docs/en/checkpointing#rewind-and-summarize).",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -901,7 +901,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-07-20",
+      "fetched": "2026-08-03",
       "entries": [
         {
           "headline": "/add-dir — Add a working directory for file access during the current session.",
@@ -995,7 +995,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/code-review — Review the current diff for correctness bugs and for reuse, simplification, and efficiency cleanups.",
+          "headline": "/code-review — Review the current diff for correctness bugs and cleanup opportunities.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1436,7 +1436,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/security-review — Analyze pending changes on the current branch for security vulnerabilities.",
+          "headline": "/security-review — Analyze the changes on your current branch for security vulnerabilities.",
           "tier": 2,
           "category": "general",
           "before": null,
