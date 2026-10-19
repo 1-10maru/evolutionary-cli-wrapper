@@ -467,7 +467,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-best-practices",
       "source": "https://code.claude.com/docs/en/best-practices",
-      "fetched": "2026-07-13",
+      "fetched": "2026-08-10",
       "entries": [
         {
           "headline": "Claude Code on the web",
@@ -785,7 +785,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [Restore vs. summarize](/docs/en/checkpointing#restore-vs-summarize).",
+          "headline": "To compact only part of the conversation, use `Esc + Esc` or `/rewind`, select a message checkpoint, and choose **Summarize from here** or **Summarize up to here**. The first condenses messages from that point forward while keeping earlier context intact; the second condenses earlier messages while keeping recent ones in full. See [the rewind menu’s summarize options](/docs/en/checkpointing#rewind-and-summarize).",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -820,7 +820,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "[Claude Code on the web](/docs/en/claude-code-on-the-web): run sessions on Anthropic-managed cloud infrastructure in isolated VMs",
+          "headline": "[Claude Code on the web](/docs/en/claude-code-on-the-web): run sessions in the cloud, on Anthropic-managed infrastructure by default",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -901,7 +901,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-07-20",
+      "fetched": "2026-08-10",
       "entries": [
         {
           "headline": "/add-dir — Add a working directory for file access during the current session.",
@@ -921,6 +921,13 @@ _STATUSLINE_DICT = json.loads(r'''
           "headline": "/agents — As of v2.1.198, running /agents prints a reminder to ask Claude to create or manage subagents, or to edit .claude/agents/ or ~/.claude/agents/ directly.",
           "tier": 1,
           "category": "permissions",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/autocompact — Set the auto-compact window: how full the context window gets before Claude Code compacts automatically.",
+          "tier": 2,
+          "category": "general",
           "before": null,
           "after": null
         },
@@ -981,7 +988,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/claude-api — Load Claude API reference material for your project’s language (Python, TypeScript, Java, Go, Ruby, C#, PHP, or cURL) and Managed Agents reference.",
+          "headline": "/claude-api — Load Claude API and Managed Agents reference material for your project’s language.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -995,7 +1002,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/code-review — Review the current diff for correctness bugs and for reuse, simplification, and efficiency cleanups.",
+          "headline": "/code-review — Review the current diff, or a PR number, branch, or path you pass, for correctness bugs and cleanup opportunities.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1191,6 +1198,13 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
+          "headline": "/import — Bring configuration from other coding agents on your machine, currently OpenAI Codex and Google Gemini CLI, into Claude Code, including instruction files, MCP servers, commands, subagents, and skills.",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
           "headline": "/init — Initialize project with a CLAUDE.md guide.",
           "tier": 1,
           "category": "exploration",
@@ -1220,6 +1234,13 @@ _STATUSLINE_DICT = json.loads(r'''
         },
         {
           "headline": "/keybindings — Open your keyboard shortcuts file",
+          "tier": 2,
+          "category": "general",
+          "before": null,
+          "after": null
+        },
+        {
+          "headline": "/list-agents — List the subagents and other Claude Code sessions Claude can message, with the name to use for each; agent team teammates aren’t listed, since Claude reaches them through the team’s roster.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1387,7 +1408,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/review — Run a fast single-pass, read-only review of a GitHub pull request by number.",
+          "headline": "/review — Alias of /code-review: reviews the current diff, or a PR number, branch, or path you pass, such as /review 1234, and takes the same effort levels and flags.",
           "tier": 1,
           "category": "verification",
           "before": null,
@@ -1422,7 +1443,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/schedule — Create, update, list, or run routines, which execute on Anthropic-managed cloud infrastructure.",
+          "headline": "/schedule — Create, update, list, or run routines, which execute in the cloud.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1436,7 +1457,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/security-review — Analyze pending changes on the current branch for security vulnerabilities.",
+          "headline": "/security-review — Analyze the changes on your current branch for security vulnerabilities.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1555,7 +1576,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/ultraplan — Draft a plan in an ultraplan session, review it in your browser, then execute remotely or send it back to your terminal",
+          "headline": "/ultraplan — Removed.",
           "tier": 2,
           "category": "general",
           "before": null,
