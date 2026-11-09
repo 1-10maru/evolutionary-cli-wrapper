@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-02T10:44:13.837Z",
+  "generatedAt": "2026-11-09T11:07:24.744Z",
   "modelPatterns": [
     {
       "pattern": "mythos",
@@ -22,8 +22,8 @@
     "base": {
       "label": "",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/claude-prompting-best-practices.md",
-      "fetchedAt": "2026-11-02T10:44:13.531Z",
-      "contentHash": "d713b655b1cce5fc",
+      "fetchedAt": "2026-11-09T11:07:24.501Z",
+      "contentHash": "2008f0e713291c66",
       "tips": [
         {
           "headline": "モデル固有のガイダンス",
@@ -78,8 +78,8 @@
     "fable": {
       "label": "Fable 5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-fable-5.md",
-      "fetchedAt": "2026-11-02T10:44:13.677Z",
-      "contentHash": "4db84c55fc30a23e",
+      "fetchedAt": "2026-11-09T11:07:24.641Z",
+      "contentHash": "adf4b4700a2e6ae2",
       "tips": [
         {
           "headline": "能力の向上",
@@ -87,7 +87,7 @@
         },
         {
           "headline": "デフォルトでより長いターン",
-          "detail": "困難なタスクに対する個々のリクエストは、より高いeffort（エフォート）設定では数分間実行されることがあります。特にタスクがコンテキストの収集、構築、自己検証を必要とする場合に顕著であり、自律的な実行は数時間に及ぶこともあります。これは、チームがClaude Fable 5に適応する際に直面する最も大きな変化の1つです。"
+          "detail": "困難なタスクに対する個々のリクエストは、より高いeffort（エフォート）設定では何分間も実行されることがあります。特にタスクがコンテキストの収集、構築、自己検証を必要とする場合に顕著であり、自律的な実行は数時間に及ぶこともあります。これは、チームがClaude Fable 5に適応する際に直面する最も大きな変化の1つです。"
         },
         {
           "headline": "すべてのエフォートレベルを検討する",
@@ -134,8 +134,8 @@
     "opus": {
       "label": "Opus 4.8のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-opus-4-8.md",
-      "fetchedAt": "2026-11-02T10:44:13.837Z",
-      "contentHash": "78fcf89be7188381",
+      "fetchedAt": "2026-11-09T11:07:24.744Z",
+      "contentHash": "f03ed07a2f303c2c",
       "tips": [
         {
           "headline": "応答の長さと冗長性",
@@ -159,7 +159,7 @@
         },
         {
           "headline": "トーンと文体",
-          "detail": "新しいモデルではいつものことですが、長文の執筆における文体は変化する可能性があります。Claude Opus 4.8は、肯定から入る言い回しを最小限に抑え、絵文字の使用も控えめな、直接的で意見のはっきりしたスタイルに傾いています。プロダクトが特定のボイスに依存している場合は、新しいベースラインに対してスタイルプロンプトを再評価してください。"
+          "detail": "新しいモデルでは常にそうですが、長文の文章における文体が変わる可能性があります。Claude Opus 4.8は、相手を肯定する前置き的な表現を最小限に抑え、絵文字の使用も控えめな、直接的で意見をはっきり述べるスタイルになる傾向があります。製品が特定の語り口に依存している場合は、新しいベースラインに対してスタイルのプロンプトを再評価してください。"
         },
         {
           "headline": "サブエージェント生成の制御",
@@ -179,7 +179,7 @@
         },
         {
           "headline": "コンピュータ使用",
-          "detail": "Claude Opus 4.8は、以前のcomputer20251124ツールバージョンをサポートしており、Claude APIおよびClaude Models on Google Cloud (Google managed)上ではcomputertoolset20260801ツールセットもサポートしています。"
+          "detail": "Claude Opus 4.8は、computertoolset20260801ツールセットおよびcomputer20251124ツールバージョンを通じて、「computer use」（コンピューター使用）をサポートしています。また、Webページ内のタスク向けに「browser use tool」（ブラウザ使用ツール）（browsertoolset20260801）もサポートしています。"
         }
       ]
     }
