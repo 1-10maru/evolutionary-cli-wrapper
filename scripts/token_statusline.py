@@ -13,12 +13,57 @@ not add EvoPet rendering here.
 import json
 import os
 import sys
+import threading
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
+# Claude Code pipes the payload and closes stdin at once. A stdin that is still
+# open after this long is never going to deliver: a bare json.load(sys.stdin)
+# then blocks forever and the process outlives its parent as an orphan.
+STDIN_DEADLINE_S = 1.5
+
+
+def read_stdin(deadline=STDIN_DEADLINE_S):
+    """Return stdin decoded as sys.stdin would, '' for a terminal or no stdin,
+    or None if it did not reach EOF within `deadline` seconds."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ''
+        fd = sys.stdin.fileno()
+        encoding, errors = sys.stdin.encoding, sys.stdin.errors
+    except Exception:
+        return ''
+    chunks = []
+
+    def pump():
+        try:
+            while True:
+                b = os.read(fd, 65536)
+                if not b:
+                    return
+                chunks.append(b)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    t.join(deadline)
+    if t.is_alive():
+        return None
+    try:
+        return b''.join(chunks).decode(encoding, errors).replace('\r\n', '\n')
+    except Exception:
+        return ''
+
+
+raw = read_stdin()
+if raw is None:
+    # os._exit: a normal shutdown can block behind the read still pending in
+    # the reader thread.
+    os._exit(0)
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(raw)
 except Exception:
     data = {}
 
@@ -53,13 +98,13 @@ cwd_display = '…/' + '/'.join(cwd_parts[-2:]) if len(cwd_parts) > 3 else cwd_n
 
 SEP = f' {DIM}·{R} '
 usage = []
-ctx = data.get('context_window', {}).get('used_percentage')
+ctx = (data.get('context_window') or {}).get('used_percentage')
 if ctx is not None:
     usage.append(f'ctx {dot(ctx)}')
-five = data.get('rate_limits', {}).get('five_hour', {}).get('used_percentage')
+five = ((data.get('rate_limits') or {}).get('five_hour') or {}).get('used_percentage')
 if five is not None:
     usage.append(f'5h {dot(five)}')
-week = data.get('rate_limits', {}).get('seven_day', {}).get('used_percentage')
+week = ((data.get('rate_limits') or {}).get('seven_day') or {}).get('used_percentage')
 if week is not None:
     usage.append(f'7d {dot(week)}')
 usage_str = SEP.join(usage)
