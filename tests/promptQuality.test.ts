@@ -1,0 +1,339 @@
+// Rubric for conversational Japanese direction (v3.8).
+//
+// The rubric this replaced asked whether a "/" or a ".ts" appeared, with two
+// 30-or-0 cliffs, so real messages piled at exactly 0 and 38 and a precise
+// instruction written in plain Japanese scored zero. These tests pin the four
+// axes independently, pin that vague input stays at the bottom, and pin the
+// symbol-free case that is the entire reason for the change.
+
+import { describe, expect, it } from "vitest";
+import {
+  AXIS_WEIGHTS,
+  MAX_SCORED_CHARS,
+  computePromptQuality,
+  isNonDirective,
+  isNonRequest,
+  legacyPromptScore,
+} from "../src/promptQuality";
+
+const score = (t: string): number => computePromptQuality(t).score;
+const axes = (t: string) => computePromptQuality(t).axes;
+
+describe("axes are detected independently", () => {
+  it("target only — names a thing, states no done-condition or reason", () => {
+    const a = axes("src/proxy/episodeLifecycle.ts の promptScore");
+    expect(a.target).toBeGreaterThan(0);
+    expect(a.acceptance).toBe(0);
+    expect(a.context).toBe(0);
+  });
+
+  it("acceptance only — states a done-condition but names nothing", () => {
+    const a = axes("エラーが出なくなるまで直して");
+    expect(a.acceptance).toBeGreaterThan(0);
+    expect(a.target).toBe(0);
+    expect(a.context).toBe(0);
+  });
+
+  it("context only — gives a reason but no target and no done-condition", () => {
+    const a = axes("急いでいるので。");
+    expect(a.context).toBeGreaterThan(0);
+    expect(a.target).toBe(0);
+    expect(a.acceptance).toBe(0);
+  });
+
+  it("structure only — bullets with no substance", () => {
+    const a = axes("- あれ\n- それ\n- どれ");
+    expect(a.structure).toBeGreaterThan(0);
+    expect(a.target).toBe(0);
+  });
+
+  it("all three major axes together outscore any single axis", () => {
+    const all = score(
+      "ログイン画面のパスワード欄が空でも送信できてしまうので、空欄のときは送信ボタンを押せないようにして。他の画面は触らないで。",
+    );
+    expect(all).toBeGreaterThan(score("src/foo.ts"));
+    expect(all).toBeGreaterThan(score("エラーが出なくなるまで直して"));
+    expect(all).toBeGreaterThan(score("急いでいるので。"));
+    expect(all).toBeGreaterThanOrEqual(70);
+  });
+
+  it("none — an empty or contentless message scores 0", () => {
+    expect(score("")).toBe(0);
+    expect(score("a,")).toBe(0);
+  });
+});
+
+describe("vague input still scores near the bottom", () => {
+  // If recalibration made everything score well it would be flattery, not a
+  // measure. These are the exact strings the design brief named.
+  it.each(["なおして", "これおかしい", "やって", "まだ？", "うごかない"])(
+    "%s scores in the bottom band",
+    (text) => {
+      expect(score(text)).toBeLessThan(20);
+    },
+  );
+
+  it("a demonstrative with one weak referent is only partly specified", () => {
+    // "これ" points instead of naming: it must not reach full target credit.
+    expect(axes("これ直して").target).toBeLessThan(0.6);
+  });
+});
+
+describe("symbol-free Japanese can score high (the point of the change)", () => {
+  // This test must fail if anyone reverts to symbol/path matching.
+  const jp =
+    "検索結果の並び順が更新日ではなく作成日になっているので、更新日の新しい順に直してほしい。ページングは今のまま変えずに、1ページ20件のままにして。";
+
+  it("scores high despite containing no path, no extension and no code symbol", () => {
+    expect(jp).not.toMatch(/[a-z]+\.[a-z]{1,5}\b/);
+    expect(jp).not.toMatch(/[A-Z][a-z]+[A-Z]/);
+    expect(score(jp)).toBeGreaterThanOrEqual(70);
+  });
+
+  it("the old rubric scored the same message far lower", () => {
+    expect(score(jp)).toBeGreaterThan(legacyPromptScore(jp));
+  });
+});
+
+describe("no all-or-nothing terms", () => {
+  it("produces a spread of values, not a two-value pile", () => {
+    const samples = [
+      "なおして",
+      "これおかしい",
+      "src/foo.ts を見て",
+      "エラーが出なくなるまで直して",
+      "急いでいるので直して",
+      "src/foo.ts のテストが通るまで直して",
+      "ログイン画面のパスワード欄を、空欄なら送信できないように直してほしい。他は触らないで。",
+      "- src/a.ts を直す\n- テストが通るまで\n- 他は触らない",
+    ];
+    const values = samples.map(score);
+    expect(new Set(values).size).toBeGreaterThanOrEqual(6);
+  });
+
+  it("each axis has an intermediate level between 0 and full", () => {
+    const partial = axes("src/foo.ts").target;
+    const full = axes("src/foo.ts の renderPanel を 3 件だけ").target;
+    expect(partial).toBeGreaterThan(0);
+    expect(partial).toBeLessThan(1);
+    expect(full).toBeGreaterThan(partial);
+  });
+});
+
+describe("length is not quality", () => {
+  it("a long rambling message does not out-score a short precise one", () => {
+    const rambling =
+      "えーとですね、なんというか色々あって、まあ正直よく分からないんですけど、" +
+      "とりあえず全体的にいい感じにしてもらえると助かるというか、" +
+      "そんな感じでお願いしたいなと思っていて、まあ細かいところは任せます。".repeat(3);
+    const precise = "src/foo.ts の renderPanel を、テストが通るまで直して。他は触らないで。";
+    expect(score(precise)).toBeGreaterThan(score(rambling));
+  });
+
+  it("repeating the same referent does not raise the target axis", () => {
+    const once = axes("src/foo.ts を直して").target;
+    const many = axes("src/foo.ts と src/foo.ts と src/foo.ts を直して").target;
+    expect(many).toBe(once);
+  });
+});
+
+describe("scale, weights and fail-open contract", () => {
+  it("stays on the 0-100 scale", () => {
+    for (const t of ["", "なおして", "a".repeat(5000), "src/a.ts のテストが通るまで直して、他は触らずに、理由は回帰防止。\n- 1\n- 2\n# h"]) {
+      const v = score(t);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("the axis weights sum to 100 and keep structure minor", () => {
+    const sum = Object.values(AXIS_WEIGHTS).reduce((a, b) => a + b, 0);
+    expect(sum).toBe(100);
+    expect(AXIS_WEIGHTS.structure).toBeLessThan(AXIS_WEIGHTS.target);
+    expect(AXIS_WEIGHTS.structure).toBeLessThan(AXIS_WEIGHTS.acceptance);
+  });
+
+  it("never throws on hostile or non-string input", () => {
+    const hostile = [
+      "((((((", "```\n\n```", "\u0000\u0001", "「".repeat(500), "・".repeat(2000),
+      undefined as unknown as string, null as unknown as string, 42 as unknown as string,
+    ];
+    for (const t of hostile) {
+      expect(() => computePromptQuality(t)).not.toThrow();
+      const v = computePromptQuality(t).score;
+      expect(Number.isFinite(v)).toBe(true);
+    }
+  });
+});
+
+describe("legacy feature booleans stay usable by signalDetector", () => {
+  it("reports file and symbol refs for code-ish text", () => {
+    const q = computePromptQuality("src/foo.ts の renderPanel()");
+    expect(q.hasFileRefs).toBe(true);
+    expect(q.hasSymbolRefs).toBe(true);
+  });
+
+  it("reports an acceptance ref for a Japanese done-condition (widened)", () => {
+    // The old regex (完了|done|accept|pass|通[れる]|OK) missed this entirely,
+    // so the "acceptance criteria missing" advice fired on messages that
+    // plainly stated one.
+    expect(computePromptQuality("警告がゼロになるまで直して").hasAcceptanceRef).toBe(true);
+    expect(computePromptQuality("なおして").hasAcceptanceRef).toBe(false);
+  });
+
+  it("keeps structureScore on the 0-5 scale signalDetector compares against", () => {
+    const q = computePromptQuality("- a\n- b\n1. c\n# d\n【e】");
+    expect(q.structureScore).toBeGreaterThanOrEqual(0);
+    expect(q.structureScore).toBeLessThanOrEqual(5);
+  });
+});
+
+describe("unmeasurable is not bad: acknowledgements are skipped, vague directives are not", () => {
+  // The line the design brief drew. Excluding the unmeasurable must NOT excuse
+  // the vague, or the metric is worthless.
+  it.each([
+    "ok", "OK", "了解", "了解です", "オッケー", "はい", "うん", "わかった",
+    "進めて", "続けて", "どうぞ", "いいよ", "ありがとう", "たのむ", "よろしく",
+    "18でいい、たのむ",
+  ])("%s is not a directive and is skipped entirely", (text) => {
+    expect(isNonDirective(text)).toBe(true);
+  });
+
+  it.each(["やって", "なおして", "これおかしい", "まだ？"])(
+    "%s IS a directive — scored, and scored low",
+    (text) => {
+      expect(isNonDirective(text)).toBe(false);
+      expect(computePromptQuality(text).score).toBeLessThan(20);
+    },
+  );
+
+  it("an ack followed by real direction is still scored", () => {
+    expect(isNonDirective("了解。src/a.ts を直して")).toBe(false);
+    expect(isNonDirective("進めて、ただしテストが通るまで")).toBe(false);
+  });
+
+  it("a long message is never treated as an acknowledgement", () => {
+    expect(isNonDirective("ok " + "あ".repeat(60))).toBe(false);
+  });
+
+  it("never throws on hostile input", () => {
+    for (const t of [undefined, null, 42, "", "、、、"] as unknown as string[]) {
+      expect(() => isNonDirective(t)).not.toThrow();
+    }
+  });
+});
+
+describe("course correction counts as targeting evidence", () => {
+  it("「違う、そうじゃなくて」 raises the target axis over a bare complaint", () => {
+    expect(axes("違う、そうじゃなくて左だ").target).toBeGreaterThan(
+      axes("おかしい").target,
+    );
+  });
+  it.each(["違う", "そうじゃなくて", "ではなく", "じゃなくて", "逆で"])(
+    "%s is recognised",
+    (marker) => {
+      expect(axes(`${marker}こっち`).target).toBeGreaterThan(0);
+    },
+  );
+});
+
+describe("quotation is targeting, but capped when it dominates", () => {
+  const quoteHeavy =
+    "＞ ここの実装は既存のテーブル構造に依存しており、変更には移行が必要です\n" +
+    "＞ そのため今回のスコープでは見送るのが妥当だと考えます\n" +
+    "そう。";
+  const quotePlusOwn =
+    "＞ ここの実装は既存のテーブル構造に依存しており、変更には移行が必要です\n" +
+    "src/db.ts の migrate を先に直してから、テストが通るまでやって。";
+
+  it("a mostly-quoted message with no independent referent is capped", () => {
+    expect(axes(quoteHeavy).target).toBeLessThanOrEqual(0.5);
+  });
+
+  it("a quote plus the user's own naming is NOT capped", () => {
+    expect(axes(quotePlusOwn).target).toBeGreaterThan(0.5);
+  });
+
+  it("quotes are never excluded outright — quoting still targets", () => {
+    // Pointing at a specific cited line beats naming nothing at all.
+    expect(axes(quoteHeavy).target).toBeGreaterThan(axes("なおして").target);
+  });
+});
+
+describe("tone is never scored", () => {
+  it("an insult does not lower an otherwise precise instruction", () => {
+    const polite = "src/a.ts のテストが通るまで直してください。他は触らないで。";
+    const rude = "ゴミが。src/a.ts のテストが通るまで直せ。他は触るな。";
+    expect(score(rude)).toBeGreaterThanOrEqual(score(polite) - 5);
+  });
+});
+
+describe("non-requests are excluded; the gate is a whitelist", () => {
+  it.each(["ありがとう", "感謝", "すごい", "さすが", "完璧", "できました", "thanks"])(
+    "%s makes no request and is excluded",
+    (t) => { expect(isNonRequest(t)).toBe(true); },
+  );
+
+  // REGRESSION GUARD. The first version of this gate enumerated request FORMS
+  // and excluded anything lacking one. Japanese imperatives are open-class, so
+  // it silently dropped these REAL instructions from the corpus. A dropped
+  // instruction is invisible in every histogram — it just stops counting.
+  it.each([
+    "元に戻せクズ",
+    "mdよめカス",
+    "reviewer の手順: 1. gh auth switch -u 1-10maru でアカウント切替",
+    "先にTD記事宣伝。もう一度VSCODEでひらいて下書き",
+    "ポスト攻略",
+    "これおかしい",
+    "まだ？",
+  ])("%s is a real instruction and must still be scored", (t) => {
+    expect(isNonRequest(t)).toBe(false);
+  });
+
+  it("praise with an actual request attached is still scored", () => {
+    expect(isNonRequest("すごい、次は src/a.ts を直して")).toBe(false);
+  });
+});
+
+describe("function words no longer buy acceptance or rationale credit", () => {
+  it("a bare まで/だけ does not create a done-condition", () => {
+    expect(axes("ちょっとだけ待って").acceptance).toBe(0);
+    expect(computePromptQuality("そこまでは分かったので、次の話に戻ろう").score).toBeLessThan(35);
+  });
+  it("a causal particle is worth half of a stated reason", () => {
+    const particle = axes("動かないので直して").context;
+    const explicit = axes("回帰を防ぐ目的で直して").context;
+    expect(particle).toBeGreaterThan(0);
+    expect(particle).toBeLessThan(explicit);
+  });
+  it("hasAcceptanceRef reflects a real done-condition, not any credit", () => {
+    // It gates the no_success_criteria coaching: a particle must not silence it.
+    expect(computePromptQuality("ちょっとだけ待って").hasAcceptanceRef).toBe(false);
+    expect(computePromptQuality("警告がゼロになるまで直して").hasAcceptanceRef).toBe(true);
+  });
+});
+
+describe("ordering: gaming must not outrank real instruction", () => {
+  it("keyword salad scores below a precise plain-Japanese instruction", () => {
+    const salad = "ので、ようにしてほしい。まで。`abc` の TouchDesigner を #1 に。";
+    const real =
+      "検索結果の並び順が更新日ではなく作成日になっているので、更新日の新しい順に直してほしい。ページングは今のまま変えずに、1ページ20件のままにして。";
+    expect(computePromptQuality(salad).score).toBeLessThan(
+      computePromptQuality(real).score,
+    );
+  });
+});
+
+describe("large input is bounded", () => {
+  it("truncates at MAX_SCORED_CHARS and stays fast", () => {
+    // RE_PATH/RE_SYMBOL degrade quadratically on a long slash-free ASCII run;
+    // this runs on the stdio-relay event loop, so it must stay bounded.
+    const huge = "abcdefghij".repeat(20000); // 200k chars, no slash
+    const t0 = Date.now();
+    const v = computePromptQuality(huge).score;
+    const elapsed = Date.now() - t0;
+    expect(Number.isFinite(v)).toBe(true);
+    expect(elapsed).toBeLessThan(1000);
+    expect(MAX_SCORED_CHARS).toBeLessThanOrEqual(8000);
+  });
+});

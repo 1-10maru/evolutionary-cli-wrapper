@@ -4,11 +4,24 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildAdviceBlock,
+  capLineToWidth,
   clip,
+  clipEx,
+  compactGrade,
+  computeBudgets,
   displayWidth,
   hardCapVisible,
+  resolveTerminalWidth,
+  adviceIdentityKey,
+  pushIfFits,
+  DEFAULT_COLUMNS,
   EVOPET_BLOCK_MAX_CHARS,
+  PAGE_INTERVAL_MS,
 } from "../../src/cli/statusline";
+import { parseDisplaySettings, runDisplayCommand } from "../../src/cli/display";
+import { rememberSessionModel } from "../../src/cli/advice";
+import { pickTipForModel } from "../../src/signalDetector";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // Spawn the pre-built CLI. `npm run build` runs before the suite in the verify
@@ -93,6 +106,518 @@ describe("hardCapVisible (absolute safety net)", () => {
   });
 });
 
+// ── Unit: width-adaptive layout ─────────────────────────────────────────────
+
+const plainOf = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+
+describe("resolveTerminalWidth", () => {
+  it("reads COLUMNS (Claude Code captures stdout, so tput cols cannot work)", () => {
+    expect(resolveTerminalWidth({ COLUMNS: "60" })).toBe(60);
+    expect(resolveTerminalWidth({ COLUMNS: " 204 " })).toBe(204);
+  });
+
+  it("falls back to the default when COLUMNS is missing or unusable", () => {
+    expect(resolveTerminalWidth({})).toBe(DEFAULT_COLUMNS);
+    expect(resolveTerminalWidth({ COLUMNS: "" })).toBe(DEFAULT_COLUMNS);
+    expect(resolveTerminalWidth({ COLUMNS: "wide" })).toBe(DEFAULT_COLUMNS);
+    expect(resolveTerminalWidth({ COLUMNS: "0" })).toBe(DEFAULT_COLUMNS);
+    expect(resolveTerminalWidth({ COLUMNS: "-40" })).toBe(DEFAULT_COLUMNS);
+  });
+});
+
+describe("computeBudgets", () => {
+  it("picks the tier from the width and scales the budgets with it", () => {
+    expect(computeBudgets(60).tier).toBe("narrow");
+    expect(computeBudgets(79).tier).toBe("narrow");
+    expect(computeBudgets(80).tier).toBe("medium");
+    expect(computeBudgets(119).tier).toBe("medium");
+    expect(computeBudgets(120).tier).toBe("wide");
+    expect(computeBudgets(200).tier).toBe("wide");
+    // Budgets are derived, not the old fixed 72/76/28/44.
+    expect(computeBudgets(200).advice).toBeGreaterThan(computeBudgets(120).advice);
+    expect(computeBudgets(200).detail).toBeGreaterThan(computeBudgets(120).detail);
+  });
+
+  it("drops line 2 below 80 and the detail line below 120", () => {
+    expect(computeBudgets(60)).toMatchObject({ showAdvice: false, showDetail: false, compactChips: true });
+    expect(computeBudgets(90)).toMatchObject({ showAdvice: true, showDetail: false, compactChips: false });
+    expect(computeBudgets(160)).toMatchObject({ showAdvice: true, showDetail: true, compactChips: false });
+  });
+
+  it("reserves a right margin and survives nonsense widths", () => {
+    expect(computeBudgets(120).avail).toBe(118);
+    expect(computeBudgets(Number.NaN).cols).toBe(DEFAULT_COLUMNS);
+    expect(computeBudgets(0).cols).toBe(DEFAULT_COLUMNS);
+    expect(computeBudgets(5).avail).toBeGreaterThanOrEqual(20);
+  });
+});
+
+describe("capLineToWidth", () => {
+  it("bounds a line by display columns without counting ANSI escapes", () => {
+    const colored = `\x1b[31m${"あ".repeat(50)}\x1b[0m`;
+    const out = capLineToWidth(colored, 10);
+    expect(displayWidth(plainOf(out))).toBeLessThanOrEqual(10);
+    expect(out.startsWith("\x1b[31m")).toBe(true);
+  });
+
+  it("leaves a line that already fits completely untouched", () => {
+    const line = "\x1b[1mhello\x1b[0m";
+    expect(capLineToWidth(line, 40)).toBe(line);
+  });
+});
+
+describe("compactGrade", () => {
+  it("abbreviates the full-width grade label to glyph + letter", () => {
+    expect(compactGrade("S")).toBe("✨S");
+    expect(compactGrade("A")).toBe("⭐A");
+    expect(compactGrade("B")).toBe("●B");
+    expect(compactGrade("C")).toBe("○C");
+    expect(compactGrade("D")).toBe("△D");
+  });
+
+  it("passes an unknown grade through instead of doubling it", () => {
+    expect(compactGrade("X")).toBe("X");
+    expect(compactGrade("")).toBe("");
+  });
+});
+
+describe("clipEx sentence-preferring truncation", () => {
+  it("prefers a sentence end over a clause comma for detail text", () => {
+    const detail = "一文目はここで終わる。二文目は途中で、切れてしまう内容";
+    const sentence = clipEx(detail, 40, { sentence: true });
+    const clause = clipEx(detail, 40);
+    expect(sentence.truncated).toBe(true);
+    expect(plainOf(sentence.text)).toContain("一文目はここで終わる。");
+    // The clause rule stops at the 、 instead — that is the old behaviour.
+    expect(sentence.text).not.toBe(clause.text);
+  });
+
+  it("reports whether anything was elided", () => {
+    expect(clipEx("short", 40).truncated).toBe(false);
+    expect(clipEx("あ".repeat(40), 10).truncated).toBe(true);
+  });
+});
+
+describe("buildAdviceBlock", () => {
+  const LONG_DETAIL =
+    "Claude Opus 4.8 は、以前のモデルよりもバグの発見が大幅に優れています。" +
+    "コードレビューでは対象ファイルを先に列挙すると精度が上がります。" +
+    "完了条件を一つ書いておくと、やり直しの回数が目に見えて減ります。" +
+    "長い調査タスクでは、途中経過を短く報告させると迷子になりません。";
+
+  const base = {
+    icon: "💡",
+    color: "\x1b[36m",
+    headline: "指示に完了条件を1つ足しましょう",
+    detail: LONG_DETAIL,
+    anchorMs: 1_000_000,
+    nowMs: 1_000_000,
+    scroll: true,
+  };
+
+  it("emits nothing below 80 columns (line 1 is what has to survive)", () => {
+    expect(buildAdviceBlock(base, computeBudgets(60))).toBe("");
+  });
+
+  it("emits headline only between 80 and 119 columns", () => {
+    const out = buildAdviceBlock(base, computeBudgets(100));
+    expect(out.split("\n")).toHaveLength(1);
+    expect(plainOf(out)).toContain("完了条件");
+  });
+
+  it("emits headline + detail at 120 columns and up", () => {
+    const out = buildAdviceBlock(base, computeBudgets(160));
+    expect(out.split("\n")).toHaveLength(2);
+  });
+
+  it("never overflows the paintable width at any tier", () => {
+    for (const cols of [60, 80, 100, 120, 160, 200, 300]) {
+      const b = computeBudgets(cols);
+      const out = buildAdviceBlock(base, b);
+      for (const line of out.split("\n")) {
+        if (!line) continue;
+        expect([cols, displayWidth(plainOf(line))]).toEqual([
+          cols,
+          expect.any(Number),
+        ]);
+        expect(displayWidth(plainOf(line))).toBeLessThanOrEqual(b.avail);
+      }
+    }
+  });
+
+  it("points at `evo advice` when the DETAIL is what got cut — not just the headline", () => {
+    // Headline fits easily; only the detail is elided. The old renderer put the
+    // pointer on the headline only, so this case silently told the user nothing.
+    const out = buildAdviceBlock({ ...base, scroll: false }, computeBudgets(120));
+    expect(plainOf(out)).toContain("evo advice");
+  });
+
+  it("points at `evo advice` when the whole detail line is dropped by width", () => {
+    const out = buildAdviceBlock(base, computeBudgets(100));
+    expect(plainOf(out)).toContain("evo advice");
+  });
+
+  it("attaches the pointer EXACTLY ONCE, on the last line of the block", () => {
+    const out = buildAdviceBlock(
+      { ...base, headline: "あ".repeat(200), scroll: false },
+      computeBudgets(120),
+    );
+    const plain = plainOf(out);
+    expect(plain.match(/evo advice/g)).toHaveLength(1);
+    const lines = out.split("\n");
+    expect(plainOf(lines[lines.length - 1])).toContain("evo advice");
+    expect(plainOf(lines[0])).not.toContain("evo advice");
+  });
+
+  it("omits the pointer entirely when nothing was elided", () => {
+    const out = buildAdviceBlock(
+      { ...base, headline: "短い助言", detail: "短い詳細。" },
+      computeBudgets(200),
+    );
+    expect(plainOf(out)).not.toContain("evo advice");
+  });
+
+  it("does not truncate mid-sentence: the detail ends on a sentence boundary", () => {
+    const out = buildAdviceBlock({ ...base, scroll: false }, computeBudgets(120));
+    const detailLine = plainOf(out.split("\n")[1])
+      .replace(" → 続きは `evo advice`", "")
+      .replace(/…$/u, "")
+      .trimEnd();
+    // The cut lands on a full stop; the ellipsis then marks the elision. The
+    // old clause rule stopped at a 、 and left a dangling half-sentence.
+    expect(detailLine.endsWith("。")).toBe(true);
+  });
+
+  // ── page flip ──
+  it("advances one page per PAGE_INTERVAL_MS and then STAYS on the last page", () => {
+    const b = computeBudgets(120);
+    const IV = PAGE_INTERVAL_MS;
+    const page = (dt: number) =>
+      plainOf(buildAdviceBlock({ ...base, nowMs: base.anchorMs + dt }, b));
+    const counter = (s: string) => (s.match(/\((\d+)\/(\d+)\)/) ?? [])[0] ?? "";
+    const total = Number(
+      (page(0).match(/\(\d+\/(\d+)\)/) ?? [])[1] ?? "0",
+    );
+    expect(total).toBeGreaterThan(1);
+
+    expect(counter(page(0))).toBe(`(1/${total})`);
+    expect(counter(page(IV))).toBe(`(2/${total})`);
+    // Walk to the end, then keep going: it CLAMPS, never wraps to (1/N).
+    const lastDt = (total - 1) * IV;
+    expect(counter(page(lastDt))).toBe(`(${total}/${total})`);
+    expect(counter(page(lastDt + IV))).toBe(`(${total}/${total})`);
+    expect(counter(page(lastDt + 20 * IV))).toBe(`(${total}/${total})`);
+    expect(counter(page(86_400_000))).toBe(`(${total}/${total})`);
+    // And each page shows DIFFERENT text.
+    expect(page(0)).not.toBe(page(IV));
+    expect(page(IV)).not.toBe(page(2 * IV));
+  });
+
+  it("shows no counter and never animates when the advice fits on one page", () => {
+    const b = computeBudgets(200);
+    const short = { ...base, detail: "短い詳細です。" };
+    const a = buildAdviceBlock(short, b);
+    const z = buildAdviceBlock({ ...short, nowMs: short.anchorMs + 999_999 }, b);
+    expect(plainOf(a)).not.toMatch(/\(\d+\/\d+\)/);
+    expect(a).toBe(z);
+  });
+
+  it("stays static on page 1 when scroll is off or no timestamp anchors it", () => {
+    const b = computeBudgets(120);
+    const late = base.anchorMs + 6 * PAGE_INTERVAL_MS;
+    const offA = buildAdviceBlock({ ...base, scroll: false }, b);
+    const offB = buildAdviceBlock({ ...base, scroll: false, nowMs: late }, b);
+    expect(offA).toBe(offB);
+    expect(plainOf(offA)).not.toMatch(/\(\d+\/\d+\)/);
+
+    const noAnchorA = buildAdviceBlock({ ...base, anchorMs: null }, b);
+    const noAnchorB = buildAdviceBlock({ ...base, anchorMs: null, nowMs: late }, b);
+    expect(noAnchorA).toBe(noAnchorB);
+    expect(plainOf(noAnchorA)).not.toMatch(/\(\d+\/\d+\)/);
+  });
+
+  it("restarts at page 1 when the advice changes (its timestamp moves)", () => {
+    const b = computeBudgets(120);
+    const later = base.anchorMs + 2 * PAGE_INTERVAL_MS;
+    const old = plainOf(buildAdviceBlock({ ...base, nowMs: later }, b));
+    expect(old).toMatch(/\(3\/\d+\)/);
+    // A new payload carries a new writtenAt, which becomes the new anchor.
+    const fresh = plainOf(
+      buildAdviceBlock({ ...base, anchorMs: later, nowMs: later }, b),
+    );
+    expect(fresh).toMatch(/\(1\/\d+\)/);
+  });
+
+  it("renders a before/after example pair without overflowing", () => {
+    const b = computeBudgets(120);
+    const out = buildAdviceBlock(
+      {
+        ...base,
+        detail: "",
+        before: "この関数を直して".repeat(6),
+        after: "src/api.ts の validate() の null 分岐を直して".repeat(4),
+      },
+      b,
+    );
+    expect(out.split("\n")).toHaveLength(2);
+    for (const line of out.split("\n")) {
+      expect(displayWidth(plainOf(line))).toBeLessThanOrEqual(b.avail);
+    }
+    expect(plainOf(out)).toContain("evo advice");
+  });
+});
+
+// ── B1: the page-flip anchor is CONTENT identity, not write time ────────────
+// proxyRuntime runs an unconditional 10s heartbeat and liveState stamps
+// `writtenAt: Date.now()` on every write, so anchoring on the payload timestamp
+// restarted the sequence every few seconds and pinned the reader to page 1.
+
+describe("adviceIdentityKey", () => {
+  it("is stable for identical text and differs for any changed field", () => {
+    const k = adviceIdentityKey("a", "d", "b", "af");
+    expect(adviceIdentityKey("a", "d", "b", "af")).toBe(k);
+    expect(adviceIdentityKey("A", "d", "b", "af")).not.toBe(k);
+    expect(adviceIdentityKey("a", "D", "b", "af")).not.toBe(k);
+    expect(adviceIdentityKey("a", "d", "B", "af")).not.toBe(k);
+    expect(adviceIdentityKey("a", "d", "b", "AF")).not.toBe(k);
+  });
+
+  it("is bounded regardless of payload size, and empty when there is nothing to page", () => {
+    expect(adviceIdentityKey("x".repeat(200_000), "y".repeat(200_000))).toHaveLength(8);
+    expect(adviceIdentityKey("", "")).toBe("");
+    expect(adviceIdentityKey("", "", "", "")).toBe("");
+  });
+
+  it("does not collide across field boundaries", () => {
+    // "ab"+"" and "a"+"b" must differ — the separator has to be real.
+    expect(adviceIdentityKey("ab", "")).not.toBe(adviceIdentityKey("a", "b"));
+  });
+});
+
+describe("page-flip anchored on content identity (B1)", () => {
+  const DETAIL =
+    "一文目はここで終わります。二文目もここで終わります。三文目もここで終わります。" +
+    "四文目もここで終わります。五文目もここで終わります。";
+  const b = computeBudgets(120);
+  const mk = (anchorMs: number | null, nowMs: number) =>
+    plainOf(
+      buildAdviceBlock(
+        { icon: "💡", color: "", headline: "見出し", detail: DETAIL, anchorMs, nowMs, scroll: true },
+        b,
+      ),
+    );
+  const pageOf = (s: string) => Number((s.match(/\((\d+)\/\d+\)/) ?? [])[1] ?? 0);
+
+  const totalPages = Number((mk(1_000_000, 1_000_000).match(/\(\d+\/(\d+)\)/) ?? [])[1] ?? 0);
+
+  it("walks forward when the anchor is STABLE across ticks", () => {
+    expect(totalPages).toBeGreaterThan(1);
+    const seen = Array.from({ length: totalPages + 2 }, (_, i) =>
+      pageOf(mk(1_000_000, 1_000_000 + i * PAGE_INTERVAL_MS)),
+    );
+    // Every page in order, then clamped on the last.
+    const expected = Array.from({ length: totalPages + 2 }, (_, i) =>
+      Math.min(i + 1, totalPages),
+    );
+    expect(seen).toEqual(expected);
+  });
+
+  it("is pinned to page 1 when the anchor is RE-STAMPED every tick (the bug)", () => {
+    // What `writtenAt` did: the heartbeat moved it, so elapsed was always ~0.
+    const seen = [0, 1, 2, 3, 4].map((i) => {
+      const now = 1_000_000 + i * PAGE_INTERVAL_MS;
+      return pageOf(mk(now, now)); // anchor == now, every tick
+    });
+    expect(seen).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it("restarts at page 1 only when the CONTENT key changes", () => {
+    const k1 = adviceIdentityKey("見出し", DETAIL);
+    // Same text seen again later: the key matches, so the stored seenAt is
+    // reused and the sequence keeps advancing rather than resetting.
+    expect(adviceIdentityKey("見出し", DETAIL)).toBe(k1);
+    expect(pageOf(mk(1_000_000, 1_000_000 + (totalPages - 1) * PAGE_INTERVAL_MS))).toBe(totalPages);
+    // Different text -> different key -> caller anchors at now -> page 1.
+    expect(adviceIdentityKey("別の見出し", DETAIL)).not.toBe(k1);
+  });
+});
+
+// ── B2: examples are the FINAL page, not a replacement for the detail ───────
+
+describe("detail + examples together (B2)", () => {
+  const live = {
+    icon: "💡",
+    color: "",
+    headline: "[汎用] 「直して」だけだと、AIは何をどう直すかを推測するところからスタートしちゃうよ",
+    detail:
+      "対象ファイルを先に列挙すると精度が上がります。完了条件を一行足すとやり直しが減ります。" +
+      "途中経過を短く報告させると方向のズレにすぐ気づけます。",
+    before: "なんかエラー出る、直して",
+    after: "npm run build で TypeError 返してるっぽい",
+    anchorMs: 1_000_000,
+    nowMs: 1_000_000,
+    scroll: true,
+  };
+
+  it("no longer DROPS the detail when examples exist", () => {
+    const out = plainOf(buildAdviceBlock(live, computeBudgets(200)));
+    expect(out).toContain("対象ファイルを先に列挙");
+  });
+
+  it("pages the detail first and shows the examples as the LAST page", () => {
+    const b = computeBudgets(120);
+    const at = (dt: number) =>
+      plainOf(buildAdviceBlock({ ...live, nowMs: live.anchorMs + dt }, b));
+    const total = Number((at(0).match(/\(\d+\/(\d+)\)/) ?? [])[1] ?? 0);
+    expect(total).toBeGreaterThan(1);
+
+    // First page is detail, not examples.
+    expect(at(0)).not.toContain("❌");
+    // Final page is the examples.
+    const last = at((total - 1) * PAGE_INTERVAL_MS);
+    expect(last).toContain("❌");
+    expect(last).toContain("✅");
+    expect(last).toContain(`(${total}/${total})`);
+    // And it stays there.
+    expect(at((total + 5) * PAGE_INTERVAL_MS)).toContain(`(${total}/${total})`);
+  });
+
+  it("points at `evo advice` when paging is OFF and the detail is dropped", () => {
+    // Without paging only one of the two can be shown; the pointer must fire.
+    const out = plainOf(buildAdviceBlock({ ...live, scroll: false }, computeBudgets(200)));
+    expect(out).toContain("❌");
+    expect(out).toContain("evo advice");
+  });
+
+  it("keeps every page inside the paintable width", () => {
+    for (const cols of [120, 160, 200, 300]) {
+      const b = computeBudgets(cols);
+      for (let i = 0; i < 8; i++) {
+        const out = buildAdviceBlock({ ...live, nowMs: live.anchorMs + i * PAGE_INTERVAL_MS }, b);
+        for (const line of out.split("\n")) {
+          if (line) expect([cols, displayWidth(plainOf(line)) <= b.avail]).toEqual([cols, true]);
+        }
+      }
+    }
+  });
+});
+
+// ── S2: decorative chips are budgeted, not severed ──────────────────────────
+
+describe("pushIfFits (S2)", () => {
+  it("appends a chip that fits and drops one that does not", () => {
+    const bits = ["\x1b[1mabcdefghij\x1b[0m"]; // 10 visible columns
+    pushIfFits(bits, "short", 40); // 10 + 3 + 5 = 18 <= 40
+    expect(bits).toHaveLength(2);
+    pushIfFits(bits, "x".repeat(50), 40); // would overflow → dropped whole
+    expect(bits).toHaveLength(2);
+  });
+
+  it("drops rather than severing mid-word (the 順調にスター case)", () => {
+    const bits = ["🦊 エボにゃん", "○C", "📝62", "育34%"];
+    const mood = "順調にスタートしてるね!";
+    const before = bits.length;
+    pushIfFits(bits, mood, 40);
+    // At 40 columns the mood comment cannot fit, so it is absent entirely —
+    // never a half-word. If it IS appended, it must be the WHOLE string.
+    expect(bits.length === before || bits[bits.length - 1] === mood).toBe(true);
+  });
+});
+
+// ── Unit: the display-mode file gained an independent scroll flag ───────────
+
+describe("parseDisplaySettings", () => {
+  it("keeps the legacy single-token file working (backward compatibility)", () => {
+    expect(parseDisplaySettings("expansion")).toEqual({ mode: "expansion", scroll: true });
+    expect(parseDisplaySettings("minimum")).toEqual({ mode: "minimum", scroll: true });
+    expect(parseDisplaySettings("expansion\n")).toEqual({ mode: "expansion", scroll: true });
+  });
+
+  it("reads the scroll flag independently of the mode", () => {
+    expect(parseDisplaySettings("expansion scroll:off")).toEqual({ mode: "expansion", scroll: false });
+    expect(parseDisplaySettings("minimum scroll:off")).toEqual({ mode: "minimum", scroll: false });
+    expect(parseDisplaySettings("scroll:off")).toEqual({ mode: "expansion", scroll: false });
+  });
+
+  it("defaults on garbage instead of throwing (fail-open)", () => {
+    expect(parseDisplaySettings("")).toEqual({ mode: "expansion", scroll: true });
+    expect(parseDisplaySettings("¯\\_(ツ)_/¯")).toEqual({ mode: "expansion", scroll: true });
+    expect(parseDisplaySettings(undefined as unknown as string)).toEqual({
+      mode: "expansion",
+      scroll: true,
+    });
+  });
+});
+
+describe("evo display scroll", () => {
+  /** Run `fn` with an isolated mode file and stdout/stderr muted. */
+  async function withModeFile(
+    initial: string,
+    fn: (file: string) => Promise<void>,
+  ): Promise<void> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evo-display-"));
+    const file = path.join(dir, ".evo-display-mode");
+    fs.writeFileSync(file, initial);
+    const prevEnv = process.env.EVO_DISPLAY_MODE_FILE;
+    const prevCode = process.exitCode;
+    const out = process.stdout.write.bind(process.stdout);
+    const err = process.stderr.write.bind(process.stderr);
+    process.env.EVO_DISPLAY_MODE_FILE = file;
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      await fn(file);
+    } finally {
+      process.stdout.write = out;
+      process.stderr.write = err;
+      process.exitCode = prevCode;
+      if (prevEnv === undefined) delete process.env.EVO_DISPLAY_MODE_FILE;
+      else process.env.EVO_DISPLAY_MODE_FILE = prevEnv;
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+  }
+
+  it("takes the two-word form and leaves the mode alone", async () => {
+    // Starts from a pre-existing LEGACY single-token file, exactly as shipped.
+    await withModeFile("expansion", async (file) => {
+      await runDisplayCommand("scroll", "off");
+      expect(fs.readFileSync(file, "utf8")).toBe("expansion scroll:off");
+      // Changing the mode must preserve the scroll flag, and vice versa.
+      await runDisplayCommand("minimum");
+      expect(fs.readFileSync(file, "utf8")).toBe("minimum scroll:off");
+      await runDisplayCommand("scroll", "on");
+      expect(fs.readFileSync(file, "utf8")).toBe("minimum");
+      await runDisplayCommand("scroll", "toggle");
+      expect(fs.readFileSync(file, "utf8")).toBe("minimum scroll:off");
+    });
+  });
+
+  it("accepts the single-token alias but not the dropped ones", async () => {
+    await withModeFile("expansion", async (file) => {
+      await runDisplayCommand("scroll:off");
+      expect(fs.readFileSync(file, "utf8")).toBe("expansion scroll:off");
+      // `scroll=off` / `scroll-off` were dropped — they are invalid MODES now.
+      await runDisplayCommand("scroll=off");
+      expect(process.exitCode).toBe(1);
+      expect(fs.readFileSync(file, "utf8")).toBe("expansion scroll:off");
+    });
+  });
+
+  it("reports without writing when no value is given, and rejects garbage", async () => {
+    await withModeFile("expansion scroll:off", async (file) => {
+      await runDisplayCommand("scroll");
+      expect(fs.readFileSync(file, "utf8")).toBe("expansion scroll:off");
+      await runDisplayCommand("scroll", "banana");
+      expect(process.exitCode).toBe(1);
+      expect(fs.readFileSync(file, "utf8")).toBe("expansion scroll:off");
+    });
+  });
+});
+
 // ── Integration: strict per-session binding + provenance tags ────────────────
 
 interface RunResult {
@@ -160,6 +685,53 @@ function baseStdin(cwd: string, extra: object = {}): object {
     rate_limits: {},
     ...extra,
   };
+}
+
+/** A fresh per-session proxy file whose advice is the given proxy-chosen tip/signal. */
+function writeAdviceSessionFile(
+  cwd: string,
+  home: string,
+  sid: string,
+  fields: { signalKind: string; advice: string; adviceDetail?: string; turns: number },
+): void {
+  // Pre-seed the self-state past the session-start boost so one render shows
+  // line 2 (the advice) instead of the first-tick boost message.
+  fs.writeFileSync(
+    path.join(home, ".claude", ".evo-self-state.json"),
+    JSON.stringify({ start: Date.now() / 1000, calls: 5, cwd, ctx_pct: 20, session_id: sid }),
+  );
+  const dir = path.join(cwd, ".evo", "sessions");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${sid}.json`),
+    JSON.stringify({
+      avatar: "🦊",
+      nickname: "EvoPet",
+      sessionGrade: "B",
+      promptScore: 62,
+      idealStateGauge: 30,
+      adviceDetail: "detail text for the proxy advice line here.",
+      beforeExample: "",
+      afterExample: "",
+      sessionId: sid,
+      updatedAt: Date.now() - 1000,
+      ...fields,
+    }),
+  );
+}
+
+/** Run `evo advice` with the same HOME/cwd the statusline render used. */
+function runAdvice(home: string, cwd: string): string {
+  const res = spawnSync(process.execPath, [DIST_INDEX, "advice"], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  return stripAnsi(res.stdout ?? "");
+}
+
+function modelStdin(cwd: string, sid: string, id: string, name: string): object {
+  return baseStdin(cwd, { session_id: sid, model: { id, display_name: name } });
 }
 
 describe("evo statusline (session binding + tags)", () => {
@@ -247,6 +819,128 @@ describe("evo statusline (session binding + tags)", () => {
     expect(plain).toMatch(/\[(公式|汎用|[^\]]+向け)\]/);
   });
 
+  it("re-picks the proxy's rotating tip for the session's REAL model (stdin), not the proxy's guess", () => {
+    const { home, cwd } = makeTempDirs();
+    // The proxy resolved its model from settings.json ("opus[1m]") and wrote an
+    // Opus 4.8 tip; this session actually runs Fable 5.2. Turn 0 is an even
+    // rotation slot → a model-specific tip; the first Fable 5.2 model tip is a
+    // "what changed vs 5.1" tip.
+    writeAdviceSessionFile(cwd, home, "sid-f52", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-f52", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1→5.2]");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("gives a Fable 5.1 session Fable 5.1 tips, never Fable 5.2 ones", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-f51", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-f51", "claude-fable-5-1", "Fable 5.1"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1向け]");
+    expect(plain).not.toContain("5.2");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("gives an Opus 5.5 session its own Opus 5→5.5 change tip (never Opus 5 / 4.8)", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-o55", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-o55", "claude-opus-5-5", "Opus 5.5"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Opus 5→5.5]");
+    expect(plain).not.toContain("Opus 5向け");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("`evo advice` continues the SAME re-picked tip the statusline showed (stdin model, not the proxy's)", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-agree", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      adviceDetail: "Opus 4.8 detail that must not be printed",
+      turns: 0,
+    });
+    const expected = pickTipForModel(0, "claude-fable-5-2");
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-agree", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1→5.2]");
+    const out = runAdvice(home, cwd);
+    expect(out.split("\n")[0]).toBe(expected.headline);
+    expect(out).toContain(expected.detail);
+    expect(out).not.toContain("Opus 4.8");
+  });
+
+  it("`evo advice` prints a real warning verbatim even when a session model is recorded", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-warn", {
+      signalKind: "no_success_criteria",
+      advice: "完了条件のない指示が続いてるよ",
+      turns: 0,
+    });
+    runStatusline(modelStdin(cwd, "sid-warn", "claude-fable-5-2", "Fable 5.2"), home, cwd);
+    const self = JSON.parse(
+      fs.readFileSync(path.join(home, ".claude", ".evo-self-state.json"), "utf8"),
+    );
+    expect(self.session_models["sid-warn"].model).toBe("claude-fable-5-2");
+    const out = runAdvice(home, cwd);
+    expect(out.split("\n")[0]).toBe("完了条件のない指示が続いてるよ");
+    expect(out).not.toContain("[Fable 5.1→5.2]");
+  });
+
+  it("rememberSessionModel keeps the newest entries, drops expired ones, and caps the map", () => {
+    const now = 1_000_000_000_000;
+    const day = 24 * 60 * 60 * 1000;
+    const prev: Record<string, { model: string; seenAt: number }> = {
+      old: { model: "claude-opus-4-8", seenAt: now - day - 1 },
+    };
+    for (let i = 0; i < 40; i++) prev[`s${i}`] = { model: "m", seenAt: now - 1000 - i };
+    const out = rememberSessionModel(prev, "mine", "claude-fable-5-2", now);
+    expect(out.mine).toEqual({ model: "claude-fable-5-2", seenAt: now });
+    expect(out.old).toBeUndefined();
+    expect(Object.keys(out).length).toBe(32);
+    expect(rememberSessionModel("garbage", "k", "m", now)).toEqual({ k: { model: "m", seenAt: now } });
+  });
+
+  it("never rewrites a real proxy signal (warning) — only the filler tip", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-sig", {
+      signalKind: "no_success_criteria",
+      advice: "完了条件のない指示が続いてるよ",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-sig", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("完了条件のない指示が続いてるよ");
+    expect(plain).not.toContain("[Fable 5.1→5.2]");
+  });
+
   it("hard-caps a pathological payload (200KB advice + detail + nickname) at the total-block cap", () => {
     const { home, cwd } = makeTempDirs();
     // Skip the session-start boost so the 200KB advice actually renders (and is
@@ -265,7 +959,9 @@ describe("evo statusline (session binding + tags)", () => {
         sessionGrade: "A",
         promptScore: 85,
         idealStateGauge: 70,
-        signalKind: "tip",
+        // A real (non-"tip") signal: a "tip" is re-picked from the stdin model
+        // and would replace the oversized proxy text this test is capping.
+        signalKind: "prompt_too_vague",
         advice: "x".repeat(200_000),
         adviceDetail: "y".repeat(200_000),
         beforeExample: "b".repeat(200_000),

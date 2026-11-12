@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getGlobalEvoDir } from "./config";
 import { getLogger } from "./logger";
+import { meanPromptScore } from "./sessionGrade";
 import { atomicWriteFileSync, readJsonFileWithRetrySync } from "./utils/atomicFile";
 import { migrateMascotFromCwd } from "./mascotMigration";
 import {
@@ -153,10 +154,10 @@ export function computeLiveIdealStateGauge(
   profile: MascotProfile,
 ): number {
   const historical = computeIdealStateGauge(profile); // -1 when no episodes
-  const window = promptScoreWindow ?? [];
-  if (window.length === 0) return historical; // -1 or a real historical value
-  const liveAvg = window.reduce((s, v) => s + v, 0) / window.length;
-  const live = Math.max(0, Math.min(100, Math.round(liveAvg)));
+  // Single implementation of the window mean, shared with the live grade
+  // (src/sessionGrade.ts) so gauge and grade can never drift apart.
+  const live = meanPromptScore(promptScoreWindow);
+  if (live === null) return historical; // -1 or a real historical value
   if (historical < 0) return live; // no finalized episodes yet → pure live
   return Math.round((live + historical) / 2); // blend live trend with history
 }

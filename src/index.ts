@@ -629,10 +629,10 @@ program
   });
 
 program
-  .command("display [mode]")
-  .description("Toggle EvoPet statusline mode (minimum|expansion|toggle). Without arg, shows current mode.")
-  .action(async (mode?: string) => {
-    await runDisplayCommand(mode);
+  .command("display [mode] [value]")
+  .description("Toggle EvoPet statusline mode (minimum|expansion|toggle), or `display scroll [on|off|toggle]` for advice auto-scroll. Without args, shows current settings.")
+  .action(async (mode?: string, value?: string) => {
+    await runDisplayCommand(mode, value);
   });
 
 program

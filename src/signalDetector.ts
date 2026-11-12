@@ -11,7 +11,13 @@ import {
   NudgeSeverity,
   PromptProfile,
 } from "./types";
-import { getEligibleGuidanceTips, tipTag, TipSource } from "./promptingGuidance";
+import {
+  getEligibleGuidanceTips,
+  getModelSpecificGuidanceTips,
+  pickRotatingTip,
+  tipTag,
+  TipSource,
+} from "./promptingGuidance";
 
 // ── Signal detection from turn-level data ──
 
@@ -826,12 +832,14 @@ interface TipEntry {
   source?: TipSource;
   /** Model label when source==="model" (e.g. "Fable 5"). */
   audience?: string;
+  /** "<from>→<to>" for a what-changed tip (tag `[Fable 5.1→5.2]`). */
+  changeLabel?: string;
 }
 
 function tipToAdvice(tip: TipEntry): ActionableAdvice {
   // Prepend the provenance tag so the tip's source travels through the
   // live-state advice string and both renderers show it verbatim.
-  const tag = tipTag(tip.source ?? "generic", tip.audience);
+  const tag = tipTag(tip.source ?? "generic", tip.audience, tip.changeLabel);
   return {
     signal: { kind: "first_pass_success", confidence: 0, severity: "low", context: {} },
     headline: `${tag} ${tip.headline}`,
@@ -843,34 +851,46 @@ function tipToAdvice(tip: TipEntry): ActionableAdvice {
 }
 
 /**
- * Build the tip rotation pool for a given model: the static hand-written
- * library first (so existing low-index rotation is unchanged), then the
- * model-aware official-doc tips (base always, model-specific when it matches).
- * The static library is tagged "generic" ([汎用]); guidance tips carry their
- * own official/model provenance.
+ * The general tip pool: the static hand-written library first (so existing
+ * low-index rotation is unchanged), then the official base best-practices tips.
+ * The static library is tagged "generic" ([汎用]); base tips are "official".
+ * Model-specific tips are NOT in here — see `pickTipForModel`.
  */
-function buildTipPool(model?: string | null): TipEntry[] {
+function buildGeneralTipPool(): TipEntry[] {
   const staticTips: TipEntry[] = TIPS_LIBRARY.map((t) => ({ ...t, source: "generic" }));
-  const guidanceTips: TipEntry[] = getEligibleGuidanceTips(model).map((t) => ({
+  const baseTips: TipEntry[] = getEligibleGuidanceTips(undefined).map((t) => ({
     headline: t.headline,
     detail: t.detail,
     source: t.source,
     audience: t.audience,
   }));
-  return [...staticTips, ...guidanceTips];
+  return [...staticTips, ...baseTips];
+}
+
+/** Tips tuned to `model` (what-changed tips first, then the model page). */
+function buildModelTipPool(model?: string | null): TipEntry[] {
+  return getModelSpecificGuidanceTips(model).map((t) => ({
+    headline: t.headline,
+    detail: t.detail,
+    source: t.source,
+    audience: t.audience,
+    changeLabel: t.changeLabel,
+  }));
 }
 
 /**
  * Pick a tip based on turn number, layering in guidance tuned to `model`.
- * When `model` is undefined/unknown, only base + static tips are eligible.
+ * When `model` matches a guidance section, every other turn shows one of that
+ * model's own tips (see `pickRotatingTip`); when `model` is undefined or
+ * unknown, only the static + base tips rotate (unchanged behaviour).
  */
 export function pickTipForModel(
   turnIndex: number,
   model?: string | null,
 ): ActionableAdvice {
-  const pool = buildTipPool(model);
-  const idx = Math.abs(turnIndex) % pool.length;
-  return tipToAdvice(pool[idx]);
+  const general = buildGeneralTipPool();
+  const tip = pickRotatingTip(turnIndex, general, buildModelTipPool(model)) ?? general[0];
+  return tipToAdvice(tip);
 }
 
 /** Pick a tip based on turn number (rotates through the library + base tips) */

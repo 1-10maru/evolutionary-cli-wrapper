@@ -11,6 +11,11 @@ export default defineConfig({
     // nothing when tests are green; a genuinely hung test still fails.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Never let tests touch the owner's live EvoPet state: strip inherited
+    // EVO_* (EVO_HOME etc. — getGlobalEvoHome reads it first) and sandbox
+    // HOME/USERPROFILE/LOCALAPPDATA per run. See tests/setup/isolation.ts.
+    globalSetup: ["tests/setup/global-sandbox.ts"],
+    setupFiles: ["tests/setup/isolate-env.setup.ts"],
     // Agent worktrees live under .worktrees/ inside the repo; without this,
     // vitest discovers their test copies and double-runs everything.
     // scripts/qa/** is the manual behavioral harness (drives real child

@@ -84,8 +84,44 @@ export function computeSessionGrade(input: {
   };
 }
 
+/**
+ * Mean of the rolling prompt-score window, clamped + rounded — or null when the
+ * window is empty/absent so callers can fall back to their previous input.
+ *
+ * WHY this exists: the live grade used to read `liveState.promptScore`, which
+ * is LAST-MESSAGE-ONLY (assigned, not accumulated, on every scored prompt). A
+ * single terse message therefore dragged the whole session's letter down, and
+ * the grade could not structurally reflect a good session. This is the same
+ * arithmetic the 育成度 gauge applies to the same window, so grade and gauge
+ * read one signal.
+ *
+ * NOTE: `computeLiveIdealStateGauge` (src/mascot.ts) still inlines this maths;
+ * it should be repointed here so there is exactly one implementation.
+ */
+export function meanPromptScore(
+  promptScoreWindow: readonly number[] | undefined | null,
+): number | null {
+  if (!Array.isArray(promptScoreWindow) || promptScoreWindow.length === 0) {
+    return null;
+  }
+  let sum = 0;
+  let n = 0;
+  for (const v of promptScoreWindow) {
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    sum += v;
+    n += 1;
+  }
+  if (n === 0) return null;
+  return clamp(Math.round(sum / n), 0, 100);
+}
+
 // Lightweight grade for live tracking (fewer inputs available)
 export function computeLiveGrade(input: {
+  /**
+   * The prompt-quality half of the grade. Callers tracking a live session
+   * should pass the rolling-window mean (see `meanPromptScore`), NOT the
+   * latest message's score, so one terse message cannot sink the letter.
+   */
   promptScore: number;
   turns: number;
   toolCalls: number;
