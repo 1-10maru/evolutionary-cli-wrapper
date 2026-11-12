@@ -33,6 +33,10 @@ export interface GuidanceTip {
   source: TipSource;
   /** Model label for `source === "model"` (e.g. "Fable 5"); drives `[<audience>向け]`. */
   audience?: string;
+  /** Set on "what changed vs the previous release" tips (e.g. "Fable 5.1→5.2",
+   *  from the official "What's new" page's 動作の違い section). Rendered
+   *  verbatim as the tag `[Fable 5.1→5.2]` instead of `[<audience>向け]`. */
+  changeLabel?: string;
 }
 
 /** Strip the "のコツ" suffix from a section label to get the bare model name. */
@@ -47,7 +51,14 @@ export function guidanceAudienceFromLabel(label: string): string {
  *   generic  → `[汎用]`
  * Keeps model-tuned advice visually distinct from the static/official libraries.
  */
-export function tipTag(source: TipSource, audience?: string): string {
+export function tipTag(
+  source: TipSource,
+  audience?: string,
+  changeLabel?: string,
+): string {
+  // A change tip names both releases so the user sees at a glance that this is
+  // what is DIFFERENT on their model, not general advice.
+  if (source === "model" && changeLabel) return `[${changeLabel}]`;
   // A model tip whose section carries no label has no trustworthy audience, so
   // fall back to the neutral official tag rather than inventing one — the tip
   // still came from an official Anthropic doc page.
@@ -56,12 +67,23 @@ export function tipTag(source: TipSource, audience?: string): string {
   return "[汎用]";
 }
 
+interface GuidanceSectionChanges {
+  /** "<from>→<to>", e.g. "Fable 5.1→5.2". */
+  label: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  contentHash: string;
+  tips: Array<{ headline: string; detail: string }>;
+}
+
 interface GuidanceSection {
   label: string;
   sourceUrl: string;
   fetchedAt: string;
   contentHash: string;
   tips: GuidanceTip[];
+  /** Optional behaviour differences versus the previous release. */
+  changes?: GuidanceSectionChanges;
 }
 
 interface ModelPattern {
@@ -101,11 +123,52 @@ export function resolveModelSection(
 }
 
 /**
- * Eligible tips for a model: base tips always, plus the model-specific section
- * when one matches. Headlines are kept CLEAN (no inline label prefix); the
- * model/official provenance travels in the `source`/`audience` fields so the
- * renderer can prepend a `[…]` tag (see `tipTag`). Returns a fresh array;
- * callers may reorder/rotate freely.
+ * Model-specific tips for a model: the "what changed vs the previous release"
+ * tips first (`changeLabel` set), then the model page's own tips. Empty when
+ * the model matches no section (unknown/aliased/future model) or the matched
+ * section is missing/empty in the asset — never another version's tips.
+ */
+export function getModelSpecificGuidanceTips(
+  model: string | null | undefined,
+): GuidanceTip[] {
+  const out: GuidanceTip[] = [];
+  // Fail-open: an unmatched model, or a matched section that is missing/empty
+  // in the asset, yields nothing. Never substitute another version's section,
+  // and never throw — this feeds the statusline renderer.
+  const sectionName = resolveModelSection(model);
+  if (!sectionName || sectionName === "base") return out;
+  const sec = GUIDANCE.sections[sectionName];
+  if (!sec) return out;
+  const rawLabel = typeof sec.label === "string" ? sec.label : "";
+  const audienceRaw = rawLabel ? guidanceAudienceFromLabel(rawLabel) : "";
+  const audience = audienceRaw || undefined;
+  const ch = sec.changes;
+  if (ch && typeof ch.label === "string" && ch.label && Array.isArray(ch.tips)) {
+    for (const t of ch.tips) {
+      if (typeof t?.headline !== "string" || typeof t?.detail !== "string") continue;
+      out.push({
+        headline: t.headline,
+        detail: t.detail,
+        source: "model",
+        audience,
+        changeLabel: ch.label,
+      });
+    }
+  }
+  if (Array.isArray(sec.tips)) {
+    for (const t of sec.tips) {
+      out.push({ headline: t.headline, detail: t.detail, source: "model", audience });
+    }
+  }
+  return out;
+}
+
+/**
+ * Eligible tips for a model: base tips always, plus the model-specific tips
+ * (change tips + model page tips) when a section matches. Headlines are kept
+ * CLEAN (no inline label prefix); provenance travels in the
+ * `source`/`audience`/`changeLabel` fields so the renderer can prepend a
+ * `[…]` tag (see `tipTag`). Returns a fresh array; callers may reorder/rotate.
  */
 export function getEligibleGuidanceTips(
   model: string | null | undefined,
@@ -117,22 +180,33 @@ export function getEligibleGuidanceTips(
       out.push({ headline: t.headline, detail: t.detail, source: "official" });
     }
   }
-  // Fail-open: an unmatched model, or a matched section that is missing/empty
-  // in the asset, yields base tips only. Never substitute another generation's
-  // section, and never throw — this feeds the statusline renderer.
-  const sectionName = resolveModelSection(model);
-  if (sectionName && sectionName !== "base") {
-    const sec = GUIDANCE.sections[sectionName];
-    if (sec && Array.isArray(sec.tips) && sec.tips.length > 0) {
-      const rawLabel = typeof sec.label === "string" ? sec.label : "";
-      const audienceRaw = rawLabel ? guidanceAudienceFromLabel(rawLabel) : "";
-      const audience = audienceRaw || undefined;
-      for (const t of sec.tips) {
-        out.push({ headline: t.headline, detail: t.detail, source: "model", audience });
-      }
-    }
-  }
+  out.push(...getModelSpecificGuidanceTips(model));
   return out;
+}
+
+/**
+ * Rotation that keeps model-specific advice visible. The general pool (static
+ * library + official base tips) is large — 200+ entries in the statusline
+ * dictionary — so a uniform rotation shows a model's own tips only a few
+ * percent of the time, which reads as "EvoPet never says anything about my
+ * model". When model-specific tips exist, EVEN rotation indices draw from them
+ * (cycling change tips first) and ODD indices from the general pool; with none,
+ * the general pool rotates exactly as before. Pure and deterministic in
+ * `index`, so a given turn/tick always shows the same tip.
+ */
+export function pickRotatingTip<T>(
+  index: number,
+  generalPool: readonly T[],
+  modelPool: readonly T[],
+): T | undefined {
+  const i = Math.abs(Math.trunc(Number.isFinite(index) ? index : 0));
+  if (modelPool.length === 0) {
+    return generalPool.length > 0 ? generalPool[i % generalPool.length] : undefined;
+  }
+  if (generalPool.length === 0 || i % 2 === 0) {
+    return modelPool[Math.floor(i / 2) % modelPool.length];
+  }
+  return generalPool[Math.floor(i / 2) % generalPool.length];
 }
 
 /** The loaded guidance object (metadata access for diagnostics/tests). */

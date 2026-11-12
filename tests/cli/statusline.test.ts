@@ -685,6 +685,43 @@ function baseStdin(cwd: string, extra: object = {}): object {
   };
 }
 
+/** A fresh per-session proxy file whose advice is the given proxy-chosen tip/signal. */
+function writeAdviceSessionFile(
+  cwd: string,
+  home: string,
+  sid: string,
+  fields: { signalKind: string; advice: string; adviceDetail?: string; turns: number },
+): void {
+  // Pre-seed the self-state past the session-start boost so one render shows
+  // line 2 (the advice) instead of the first-tick boost message.
+  fs.writeFileSync(
+    path.join(home, ".claude", ".evo-self-state.json"),
+    JSON.stringify({ start: Date.now() / 1000, calls: 5, cwd, ctx_pct: 20, session_id: sid }),
+  );
+  const dir = path.join(cwd, ".evo", "sessions");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${sid}.json`),
+    JSON.stringify({
+      avatar: "🦊",
+      nickname: "EvoPet",
+      sessionGrade: "B",
+      promptScore: 62,
+      idealStateGauge: 30,
+      adviceDetail: "detail text for the proxy advice line here.",
+      beforeExample: "",
+      afterExample: "",
+      sessionId: sid,
+      updatedAt: Date.now() - 1000,
+      ...fields,
+    }),
+  );
+}
+
+function modelStdin(cwd: string, sid: string, id: string, name: string): object {
+  return baseStdin(cwd, { session_id: sid, model: { id, display_name: name } });
+}
+
 describe("evo statusline (session binding + tags)", () => {
   afterEach(() => {
     while (tempDirs.length) {
@@ -770,6 +807,76 @@ describe("evo statusline (session binding + tags)", () => {
     expect(plain).toMatch(/\[(公式|汎用|[^\]]+向け)\]/);
   });
 
+  it("re-picks the proxy's rotating tip for the session's REAL model (stdin), not the proxy's guess", () => {
+    const { home, cwd } = makeTempDirs();
+    // The proxy resolved its model from settings.json ("opus[1m]") and wrote an
+    // Opus 4.8 tip; this session actually runs Fable 5.2. Turn 0 is an even
+    // rotation slot → a model-specific tip; the first Fable 5.2 model tip is a
+    // "what changed vs 5.1" tip.
+    writeAdviceSessionFile(cwd, home, "sid-f52", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-f52", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1→5.2]");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("gives a Fable 5.1 session Fable 5.1 tips, never Fable 5.2 ones", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-f51", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-f51", "claude-fable-5-1", "Fable 5.1"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1向け]");
+    expect(plain).not.toContain("5.2");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("gives an Opus 5.5 session its own Opus 5→5.5 change tip (never Opus 5 / 4.8)", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-o55", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-o55", "claude-opus-5-5", "Opus 5.5"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Opus 5→5.5]");
+    expect(plain).not.toContain("Opus 5向け");
+    expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("never rewrites a real proxy signal (warning) — only the filler tip", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-sig", {
+      signalKind: "no_success_criteria",
+      advice: "完了条件のない指示が続いてるよ",
+      turns: 0,
+    });
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-sig", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("完了条件のない指示が続いてるよ");
+    expect(plain).not.toContain("[Fable 5.1→5.2]");
+  });
+
   it("hard-caps a pathological payload (200KB advice + detail + nickname) at the total-block cap", () => {
     const { home, cwd } = makeTempDirs();
     // Skip the session-start boost so the 200KB advice actually renders (and is
@@ -788,7 +895,9 @@ describe("evo statusline (session binding + tags)", () => {
         sessionGrade: "A",
         promptScore: 85,
         idealStateGauge: 70,
-        signalKind: "tip",
+        // A real (non-"tip") signal: a "tip" is re-picked from the stdin model
+        // and would replace the oversized proxy text this test is capping.
+        signalKind: "prompt_too_vague",
         advice: "x".repeat(200_000),
         adviceDetail: "y".repeat(200_000),
         beforeExample: "b".repeat(200_000),

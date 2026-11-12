@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 // @ts-ignore -- untyped .mjs module
 import {
   extractPromptingGuidance,
+  extractBehaviorChanges,
   validateGuidance,
   guidanceContentSignature,
   buildPromptingGuidance,
@@ -138,5 +139,133 @@ describe("committed prompting-guidance asset", () => {
     const guidance = JSON.parse(readFileSync(assetPath, "utf-8"));
     expect(() => validateGuidance(guidance)).not.toThrow();
     expect(guidance.sections.base.tips.length).toBeGreaterThan(0);
+  });
+});
+
+describe("extractBehaviorChanges (What's new → 動作の違い)", () => {
+  const BULLETS = [
+    "# Claude Fable 5.2の新機能",
+    "",
+    "## 破壊的変更",
+    "",
+    "* **これは破壊的変更なので拾わない。** 本文はここにあります。十分な長さです。",
+    "",
+    "## 動作の違い",
+    "",
+    "Claude Fable 5.2のいくつかの動作は、コードを変更しなくても現れます。",
+    "",
+    "* **思考を減らすよう求めるプロンプトの記述では、`medium`以上のeffortでモデルの思考は止まりません。** Claude Fable 5.1は通常、[記述](/x)に従います。エフォートを下げてください。[エフォートを調整する](/y)を参照してください。",
+    "* **作業が完了する前にターンが終わることがあります。** 長いタスクでは残作業を示して止まることがあります。",
+    "",
+    "```text",
+    "* **コード内の箇条書きは拾わない。** 説明説明説明説明。",
+    "```",
+    "",
+    "## 料金",
+    "",
+    "* **料金の箇条書きも拾わない。** 本文はここにあります。十分な長さです。",
+  ].join("\n");
+
+  it("takes only the 動作の違い bullets, bold lead = headline", () => {
+    const tips = extractBehaviorChanges(BULLETS);
+    expect(tips.map((t: { headline: string }) => t.headline)).toEqual([
+      "思考を減らすよう求めるプロンプトの記述では、medium以上のeffortでモデルの思考は止まり…",
+      "作業が完了する前にターンが終わることがあります",
+    ]);
+  });
+
+  it("strips links/backticks and the dangling 「…を参照してください。」 pointer", () => {
+    const [first] = extractBehaviorChanges(BULLETS);
+    expect(first.detail).toContain("Claude Fable 5.1は通常、記述に従います。");
+    expect(first.detail).not.toContain("](");
+    expect(first.detail).not.toContain("参照してください");
+  });
+
+  it("handles the ### sub-heading shape (動作の変更)", () => {
+    const md = [
+      "## 新機能",
+      "",
+      "### 何か新しい",
+      "",
+      "これは新機能の説明で、動作の変更ではありません。十分な長さの本文を持っています。",
+      "",
+      "## 動作の変更",
+      "",
+      "### 応答が思考ブロックで始まる場合があります",
+      "",
+      "適応型思考はデフォルトでオンになっているため、応答が思考ブロックで始まる場合があります。最初のブロックを前提にしないでください。",
+      "",
+      "## 次のステップ",
+    ].join("\n");
+    const tips = extractBehaviorChanges(md);
+    expect(tips).toHaveLength(1);
+    expect(tips[0].headline).toBe("応答が思考ブロックで始まる場合があります");
+  });
+
+  it("returns [] when the page has no 動作の違い section", () => {
+    expect(extractBehaviorChanges("# X\n\n## 料金\n\n* **a** b\n")).toEqual([]);
+  });
+});
+
+describe("validateGuidance — changes block", () => {
+  const sec = (extra: object = {}) => ({
+    label: "Fable 5.2のコツ",
+    sourceUrl: "u",
+    fetchedAt: "now",
+    contentHash: "h",
+    tips: [{ headline: "h", detail: "d".repeat(20) }],
+    ...extra,
+  });
+  const mk = (changes: unknown) => ({
+    version: 1,
+    generatedAt: "now",
+    modelPatterns: [{ pattern: "fable-5-2", flags: "i", section: "fable-5-2" }],
+    sections: { base: sec(), "fable-5-2": sec({ changes }) },
+  });
+  const good = {
+    label: "Fable 5.1→5.2",
+    sourceUrl: "https://x/whats-new-fable-5-2.md",
+    fetchedAt: "now",
+    contentHash: "h",
+    tips: [{ headline: "h", detail: "d".repeat(20) }],
+  };
+
+  it("accepts a well-formed changes block", () => {
+    expect(() => validateGuidance(mk(good))).not.toThrow();
+  });
+  it("rejects a label without the → separator", () => {
+    expect(() => validateGuidance(mk({ ...good, label: "Fable 5.2" }))).toThrow();
+  });
+  it("rejects an empty or oversized changes block", () => {
+    expect(() => validateGuidance(mk({ ...good, tips: [] }))).toThrow();
+    expect(() =>
+      validateGuidance(mk({ ...good, tips: Array.from({ length: 7 }, () => good.tips[0]) })),
+    ).toThrow();
+  });
+});
+
+describe("committed guidance asset — 5.x lineup", () => {
+  const asset = JSON.parse(
+    readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "src", "data", "prompting-guidance.json"),
+      "utf-8",
+    ),
+  );
+  it("carries a Fable 5.1→5.2 changes block sourced from the official What's new page", () => {
+    const ch = asset.sections["fable-5-2"].changes;
+    expect(ch.label).toBe("Fable 5.1→5.2");
+    expect(ch.sourceUrl).toBe(
+      "https://platform.claude.com/docs/ja/models/fable-5-2/whats-new-fable-5-2.md",
+    );
+    expect(ch.tips.length).toBeGreaterThan(0);
+  });
+  it("orders every point-release pattern above its generation pattern", () => {
+    const order = asset.modelPatterns.map((p: { section: string }) => p.section);
+    const before = (a: string, b: string) =>
+      expect(order.indexOf(a)).toBeLessThan(order.indexOf(b));
+    before("fable-5-2", "fable-5");
+    before("fable-5-1", "fable-5");
+    before("opus-5-5", "opus-5");
+    before("sonnet-5-5", "sonnet-5");
   });
 });

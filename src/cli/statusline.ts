@@ -38,7 +38,14 @@ import {
 } from "./statuslineScroll";
 import { readFreshestLiveState } from "../proxy/liveStateReader";
 import { getUpdateNotice } from "../updateCheck";
-import { getEligibleGuidanceTips, tipTag } from "../promptingGuidance";
+import {
+  getEligibleGuidanceTips,
+  getModelSpecificGuidanceTips,
+  pickRotatingTip,
+  resolveModelSection,
+  tipTag,
+} from "../promptingGuidance";
+import { pickTipForModel } from "../signalDetector";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -656,10 +663,17 @@ function resolveStatuslineModel(data: StatuslineInput): string | null {
   if (typeof m === "string") return m.trim() || null;
   if (m && typeof m === "object") {
     const obj = m as Record<string, unknown>;
-    if (typeof obj.id === "string" && obj.id.trim()) return obj.id.trim();
-    if (typeof obj.display_name === "string" && obj.display_name.trim()) {
-      return obj.display_name.trim();
+    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const name =
+      typeof obj.display_name === "string" ? obj.display_name.trim() : "";
+    // Prefer the id; fall back to the display name when only the name maps to
+    // a guidance section (e.g. an id form the pattern table does not know yet
+    // but a display name like "Fable 5.2" it does).
+    if (id && (resolveModelSection(id) || !name || !resolveModelSection(name))) {
+      return id;
     }
+    if (name) return name;
+    if (id) return id;
   }
   return null;
 }
@@ -892,10 +906,26 @@ export async function runStatuslineCommand(
       const grade = asString(evo.sessionGrade);
       const ps = asNumberOr(evo.promptScore, 0) as number;
       const signal = asString(evo.signalKind);
-      const advice = asString(evo.advice);
-      const detail = asString(evo.adviceDetail);
-      const before = asString(evo.beforeExample);
-      const after = asString(evo.afterExample);
+      let advice = asString(evo.advice);
+      let detail = asString(evo.adviceDetail);
+      let before = asString(evo.beforeExample);
+      let after = asString(evo.afterExample);
+
+      // A "tip" is the proxy's filler rotation, chosen for the model the PROXY
+      // could resolve (forwarded --model, else ~/.claude/settings.json "model",
+      // often a bare alias like "opus[1m]"). That is frequently not the model
+      // this session is actually running — a Fable 5.2 session was shown
+      // "[Opus 4.8向け]" tips. The stdin payload's model is authoritative, so
+      // re-pick the same turn's tip for it. Real signals (warnings/praise) are
+      // model-independent and are never touched.
+      if (signal === "tip" && modelId) {
+        const turnIdx = asNumberOr(evo.turns, 0) as number;
+        const t = pickTipForModel(turnIdx, modelId);
+        advice = t.headline;
+        detail = t.detail;
+        before = t.beforeExample ?? "";
+        after = t.afterExample ?? "";
+      }
 
       const gc = gradeColor(grade);
       const gradeOk = Boolean(grade) && !gradeContradicts(grade, signal);
@@ -1085,27 +1115,34 @@ export async function runStatuslineCommand(
       // guidance tips ([公式] base / [<model>向け] model-specific). Each tip
       // headline is prefixed with its provenance tag so the user can tell
       // model-tuned advice from the generic/official libraries.
-      const guidanceTips = getEligibleGuidanceTips(modelId);
-      const tipPool: Array<{
+      // Model-specific tips (what-changed first) take every other slot via
+      // pickRotatingTip; otherwise they would be ~8% of a 290-tip rotation.
+      type PoolTip = {
         headline: string;
         tag: string;
         before?: string | null;
         after?: string | null;
         detail?: string;
-      }> = [
+      };
+      const generalPool: PoolTip[] = [
         ...TIPS.map((t) => ({
           headline: t.headline,
           tag: tipTag("generic"),
           before: t.before,
           after: t.after,
         })),
-        ...guidanceTips.map((t) => ({
+        ...getEligibleGuidanceTips(undefined).map((t) => ({
           headline: t.headline,
           tag: tipTag(t.source, t.audience),
           detail: t.detail,
         })),
       ];
-      const tip = tipPool[calls % tipPool.length];
+      const modelPool: PoolTip[] = getModelSpecificGuidanceTips(modelId).map((t) => ({
+        headline: t.headline,
+        tag: tipTag(t.source, t.audience, t.changeLabel),
+        detail: t.detail,
+      }));
+      const tip = pickRotatingTip(calls, generalPool, modelPool) ?? generalPool[0];
       // No payload timestamp exists on this path, so `anchorMs: null` keeps the
       // tip on page 1 (static) rather than animating off an unrelated clock.
       line2 = buildAdviceBlock(

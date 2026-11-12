@@ -12,6 +12,7 @@
 //   node scripts/sync-claude-docs.mjs           # fetch + rewrite
 //   node scripts/sync-claude-docs.mjs --dry-run # show diff, no write
 //   node scripts/sync-claude-docs.mjs --self-test # use built-in HTML stubs
+//   node scripts/sync-claude-docs.mjs --guidance-only # only regenerate src/data/prompting-guidance.json
 //
 // Exit codes:
 //   0  success (whether or not the dictionary changed)
@@ -53,65 +54,119 @@ const SOURCES = [
 // + a pattern here, re-run, and commit the regenerated JSON.
 const GUIDANCE_DOC_BASE =
   'https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/';
+// "What's new" pages (models/<id>/whats-new-<id>.md) carry a "動作の違い"
+// (behaviour differences) section that compares a release with the PREVIOUS
+// one — e.g. Fable 5.2 vs Fable 5.1. Those bullets are exactly what a user who
+// just moved to the new model needs, so a section may name one as `changes`
+// and the extractor turns its bullets into change tips tagged
+// "[<from>→<to>]". `changes.from` is the previous release the page compares
+// against; it is DATA (read off the page's own wording), not inferred.
+// Wording checked 2026-11-12: fable-5-2 "Claude Fable 5.1と比較", opus-5-5
+// "Claude Opus 5と異なります", sonnet-5-5 "Claude Sonnet 5と異なります",
+// haiku-5-5 "Claude Haiku 4.5からの変更点".
+const MODELS_DOC_BASE = 'https://platform.claude.com/docs/ja/models/';
 const PROMPTING_SOURCES = [
   { url: GUIDANCE_DOC_BASE + 'claude-prompting-best-practices.md', section: 'base' },
+  {
+    url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5-2.md',
+    section: 'fable-5-2',
+    changes: { url: MODELS_DOC_BASE + 'fable-5-2/whats-new-fable-5-2.md', from: 'Fable 5.1', to: 'Fable 5.2' },
+  },
   { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5-1.md', section: 'fable-5-1' },
   { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5.md', section: 'fable-5' },
-  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md', section: 'opus-4-8' },
+  {
+    url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-5-5.md',
+    section: 'opus-5-5',
+    changes: { url: MODELS_DOC_BASE + 'opus-5-5/whats-new-opus-5-5.md', from: 'Opus 5', to: 'Opus 5.5' },
+  },
   { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-5.md', section: 'opus-5' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md', section: 'opus-4-8' },
+  {
+    url: GUIDANCE_DOC_BASE + 'prompting-claude-sonnet-5-5.md',
+    section: 'sonnet-5-5',
+    changes: { url: MODELS_DOC_BASE + 'sonnet-5-5/whats-new-sonnet-5-5.md', from: 'Sonnet 5', to: 'Sonnet 5.5' },
+  },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-sonnet-5.md', section: 'sonnet-5' },
+  {
+    url: GUIDANCE_DOC_BASE + 'prompting-claude-haiku-5-5.md',
+    section: 'haiku-5-5',
+    changes: { url: MODELS_DOC_BASE + 'haiku-5-5/whats-new-haiku-5-5.md', from: 'Haiku 4.5', to: 'Haiku 5.5' },
+  },
 ];
+// Pages verified ABSENT on 2026-11-12 (HTTP 404), so those versions get base
+// tips only: prompting-claude-{opus-5-1, opus-5-2, sonnet-5-1, sonnet-5-2,
+// haiku-5, haiku-5-1, mythos-5, fable-5-3, opus-6}.md. When one appears, add
+// its source + label + pattern (point release ABOVE its generation pattern).
+//
 // Section labels prepended to model-specific tip headlines so the user can see
 // which tips are tuned to their current model. Base tips carry no label.
-// Section names are GENERATION-SPECIFIC ('opus-4-8' vs 'opus-5'): showing a
-// user on Opus 5 the Opus 4.8 page — tagged [Opus 4.8向け] — is worse than
-// showing nothing, so no generation ever inherits another generation's page.
+// Section names are VERSION-SPECIFIC ('opus-5-5' vs 'opus-5' vs 'opus-4-8'):
+// showing a user on Opus 5.5 the Opus 5 page — tagged [Opus 5向け] — is worse
+// than showing nothing, so no version ever inherits another version's page.
 const SECTION_LABELS = {
   base: '',
+  'fable-5-2': 'Fable 5.2のコツ',
   'fable-5-1': 'Fable 5.1のコツ',
   'fable-5': 'Fable 5のコツ',
-  'opus-4-8': 'Opus 4.8のコツ',
+  'opus-5-5': 'Opus 5.5のコツ',
   'opus-5': 'Opus 5のコツ',
+  'opus-4-8': 'Opus 4.8のコツ',
+  'sonnet-5-5': 'Sonnet 5.5のコツ',
+  'sonnet-5': 'Sonnet 5のコツ',
+  'haiku-5-5': 'Haiku 5.5のコツ',
 };
 // model id (or display name) → guidance section. First match wins, so more
-// specific patterns come first. Every pattern is ANCHORED TO A GENERATION —
+// specific patterns come first. Every pattern is ANCHORED TO A VERSION —
 // there is deliberately NO bare `opus` / `fable` fallback, so an unknown or
-// future generation (e.g. claude-opus-6) matches nothing and the user gets
-// base tips only instead of advice written for a different model.
-// Mythos and Fable 5 are the same model, so `mythos` aliases the fable-5 page.
+// future version (e.g. claude-opus-6, or the settings alias "opus[1m]") matches
+// nothing and the user gets base tips only instead of advice written for a
+// different model.
+// Mythos and Fable are the same model line (the Fable 5.2 page covers "Claude
+// Fable 5.2 and Claude Mythos 5.2"), so `mythos` aliases each fable page.
 //
 // POINT RELEASES: a model gets the page for its EXACT version when one exists.
 // Anthropic publishes per-point-release pages, and their content differs
-// materially (the Fable 5.1 page covers batching independent tool calls,
-// append-only history and safeguard false positives — none of which is on the
-// Fable 5 page), so showing a 5.1 user the 5.0 page is the previous model's
+// materially, so showing a 5.2 user the 5.1 page is the previous model's
 // guidance: the exact failure class this table exists to remove.
-// Point-release patterns MUST sit ABOVE their base-generation pattern — first
-// match wins, so `fable[-_. ]?5` would otherwise swallow `fable-5-1`.
+// Point-release patterns MUST sit ABOVE their generation pattern — first
+// match wins, so `fable[-_. ]?5` would otherwise swallow `fable-5-2`.
 // No page for a version means NO model tips (base only): better silent than
-// mislabelled. An `opus-5-1` page has NOT been verified to exist; when it is,
-// add its source and insert its pattern above `opus[-_. ]?5` here.
-// NOT_POINT_RELEASE blocks a base-generation pattern from swallowing a point
-// release: `opus-5` must not match `claude-opus-5-1`. Applied UNIFORMLY to
-// every base-generation pattern so the rule has no special cases.
+// mislabelled.
+// NOT_POINT_RELEASE is applied UNIFORMLY to every pattern so (a) a generation
+// pattern never swallows a point release (`opus-5` must not match
+// `claude-opus-5-5`) and (b) a point-release pattern never swallows a longer
+// number (`fable-5-1` must not match `fable-5-10`, and `fable-5-2` must not
+// match a dated `claude-fable-5-20261001`).
 // The `\d{1,2}(?!\d)` shape matters: a DATE suffix is not a point release, so
 // `claude-opus-4-8-20260101` must still resolve to opus-4-8 (an 8-digit run
 // fails the inner match, so the negative lookahead succeeds and the pattern
-// matches), while `claude-opus-5-1` is correctly blocked.
-const NOT_POINT_RELEASE = '(?![-_. ]?\\d{1,2}(?!\\d))';
+// matches), while `claude-opus-5-5` is blocked from the opus-5 row.
+// The leading `(?!\d)` stops the LAST version digit from being the first digit
+// of a longer run: without it `fable[-_. ]?5[-_. ]?2` matched the dated
+// generation id `claude-fable-5-20261001` (the "2" is the start of the date).
+const NOT_POINT_RELEASE = '(?!\\d)(?![-_. ]?\\d{1,2}(?!\\d))';
 const MODEL_PATTERNS = [
-  { pattern: '(?:fable|mythos)[-_. ]?5[-_. ]?1', flags: 'i', section: 'fable-5-1' },
+  { pattern: '(?:fable|mythos)[-_. ]?5[-_. ]?2' + NOT_POINT_RELEASE, flags: 'i', section: 'fable-5-2' },
+  { pattern: '(?:fable|mythos)[-_. ]?5[-_. ]?1' + NOT_POINT_RELEASE, flags: 'i', section: 'fable-5-1' },
+  { pattern: 'opus[-_. ]?5[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'opus-5-5' },
   { pattern: 'opus[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'opus-5' },
   { pattern: 'opus[-_. ]?4[-_. ]?8' + NOT_POINT_RELEASE, flags: 'i', section: 'opus-4-8' },
+  { pattern: 'sonnet[-_. ]?5[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'sonnet-5-5' },
+  { pattern: 'sonnet[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'sonnet-5' },
+  { pattern: 'haiku[-_. ]?5[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'haiku-5-5' },
   // `mythos` is anchored to its generation too: a bare family match would give
-  // a future claude-mythos-6 the Fable 5 page — the same defect class as the
-  // bare `opus` pattern this table used to carry.
+  // a future claude-mythos-6 the Fable 5 page.
   { pattern: '(?:fable|mythos)[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'fable-5' },
 ];
 // Size guards keep the bundled asset (and the statusline it feeds) light.
 const GUIDANCE_MAX_TIPS_PER_SECTION = 12;
 const GUIDANCE_MAX_DETAIL_CHARS = 220;
 const GUIDANCE_MAX_HEADLINE_CHARS = 48;
-const GUIDANCE_MAX_JSON_BYTES = 80 * 1024;
+const GUIDANCE_MAX_CHANGES_PER_SECTION = 6;
+// 10 sections x 12 tips (+ up to 6 change tips each) of ~220 JA chars. Raised
+// from 80 KiB when the 5.x lineup pages were added (2026-11-12); still a
+// sub-millisecond JSON parse per statusline tick.
+const GUIDANCE_MAX_JSON_BYTES = 160 * 1024;
 
 // ─── Tier classification (v3.0.0) ───
 // Tier 1 = core daily-use; Tier 3 = niche/diagnostic; Tier 2 = default (everything else).
@@ -222,9 +277,29 @@ const PROMPTING_SELF_TEST_STUBS = {
     '# Opus 5\n\n## 応答の長さと冗長性\n\nClaude Opus 5 は既定でより簡潔に応答します。詳細な出力が必要なときは望む長さを明示してください。\n\n```text\nBe thorough.\n```\n\n## タスクのスコープと過剰な検証\n\nClaude Opus 5 は依頼された範囲を超えた検証を控えます。必要な検証は明示的に指示してください。\n',
 };
 
+// Self-test stub for any guidance URL without a hand-written stub above, in
+// the real page's shape: a prompting page gets one leaf section; a "What's
+// new" page gets a `## 動作の違い` section with bold-lead bullets.
+function selfTestGuidanceStub(url) {
+  if (PROMPTING_SELF_TEST_STUBS[url]) return PROMPTING_SELF_TEST_STUBS[url];
+  const name = url.replace(/^.*\//, '').replace(/\.md$/, '');
+  if (/whats-new-/.test(name)) {
+    return (
+      '# 新機能\n\n## 動作の違い\n\n以前のリリースと次の点で異なります。\n\n' +
+      '* **思考を減らす指示が効かなくなりました。** 以前のモデルは「熟考せずに答えて」に従いましたが、このモデルでは止まりません。エフォートを下げてください。\n' +
+      '* **ターンが早く終わることがあります。** 長いタスクでは残作業を示して止まる場合があります。完了条件を明示してください。\n\n## 料金\n\n変更はありません。\n'
+    );
+  }
+  return (
+    `# ${name}\n\n## エフォートを調整する\n\n` +
+    'このモデルではエフォートレベルによって思考量と所要時間が変わります。用途に合わせて設定を見直してください。\n'
+  );
+}
+
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const SELF_TEST = args.includes('--self-test');
+const GUIDANCE_ONLY = args.includes('--guidance-only');
 
 // -------------------------------------------------------------
 // Fetch with timeout
@@ -580,6 +655,81 @@ function extractPromptingGuidance(markdown) {
   return tips;
 }
 
+// Extract the "what changed versus the previous release" bullets from a
+// "What's new" page. The page's `## 動作の違い` (or `## 動作の変更`) section
+// lists the differences that show up WITHOUT code changes — exactly what a user
+// who just switched models notices. Two shapes exist in the official docs:
+//   * bold-lead bullets  `* **<headline>** <detail…>`  (fable/opus/sonnet)
+//   * `###` sub-headings, each with a prose body          (haiku)
+// Fenced code and component tags are ignored as everywhere else.
+function extractBehaviorChanges(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  let inCode = false;
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*(```|~~~)/.test(ln)) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    const m = ln.match(/^(#{1,2})\s+(.*\S)\s*$/);
+    if (!m) continue;
+    if (start < 0) {
+      if (m[1].length === 2 && /^動作の(違い|変更)/.test(m[2].trim())) start = i + 1;
+    } else {
+      end = i;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  const body = lines.slice(start, end);
+
+  const tips = [];
+  const seen = new Set();
+  const push = (headline, detail) => {
+    if (!headline || headline.length < 2 || !detail || detail.length < 10) return;
+    const key = headline.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    tips.push({ headline, detail });
+  };
+
+  // Shape 1: bold-lead bullets.
+  for (const raw of body) {
+    if (tips.length >= GUIDANCE_MAX_CHANGES_PER_SECTION) break;
+    const m = raw.trim().match(/^[-*]\s+\*\*(.+?)\*\*\s*(.*)$/);
+    if (!m) continue;
+    const headline = cleanGuidanceHeading(m[1].replace(/[。.]\s*$/u, ''));
+    let detail = stripMarkdownLinks(m[2]);
+    detail = stripBackticks(detail);
+    detail = detail.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/[*_]{1,3}/g, '');
+    detail = sanitize(detail);
+    // Drop the trailing "…を参照してください。" pointer sentence: the link it
+    // referred to was stripped, so the sentence no longer says anything.
+    detail = detail.replace(/[^。]*を参照してください。\s*$/u, '').trim();
+    push(headline, capGuidanceLength(detail, GUIDANCE_MAX_DETAIL_CHARS));
+  }
+  if (tips.length > 0) return tips;
+
+  // Shape 2: `###` sub-headings — reuse the leaf-heading extractor on the slice.
+  for (const t of extractPromptingGuidance(body.join('\n'))) {
+    if (tips.length >= GUIDANCE_MAX_CHANGES_PER_SECTION) break;
+    push(t.headline, t.detail);
+  }
+  return tips;
+}
+
+// Compact "<from>→<to>" tag text: the family name is not repeated when both
+// sides share it ("Fable 5.1→5.2", "Haiku 4.5→5.5"), keeping the statusline
+// tag short enough to leave room for the headline.
+function changeLabel(from, to) {
+  const fam = (s) => s.split(' ')[0];
+  const rest = (s) => s.split(' ').slice(1).join(' ');
+  return fam(from) === fam(to) && rest(to) ? `${from}→${rest(to)}` : `${from}→${to}`;
+}
+
 function loadExistingGuidance() {
   try {
     if (!existsSync(GUIDANCE_PATH)) return null;
@@ -612,6 +762,31 @@ async function buildPromptingGuidance(fetchImpl) {
         tips,
       };
       anyOk = true;
+      if (src.changes) {
+        // Fail-open per part: a missing/changed "What's new" page keeps the
+        // previous change tips (or none) without dropping the section's tips.
+        const prevChanges = prev?.sections?.[src.section]?.changes;
+        try {
+          const cmd = await fetchImpl(src.changes.url, 20000);
+          if (!cmd || !cmd.trim()) throw new Error('empty response');
+          const ctips = extractBehaviorChanges(cmd);
+          if (ctips.length === 0) throw new Error('no 動作の違い bullets extracted');
+          sections[src.section].changes = {
+            label: changeLabel(src.changes.from, src.changes.to),
+            sourceUrl: src.changes.url,
+            fetchedAt: new Date().toISOString(),
+            contentHash: createHash('sha256').update(cmd).digest('hex').slice(0, 16),
+            tips: ctips,
+          };
+        } catch (e) {
+          if (prevChanges) {
+            sections[src.section].changes = prevChanges;
+            warnings.push(`${src.section}.changes: fetch/extract failed (${e.message}) — kept previous snapshot`);
+          } else {
+            warnings.push(`${src.section}.changes: fetch/extract failed (${e.message}) — no change tips`);
+          }
+        }
+      }
     } catch (e) {
       const kept = prev && prev.sections && prev.sections[src.section];
       if (kept) {
@@ -677,6 +852,33 @@ function validateGuidance(guidance) {
         throw new Error(`section ${name} tip detail exceeds length cap`);
       }
     }
+    // Optional "what changed vs the previous release" block (see
+    // extractBehaviorChanges). When present it must be complete: a label of the
+    // form "<from>→<to>" (rendered verbatim as the tip tag) and 1..cap tips.
+    if (sec.changes !== undefined) {
+      const ch = sec.changes;
+      if (!ch || typeof ch !== 'object') throw new Error(`section ${name} changes is not an object`);
+      if (typeof ch.label !== 'string' || !/^.+→.+$/u.test(ch.label)) {
+        throw new Error(`section ${name} changes.label must look like "<from>→<to>"`);
+      }
+      if (typeof ch.sourceUrl !== 'string' || !ch.sourceUrl) {
+        throw new Error(`section ${name} changes.sourceUrl missing`);
+      }
+      if (!Array.isArray(ch.tips) || ch.tips.length === 0) {
+        throw new Error(`section ${name} changes has no tips`);
+      }
+      if (ch.tips.length > GUIDANCE_MAX_CHANGES_PER_SECTION) {
+        throw new Error(`section ${name} changes exceeds tip cap`);
+      }
+      for (const tip of ch.tips) {
+        if (typeof tip.headline !== 'string' || typeof tip.detail !== 'string') {
+          throw new Error(`section ${name} changes has a malformed tip`);
+        }
+        if (tip.detail.length > GUIDANCE_MAX_DETAIL_CHARS + 4) {
+          throw new Error(`section ${name} change tip detail exceeds length cap`);
+        }
+      }
+    }
   }
   const bytes = Buffer.byteLength(JSON.stringify(guidance), 'utf-8');
   if (bytes > GUIDANCE_MAX_JSON_BYTES) {
@@ -701,6 +903,16 @@ function guidanceContentSignature(guidance) {
       sourceUrl: sec.sourceUrl,
       contentHash: sec.contentHash,
       tips: sec.tips,
+      ...(sec.changes
+        ? {
+            changes: {
+              label: sec.changes.label,
+              sourceUrl: sec.changes.sourceUrl,
+              contentHash: sec.changes.contentHash,
+              tips: sec.changes.tips,
+            },
+          }
+        : {}),
     };
   }
   return JSON.stringify({
@@ -770,7 +982,9 @@ async function main() {
   let failCount = 0;
   const summary = [];
 
-  for (const src of SOURCES) {
+  // --guidance-only skips the statusline-dict sync entirely (no dictionary
+  // fetch, no statusline.py regeneration) and only rebuilds the guidance asset.
+  for (const src of GUIDANCE_ONLY ? [] : SOURCES) {
     let html;
     try {
       if (SELF_TEST) {
@@ -896,7 +1110,7 @@ async function main() {
   // ── Model-aware prompting guidance regeneration (fail-open) ──
   const guidanceFetch = SELF_TEST
     ? async (url) => {
-        const stub = PROMPTING_SELF_TEST_STUBS[url];
+        const stub = selfTestGuidanceStub(url);
         if (!stub) throw new Error('no guidance stub for ' + url);
         return stub;
       }
@@ -977,7 +1191,7 @@ async function main() {
   }
 
   // Fail-closed: if BOTH sources failed (and not in self-test), exit 1
-  if (!SELF_TEST && okCount === 0 && failCount === SOURCES.length) {
+  if (!SELF_TEST && !GUIDANCE_ONLY && okCount === 0 && failCount === SOURCES.length) {
     console.error('ERROR: all sources failed; exiting 1');
     process.exit(1);
   }
@@ -1009,6 +1223,7 @@ if (invokedDirectly) {
 
 export {
   extractPromptingGuidance,
+  extractBehaviorChanges,
   distillGuidanceBody,
   buildPromptingGuidance,
   validateGuidance,
