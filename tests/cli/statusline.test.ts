@@ -20,6 +20,8 @@ import {
   PAGE_INTERVAL_MS,
 } from "../../src/cli/statusline";
 import { parseDisplaySettings, runDisplayCommand } from "../../src/cli/display";
+import { rememberSessionModel } from "../../src/cli/advice";
+import { pickTipForModel } from "../../src/signalDetector";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // Spawn the pre-built CLI. `npm run build` runs before the suite in the verify
@@ -718,6 +720,16 @@ function writeAdviceSessionFile(
   );
 }
 
+/** Run `evo advice` with the same HOME/cwd the statusline render used. */
+function runAdvice(home: string, cwd: string): string {
+  const res = spawnSync(process.execPath, [DIST_INDEX, "advice"], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  return stripAnsi(res.stdout ?? "");
+}
+
 function modelStdin(cwd: string, sid: string, id: string, name: string): object {
   return baseStdin(cwd, { session_id: sid, model: { id, display_name: name } });
 }
@@ -859,6 +871,58 @@ describe("evo statusline (session binding + tags)", () => {
     expect(plain).toContain("[Opus 5→5.5]");
     expect(plain).not.toContain("Opus 5向け");
     expect(plain).not.toContain("Opus 4.8");
+  });
+
+  it("`evo advice` continues the SAME re-picked tip the statusline showed (stdin model, not the proxy's)", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-agree", {
+      signalKind: "tip",
+      advice: "[Opus 4.8向け] 応答の長さと冗長性",
+      adviceDetail: "Opus 4.8 detail that must not be printed",
+      turns: 0,
+    });
+    const expected = pickTipForModel(0, "claude-fable-5-2");
+    const { plain } = runStatusline(
+      modelStdin(cwd, "sid-agree", "claude-fable-5-2", "Fable 5.2"),
+      home,
+      cwd,
+    );
+    expect(plain).toContain("[Fable 5.1→5.2]");
+    const out = runAdvice(home, cwd);
+    expect(out.split("\n")[0]).toBe(expected.headline);
+    expect(out).toContain(expected.detail);
+    expect(out).not.toContain("Opus 4.8");
+  });
+
+  it("`evo advice` prints a real warning verbatim even when a session model is recorded", () => {
+    const { home, cwd } = makeTempDirs();
+    writeAdviceSessionFile(cwd, home, "sid-warn", {
+      signalKind: "no_success_criteria",
+      advice: "完了条件のない指示が続いてるよ",
+      turns: 0,
+    });
+    runStatusline(modelStdin(cwd, "sid-warn", "claude-fable-5-2", "Fable 5.2"), home, cwd);
+    const self = JSON.parse(
+      fs.readFileSync(path.join(home, ".claude", ".evo-self-state.json"), "utf8"),
+    );
+    expect(self.session_models["sid-warn"].model).toBe("claude-fable-5-2");
+    const out = runAdvice(home, cwd);
+    expect(out.split("\n")[0]).toBe("完了条件のない指示が続いてるよ");
+    expect(out).not.toContain("[Fable 5.1→5.2]");
+  });
+
+  it("rememberSessionModel keeps the newest entries, drops expired ones, and caps the map", () => {
+    const now = 1_000_000_000_000;
+    const day = 24 * 60 * 60 * 1000;
+    const prev: Record<string, { model: string; seenAt: number }> = {
+      old: { model: "claude-opus-4-8", seenAt: now - day - 1 },
+    };
+    for (let i = 0; i < 40; i++) prev[`s${i}`] = { model: "m", seenAt: now - 1000 - i };
+    const out = rememberSessionModel(prev, "mine", "claude-fable-5-2", now);
+    expect(out.mine).toEqual({ model: "claude-fable-5-2", seenAt: now });
+    expect(out.old).toBeUndefined();
+    expect(Object.keys(out).length).toBe(32);
+    expect(rememberSessionModel("garbage", "k", "m", now)).toEqual({ k: { model: "m", seenAt: now } });
   });
 
   it("never rewrites a real proxy signal (warning) — only the filler tip", () => {

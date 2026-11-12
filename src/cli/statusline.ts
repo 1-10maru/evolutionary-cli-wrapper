@@ -46,6 +46,7 @@ import {
   tipTag,
 } from "../promptingGuidance";
 import { pickTipForModel } from "../signalDetector";
+import { rememberSessionModel, SessionModels } from "./advice";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -99,6 +100,13 @@ interface SelfState {
    * stale slots are pruned on write so the map stays bounded.
    */
   advice_anchors?: Record<string, { key: string; seenAt: number }>;
+  /**
+   * The stdin model last seen per session (key `sid || cwd`). The statusline
+   * re-picks the proxy's filler tip for this model; `evo advice` reads it back
+   * to re-pick the same tip, so the `→ 続きは evo advice` pointer continues the
+   * tip actually shown.
+   */
+  session_models?: SessionModels;
 }
 
 /** Anchors older than this are dropped — a session idle that long restarts at page 1. */
@@ -792,6 +800,7 @@ export async function runStatuslineCommand(
       // is shared, so rebuilding it from scratch would reset every concurrent
       // window to page 1. Our own slot is re-established below on first render.
       advice_anchors: loadedSelf.advice_anchors,
+      session_models: loadedSelf.session_models,
     };
   } else {
     selfState = { ...loadedSelf };
@@ -800,6 +809,15 @@ export async function runStatuslineCommand(
   selfState.last = nowS;
   selfState.ctx_pct = currCtx;
   selfState.session_id = sessionId;
+  if (modelId) {
+    // Same key as the anchors; rides on the write this tick already makes.
+    selfState.session_models = rememberSessionModel(
+      loadedSelf.session_models,
+      sid || cwd,
+      modelId,
+      nowMs,
+    );
+  }
   safeWriteJson(selfStateFile, selfState);
 
   const isSessionStart = (selfState.calls ?? 0) === 1;
