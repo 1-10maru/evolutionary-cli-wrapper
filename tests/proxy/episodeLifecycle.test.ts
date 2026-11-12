@@ -3,6 +3,8 @@ import {
   buildLiveStatePayload,
   createEmptyTurn,
   createEvent,
+  extractPromptText,
+  isMachinePromptText,
   processJsonlEntry,
   refreshLiveAdvice,
   resetLiveStateOnRotation,
@@ -143,6 +145,85 @@ describe("processJsonlEntry", () => {
     );
     expect(liveState.turns).toBe(1); // turns still increments
     expect(liveState.userMessages).toBe(0); // but userMessages does not
+  });
+
+  // Regression: Claude Code writes user messages as an ARRAY of content
+  // blocks, so the old string-only path never fired and promptScore stayed 0
+  // (pinning the live grade at D). These lock the array shape in.
+  it("scores a prompt whose content is an array of text blocks", () => {
+    const liveState = makeLiveState();
+    processJsonlEntry(
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "text",
+              text: "- fix src/foo.ts\n- add a test\nDone when tests pass",
+            },
+          ] as unknown as unknown[],
+        },
+      },
+      { liveState, config: makeConfig(), onStateChanged: () => {} },
+    );
+    expect(liveState.userMessages).toBe(1);
+    expect(liveState.promptScore).toBeGreaterThan(0);
+    expect(liveState.promptScoreWindow?.length).toBe(1);
+    expect(liveState.lastHasFileRefs).toBe(true);
+  });
+
+  it("scores the text blocks of a mixed text + tool_use array", () => {
+    const liveState = makeLiveState();
+    processJsonlEntry(
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "text", text: "update src/bar.ts until the tests pass" },
+            { type: "tool_use", name: "Edit", input: { file_path: "/x.ts" } },
+          ] as unknown as unknown[],
+        },
+      },
+      { liveState, config: makeConfig(), onStateChanged: () => {} },
+    );
+    expect(liveState.promptScore).toBeGreaterThan(0);
+    expect(liveState.lastPromptLength).toBe(
+      "update src/bar.ts until the tests pass".length,
+    );
+  });
+
+  it("does NOT score a tool_result-only entry as a prompt", () => {
+    const liveState = makeLiveState();
+    processJsonlEntry(
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", content: "ok" }] as unknown as unknown[],
+        },
+      },
+      { liveState, config: makeConfig(), onStateChanged: () => {} },
+    );
+    expect(liveState.userMessages).toBe(0);
+    expect(liveState.promptScore).toBe(0);
+    // The rolling window must stay empty: a tool echo is not a prompt sample.
+    expect(liveState.promptScoreWindow ?? []).toHaveLength(0);
+  });
+
+  it("leaves scoring untouched when message.content is missing or odd", () => {
+    const liveState = makeLiveState();
+    processJsonlEntry(
+      { type: "user", message: {} as unknown as { content?: unknown[] } },
+      { liveState, config: makeConfig(), onStateChanged: () => {} },
+    );
+    processJsonlEntry(
+      {
+        type: "user",
+        message: { content: 42 as unknown as unknown[] },
+      },
+      { liveState, config: makeConfig(), onStateChanged: () => {} },
+    );
+    expect(liveState.promptScore).toBe(0);
+    expect(liveState.promptScoreWindow ?? []).toHaveLength(0);
   });
 
   it("counts assistant tool_use blocks as toolCalls and tracks Edit file paths", () => {
@@ -360,5 +441,221 @@ describe("advice fire memory (escalation, v3.7 B3)", () => {
   it("payload defaults adviceEscalationLevel to 0 before any advice refresh", () => {
     const payload = buildLiveStatePayload(makeLiveState(), makeMascot());
     expect(payload.adviceEscalationLevel).toBe(0);
+  });
+});
+
+describe("extractPromptText", () => {
+  it("returns a string content unchanged", () => {
+    expect(extractPromptText("hello world")).toBe("hello world");
+  });
+  it("concatenates text blocks with newlines", () => {
+    expect(
+      extractPromptText([
+        { type: "text", text: "one" },
+        { type: "text", text: "two" },
+      ]),
+    ).toBe("one\ntwo");
+  });
+  it("ignores tool_use / tool_result / image / thinking and unknown blocks", () => {
+    expect(
+      extractPromptText([
+        { type: "tool_use", name: "Edit" },
+        { type: "text", text: "keep me" },
+        { type: "tool_result", content: "ok" },
+        { type: "image", source: {} },
+        { type: "thinking", thinking: "hmm" },
+        { nope: true },
+        null,
+        "raw",
+      ]),
+    ).toBe("keep me");
+  });
+  it("returns empty string for a tool_result-only array", () => {
+    expect(extractPromptText([{ type: "tool_result", content: "ok" }])).toBe("");
+  });
+  it("returns empty string for missing / non-array / non-string content", () => {
+    expect(extractPromptText(undefined)).toBe("");
+    expect(extractPromptText(null)).toBe("");
+    expect(extractPromptText(42)).toBe("");
+    expect(extractPromptText({ type: "text", text: "x" })).toBe("");
+    expect(extractPromptText([])).toBe("");
+  });
+});
+
+describe("refreshLiveAdvice — grade reads the session window, chip reads the latest message", () => {
+  it("keeps a strong session above D even when the latest message scored 0", () => {
+    const liveState = makeLiveState();
+    liveState.turns = 20;
+    liveState.toolCalls = 60;
+    liveState.promptScoreWindow = [70, 70, 70, 70, 70, 70, 0];
+    liveState.promptScore = 0; // the latest message
+    refreshLiveAdvice(liveState, makeConfig());
+    expect(liveState.sessionGrade).not.toBe("D");
+    // The 指示の質 chip must still read the LATEST message, not the mean.
+    expect(liveState.promptScore).toBe(0);
+  });
+
+  it("still grades D when the whole session is weak", () => {
+    const liveState = makeLiveState();
+    liveState.turns = 20;
+    liveState.toolCalls = 60;
+    liveState.promptScoreWindow = [0, 0, 5, 0];
+    liveState.promptScore = 0;
+    refreshLiveAdvice(liveState, makeConfig());
+    expect(liveState.sessionGrade).toBe("D");
+  });
+
+  it("falls back to the latest score when the window is empty (new session)", () => {
+    const empty = makeLiveState();
+    empty.turns = 20;
+    empty.toolCalls = 60;
+    empty.promptScoreWindow = [];
+    empty.promptScore = 70;
+    refreshLiveAdvice(empty, makeConfig());
+
+    const single = makeLiveState();
+    single.turns = 20;
+    single.toolCalls = 60;
+    single.promptScoreWindow = [70];
+    single.promptScore = 70;
+    refreshLiveAdvice(single, makeConfig());
+
+    expect(empty.sessionGrade).toBe(single.sessionGrade);
+  });
+});
+
+describe("harness-generated text is never scored as a user prompt", () => {
+  function scored(entry: Record<string, unknown>): { userMessages: number; promptScore: number; window: number[] } {
+    const liveState = makeLiveState();
+    processJsonlEntry(entry as never, {
+      liveState,
+      config: makeConfig(),
+      onStateChanged: () => {},
+    });
+    return {
+      userMessages: liveState.userMessages,
+      promptScore: liveState.promptScore,
+      window: liveState.promptScoreWindow ?? [],
+    };
+  }
+
+  it("does NOT score an isMeta skill-body entry (regression: it scored 70)", () => {
+    // Real shape from a transcript: a skill body injected as a user turn. It is
+    // long, structured and full of file paths, so the rubric loves it.
+    const r = scored({
+      type: "user",
+      isMeta: true,
+      message: {
+        content: [
+          {
+            type: "text",
+            text:
+              "Base directory for this skill: C:/Users/x/.claude/skills/demo\n" +
+              "- Read src/foo.ts and src/bar.ts\n" +
+              "- Run the tests until they pass\n1. step one\n2. step two",
+          },
+        ],
+      },
+    });
+    expect(r.promptScore).toBe(0);
+    expect(r.window).toHaveLength(0);
+  });
+
+  it("does NOT score slash-command wrappers (pre-existing string-path leak)", () => {
+    for (const text of [
+      "<command-name>/model</command-name>",
+      "<local-command-stdout>ok</local-command-stdout>",
+      "<local-command-caveat>Caveat: The messages below…</local-command-caveat>",
+      "<command-message>model</command-message>",
+      "<command-args>opus</command-args>",
+    ]) {
+      const r = scored({ type: "user", message: { content: text } });
+      expect(r.promptScore).toBe(0);
+      expect(r.window).toHaveLength(0);
+    }
+  });
+
+  it("does NOT score agent-to-agent traffic delivered on the user turn", () => {
+    // Calibration caught these scoring 87 — the highest of ANY "user" message
+    // in the corpus — for text the person never wrote.
+    for (const text of [
+      "Another Claude session sent a message:\n<teammate-message>do X</teammate-message>",
+      "<teammate-message teammate_id=\"lead\">please update src/a.ts until tests pass</teammate-message>",
+      "<task-notification>agent finished</task-notification>",
+      "[SYSTEM NOTIFICATION] wake up",
+      "[AUTO-RESUME] continue the plan in .claude/RESUME.md",
+    ]) {
+      const r = scored({ type: "user", message: { content: text } });
+      expect(r.promptScore).toBe(0);
+      expect(r.window).toHaveLength(0);
+    }
+  });
+
+  it("does NOT score the `for tool use` interrupt variant (was scoring 35)", () => {
+    const r = scored({
+      type: "user",
+      message: { content: "[Request interrupted by user for tool use]" },
+    });
+    expect(r.promptScore).toBe(0);
+    expect(r.window).toHaveLength(0);
+  });
+
+  it("DOES score genuine prose that merely opens with a wrapper tag", () => {
+    // Prefix-anchored patterns silently dropped real user text. The tag must
+    // close AND the entry must be nothing but the wrapper.
+    for (const text of [
+      "<system-reminder>みたいなのが出るんだけど、これ止められない？",
+      "Another Claude session sent a message: が会話に混ざるのを止めたい",
+      "<command-name>/model</command-name> みたいな行が邪魔なので消して",
+    ]) {
+      const r = scored({ type: "user", message: { content: text } });
+      expect(r.window).toHaveLength(1);
+    }
+  });
+
+  it("does NOT score the interrupt marker", () => {
+    const r = scored({
+      type: "user",
+      message: { content: [{ type: "text", text: "[Request interrupted by user]" }] },
+    });
+    expect(r.window).toHaveLength(0);
+  });
+
+  it("DOES score a genuine prompt that merely mentions a command name inline", () => {
+    const r = scored({
+      type: "user",
+      message: { content: "run /model then update src/a.ts until tests pass" },
+    });
+    expect(r.promptScore).toBeGreaterThan(0);
+    expect(r.window).toHaveLength(1);
+  });
+
+  it("scores a mixed [tool_result, text] array on its text half only", () => {
+    const r = scored({
+      type: "user",
+      message: {
+        content: [
+          { type: "tool_result", content: "irrelevant output" },
+          { type: "text", text: "now fix src/baz.ts and make the tests pass" },
+        ],
+      },
+    });
+    expect(r.userMessages).toBe(1);
+    expect(r.promptScore).toBeGreaterThan(0);
+  });
+});
+
+describe("isMachinePromptText", () => {
+  it("flags wrappers, the interrupt marker, skill bodies and blank text", () => {
+    expect(isMachinePromptText("<command-name>/model</command-name>")).toBe(true);
+    expect(isMachinePromptText("  <local-command-caveat>x</local-command-caveat>")).toBe(true);
+    expect(isMachinePromptText("[Request interrupted by user]")).toBe(true);
+    expect(isMachinePromptText("Base directory for this skill: C:/x")).toBe(true);
+    expect(isMachinePromptText("   ")).toBe(true);
+  });
+  it("does not flag ordinary prose, even when it names a command", () => {
+    expect(isMachinePromptText("please run /model and report back")).toBe(false);
+    expect(isMachinePromptText("fix src/a.ts")).toBe(false);
+    expect(isMachinePromptText("<html> is fine too")).toBe(false);
   });
 });

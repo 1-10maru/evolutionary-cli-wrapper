@@ -154,13 +154,13 @@ describe("evo statusline --full — EvoPet parity states", () => {
     expect(plain).not.toContain("待機中");
   });
 
-  it("renders the DIMMED stale layout with a (待機中) marker for 10s–5min-old data", () => {
+  it("renders the DIMMED stale layout with a (待機中) marker for 25s–5min-old data", () => {
     const { home, cwd } = makeTempDirs();
     writeSession(
       cwd,
       "sid3",
       { avatar: "🐣", nickname: "StalePet", sessionGrade: "A", promptScore: 70, idealStateGauge: 60 },
-      30000, // 30s old → stale-but-recent
+      30000, // 30s old → stale-but-recent (past FRESH_MS=25s, inside the 5min window)
     );
     const { stdout, plain } = run(baseStdin(cwd, { session_id: "sid3" }), home, cwd, { full: true });
     // Full layout preserved (nickname + essentials still present)…

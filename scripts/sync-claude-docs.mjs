@@ -55,23 +55,57 @@ const GUIDANCE_DOC_BASE =
   'https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/';
 const PROMPTING_SOURCES = [
   { url: GUIDANCE_DOC_BASE + 'claude-prompting-best-practices.md', section: 'base' },
-  { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5.md', section: 'fable' },
-  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md', section: 'opus' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5-1.md', section: 'fable-5-1' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-fable-5.md', section: 'fable-5' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md', section: 'opus-4-8' },
+  { url: GUIDANCE_DOC_BASE + 'prompting-claude-opus-5.md', section: 'opus-5' },
 ];
 // Section labels prepended to model-specific tip headlines so the user can see
 // which tips are tuned to their current model. Base tips carry no label.
+// Section names are GENERATION-SPECIFIC ('opus-4-8' vs 'opus-5'): showing a
+// user on Opus 5 the Opus 4.8 page — tagged [Opus 4.8向け] — is worse than
+// showing nothing, so no generation ever inherits another generation's page.
 const SECTION_LABELS = {
   base: '',
-  fable: 'Fable 5のコツ',
-  opus: 'Opus 4.8のコツ',
+  'fable-5-1': 'Fable 5.1のコツ',
+  'fable-5': 'Fable 5のコツ',
+  'opus-4-8': 'Opus 4.8のコツ',
+  'opus-5': 'Opus 5のコツ',
 };
 // model id (or display name) → guidance section. First match wins, so more
-// specific patterns come first. Fable and Mythos share the same model, so both
-// map to the "fable" section.
+// specific patterns come first. Every pattern is ANCHORED TO A GENERATION —
+// there is deliberately NO bare `opus` / `fable` fallback, so an unknown or
+// future generation (e.g. claude-opus-6) matches nothing and the user gets
+// base tips only instead of advice written for a different model.
+// Mythos and Fable 5 are the same model, so `mythos` aliases the fable-5 page.
+//
+// POINT RELEASES: a model gets the page for its EXACT version when one exists.
+// Anthropic publishes per-point-release pages, and their content differs
+// materially (the Fable 5.1 page covers batching independent tool calls,
+// append-only history and safeguard false positives — none of which is on the
+// Fable 5 page), so showing a 5.1 user the 5.0 page is the previous model's
+// guidance: the exact failure class this table exists to remove.
+// Point-release patterns MUST sit ABOVE their base-generation pattern — first
+// match wins, so `fable[-_. ]?5` would otherwise swallow `fable-5-1`.
+// No page for a version means NO model tips (base only): better silent than
+// mislabelled. An `opus-5-1` page has NOT been verified to exist; when it is,
+// add its source and insert its pattern above `opus[-_. ]?5` here.
+// NOT_POINT_RELEASE blocks a base-generation pattern from swallowing a point
+// release: `opus-5` must not match `claude-opus-5-1`. Applied UNIFORMLY to
+// every base-generation pattern so the rule has no special cases.
+// The `\d{1,2}(?!\d)` shape matters: a DATE suffix is not a point release, so
+// `claude-opus-4-8-20260101` must still resolve to opus-4-8 (an 8-digit run
+// fails the inner match, so the negative lookahead succeeds and the pattern
+// matches), while `claude-opus-5-1` is correctly blocked.
+const NOT_POINT_RELEASE = '(?![-_. ]?\\d{1,2}(?!\\d))';
 const MODEL_PATTERNS = [
-  { pattern: 'mythos', flags: 'i', section: 'fable' },
-  { pattern: 'fable', flags: 'i', section: 'fable' },
-  { pattern: 'opus', flags: 'i', section: 'opus' },
+  { pattern: '(?:fable|mythos)[-_. ]?5[-_. ]?1', flags: 'i', section: 'fable-5-1' },
+  { pattern: 'opus[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'opus-5' },
+  { pattern: 'opus[-_. ]?4[-_. ]?8' + NOT_POINT_RELEASE, flags: 'i', section: 'opus-4-8' },
+  // `mythos` is anchored to its generation too: a bare family match would give
+  // a future claude-mythos-6 the Fable 5 page — the same defect class as the
+  // bare `opus` pattern this table used to carry.
+  { pattern: '(?:fable|mythos)[-_. ]?5' + NOT_POINT_RELEASE, flags: 'i', section: 'fable-5' },
 ];
 // Size guards keep the bundled asset (and the statusline it feeds) light.
 const GUIDANCE_MAX_TIPS_PER_SECTION = 12;
@@ -184,6 +218,8 @@ const PROMPTING_SELF_TEST_STUBS = {
     '# Fable 5\n\n## デフォルトでより長いターン\n\n難しいタスクに対する個々のリクエストは、より高いエフォート設定では何分も実行されることがあります。\n\n```text wrap\nWhen you have enough information to act, act.\n```\n\n## 境界を明示する\n\nClaude Fable 5 は要求されていないアクションを実行することがあります。すべきこととすべきでないことについて明示的な制約を定義してください。\n',
   [GUIDANCE_DOC_BASE + 'prompting-claude-opus-4-8.md']:
     '# Opus 4.8\n\n## 応答の長さと冗長性\n\nClaude Opus 4.8 は簡潔さと徹底性のバランスを取ります。望む長さを明示的に伝えてください。\n\n```text\nBe concise.\n```\n\n## より文字通りの指示追従\n\nClaude Opus 4.8 は指示をより文字通りに解釈します。暗黙の期待に頼らず明示してください。\n',
+  [GUIDANCE_DOC_BASE + 'prompting-claude-opus-5.md']:
+    '# Opus 5\n\n## 応答の長さと冗長性\n\nClaude Opus 5 は既定でより簡潔に応答します。詳細な出力が必要なときは望む長さを明示してください。\n\n```text\nBe thorough.\n```\n\n## タスクのスコープと過剰な検証\n\nClaude Opus 5 は依頼された範囲を超えた検証を控えます。必要な検証は明示的に指示してください。\n',
 };
 
 const args = process.argv.slice(2);
@@ -614,6 +650,18 @@ function validateGuidance(guidance) {
     throw new Error('sections must be an object');
   }
   if (!guidance.sections.base) throw new Error('base section is required');
+  // Every pattern must point at a section that actually exists. Without this, a
+  // first-time fetch failure for a NEW page (no previous snapshot to fall back
+  // to) would ship a pattern whose section is absent: the runtime fails open to
+  // base-only tips, so nothing breaks for the user, but CI would stay green
+  // while a doc page silently 404s. Fail the build instead.
+  for (const mp of guidance.modelPatterns) {
+    if (!guidance.sections[mp.section]) {
+      throw new Error(
+        `modelPattern /${mp.pattern}/ points at missing section "${mp.section}"`,
+      );
+    }
+  }
   for (const [name, sec] of Object.entries(guidance.sections)) {
     if (!Array.isArray(sec.tips) || sec.tips.length === 0) {
       throw new Error(`section ${name} has no tips`);

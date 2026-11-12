@@ -7,9 +7,12 @@
  * model-appropriate tips to EvoPet's comment surfaces.
  *
  * Selection layers the base best-practices tips (always eligible) with the
- * tips for the user's current model (Fable/Mythos → the Fable section, Opus →
- * the Opus section, anything else → base only). Adding a future model is a
- * pure data change in the JSON's `modelPatterns` table — no code edit needed.
+ * tips for the user's current model. Model sections are GENERATION-SPECIFIC
+ * (`opus-5` and `opus-4-8` are separate pages); a model that matches no
+ * pattern — or matches a section missing from the asset — gets base tips only.
+ * A generation NEVER inherits another generation's page: mislabelled advice
+ * ("[Opus 4.8向け]" shown to an Opus 5 user) is worse than no advice. Adding a
+ * future model is a pure data change in the JSON's `modelPatterns` table.
  */
 
 import * as fs from "node:fs";
@@ -45,7 +48,10 @@ export function guidanceAudienceFromLabel(label: string): string {
  * Keeps model-tuned advice visually distinct from the static/official libraries.
  */
 export function tipTag(source: TipSource, audience?: string): string {
-  if (source === "model" && audience) return `[${audience}向け]`;
+  // A model tip whose section carries no label has no trustworthy audience, so
+  // fall back to the neutral official tag rather than inventing one — the tip
+  // still came from an official Anthropic doc page.
+  if (source === "model") return audience ? `[${audience}向け]` : "[公式]";
   if (source === "official") return "[公式]";
   return "[汎用]";
 }
@@ -76,7 +82,8 @@ const GUIDANCE = guidanceData as unknown as PromptingGuidance;
 /**
  * Resolve a model id/name to its guidance section, or null when no
  * model-specific page applies (falls back to base-only tips). First matching
- * pattern wins, so order the table specific-first.
+ * pattern wins, so order the table specific-first. Patterns are anchored to a
+ * generation, so an unknown/future model id resolves to null by design.
  */
 export function resolveModelSection(
   model: string | null | undefined,
@@ -110,11 +117,16 @@ export function getEligibleGuidanceTips(
       out.push({ headline: t.headline, detail: t.detail, source: "official" });
     }
   }
+  // Fail-open: an unmatched model, or a matched section that is missing/empty
+  // in the asset, yields base tips only. Never substitute another generation's
+  // section, and never throw — this feeds the statusline renderer.
   const sectionName = resolveModelSection(model);
   if (sectionName && sectionName !== "base") {
     const sec = GUIDANCE.sections[sectionName];
-    if (sec && Array.isArray(sec.tips)) {
-      const audience = sec.label ? guidanceAudienceFromLabel(sec.label) : undefined;
+    if (sec && Array.isArray(sec.tips) && sec.tips.length > 0) {
+      const rawLabel = typeof sec.label === "string" ? sec.label : "";
+      const audienceRaw = rawLabel ? guidanceAudienceFromLabel(rawLabel) : "";
+      const audience = audienceRaw || undefined;
       for (const t of sec.tips) {
         out.push({ headline: t.headline, detail: t.detail, source: "model", audience });
       }
