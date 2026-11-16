@@ -467,7 +467,7 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-best-practices",
       "source": "https://code.claude.com/docs/en/best-practices",
-      "fetched": "2026-11-02",
+      "fetched": "2026-11-16",
       "entries": [
         {
           "headline": "Claude Code in the cloud",
@@ -491,7 +491,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "To let commands run safely without you approving each one, new terminal and VS Code sessions start in [auto mode](/docs/en/permission-modes#eliminate-prompts-with-auto-mode), where a classifier reviews anything risky before it runs.",
+          "headline": "To let commands run without you approving each one, new terminal and VS Code sessions start in [auto mode](/docs/en/permission-modes#eliminate-prompts-with-auto-mode).",
           "tier": 1,
           "category": "permissions",
           "before": null,
@@ -995,7 +995,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "When you exit an unnamed worktree session, Claude Code [removes the worktree](/docs/en/worktrees#clean-up-worktrees) if there’s nothing in it. For a named session, or one with changes, it asks what to do.",
+          "headline": "When you exit an unnamed worktree session, Claude Code [removes a worktree it created with git](/docs/en/worktrees#clean-up-worktrees) if there’s nothing in it. For a named session, or one with changes, it asks what to do.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1062,10 +1062,10 @@ _STATUSLINE_DICT = json.loads(r'''
     {
       "name": "auto-slash-commands",
       "source": "https://code.claude.com/docs/en/commands",
-      "fetched": "2026-11-02",
+      "fetched": "2026-11-16",
       "entries": [
         {
-          "headline": "/add-dir — Add a working directory for file access during the current session.",
+          "headline": "/add-dir — Add a working directory for file access.",
           "tier": 2,
           "category": "general",
           "before": null,
@@ -1219,7 +1219,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/config — Open the Settings interface to adjust theme, model, output style, and other preferences.",
+          "headline": "/config — Open the Settings interface to adjust preferences.",
           "tier": 3,
           "category": "general",
           "before": null,
@@ -1758,7 +1758,7 @@ _STATUSLINE_DICT = json.loads(r'''
           "after": null
         },
         {
-          "headline": "/stickers — Order Claude Code stickers",
+          "headline": "/stickers — Check Claude Code sticker availability",
           "tier": 2,
           "category": "general",
           "before": null,
