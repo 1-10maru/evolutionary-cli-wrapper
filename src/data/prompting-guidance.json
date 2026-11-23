@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-12T01:45:19.412Z",
+  "generatedAt": "2026-11-23T12:00:06.328Z",
   "modelPatterns": [
     {
       "pattern": "(?:fable|mythos)[-_. ]?5[-_. ]?2(?!\\d)(?![-_. ]?\\d{1,2}(?!\\d))",
@@ -52,8 +52,8 @@
     "base": {
       "label": "",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/claude-prompting-best-practices.md",
-      "fetchedAt": "2026-11-12T01:45:15.360Z",
-      "contentHash": "2705dc2b32d38b1f",
+      "fetchedAt": "2026-11-23T12:00:03.730Z",
+      "contentHash": "4df1c6ce2f538761",
       "tips": [
         {
           "headline": "モデル固有のガイダンス",
@@ -108,8 +108,8 @@
     "fable-5-2": {
       "label": "Fable 5.2のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-fable-5-2.md",
-      "fetchedAt": "2026-11-12T01:45:15.642Z",
-      "contentHash": "3a28f11f53a93b3a",
+      "fetchedAt": "2026-11-23T12:00:03.882Z",
+      "contentHash": "b56a10ebc5a042ab",
       "tips": [
         {
           "headline": "エフォートを調整する",
@@ -155,8 +155,8 @@
       "changes": {
         "label": "Fable 5.1→5.2",
         "sourceUrl": "https://platform.claude.com/docs/ja/models/fable-5-2/whats-new-fable-5-2.md",
-        "fetchedAt": "2026-11-12T01:45:15.981Z",
-        "contentHash": "f6c9df2a64cd386b",
+        "fetchedAt": "2026-11-23T12:00:04.166Z",
+        "contentHash": "70e5e03e7a392daa",
         "tips": [
           {
             "headline": "思考を減らすよう求めるプロンプトの記述では、medium以上のeffortでモデルの思考は止まり…",
@@ -188,8 +188,8 @@
     "fable-5-1": {
       "label": "Fable 5.1のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-fable-5-1.md",
-      "fetchedAt": "2026-11-12T01:45:16.293Z",
-      "contentHash": "bd23b04fc79ab852",
+      "fetchedAt": "2026-11-23T12:00:04.496Z",
+      "contentHash": "c9ce2f8f281aaa19",
       "tips": [
         {
           "headline": "すべてのエフォートレベルを検討する",
@@ -205,7 +205,7 @@
         },
         {
           "headline": "会話履歴を追記専用に保つ",
-          "detail": "各アシスタントターンは、思考ブロックを含め、APIが返したとおりの形で履歴に追加し、リクエスト間で以前のターンを編集しないでください。思考ブロックが有効なのは、それより前のすべてが変更されていない場合のみです。これにはシステムプロンプト、ツールリスト、およびそれ以前のすべてのメッセージが含まれます。"
+          "detail": "各アシスタントターンは、思考ブロックを含め、APIが返したとおりの形で履歴に追加し、リクエスト間で以前のターンを編集しないでください。APIのプレフィックスチェックが思考ブロックを通過させるのは、それより前のすべてが変更されていない場合のみです。これにはシステムプロンプト、ツールリスト、およびそれ以前のすべてのメッセージが含まれます。"
         },
         {
           "headline": "文章の密度",
@@ -213,7 +213,7 @@
         },
         {
           "headline": "チャットでのフォーマット",
-          "detail": "以前のモデルはチャットで箇条書きや太字を多用しすぎており、多くのプロンプトにはそれを抑えるために書かれたフォーマット抑制のルールが含まれています。Claude Fable 5.1は逆の傾向があり、太字の使用が少なく、見出し、リスト、引用符を使う可能性も低くなっています。プロンプトにフォーマット抑制の文言が含まれている場合は、それを削除するか、次のように特定のフォーマットが適切な場合を述べるルールに置き換えてください。"
+          "detail": "以前のモデルはチャットで箇条書きや太字を多用しすぎており、多くのプロンプトにはそれを抑えるために書かれたフォーマット抑制のルールが含まれています。Claude Fable 5.1は逆の傾向があり、太字の使用が少なく、見出し、リスト、引用符を使う可能性も低くなっています。"
         },
         {
           "headline": "取得したソースの引用",
@@ -244,7 +244,7 @@
     "fable-5": {
       "label": "Fable 5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-fable-5.md",
-      "fetchedAt": "2026-11-12T01:45:16.574Z",
+      "fetchedAt": "2026-11-23T12:00:04.652Z",
       "contentHash": "adf4b4700a2e6ae2",
       "tips": [
         {
@@ -300,8 +300,8 @@
     "opus-5-5": {
       "label": "Opus 5.5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-opus-5-5.md",
-      "fetchedAt": "2026-11-12T01:45:16.859Z",
-      "contentHash": "9ce25ba8bf271866",
+      "fetchedAt": "2026-11-23T12:00:04.942Z",
+      "contentHash": "1c80107652c902ba",
       "tips": [
         {
           "headline": "プロンプティングに関連する機能",
@@ -321,7 +321,7 @@
         },
         {
           "headline": "セーフガードによる拒否",
-          "detail": "Claude Opus 5.5は、生物学、サイバーセキュリティ、推論抽出などを対象とした安全性分類器を実行します。 生物学： 生物学のセーフガードはClaude Fable 5.1と同じであり、Claude Opus 5から移行する場合は新しいものです。日常的な健康や教育に関する質問は影響を受けません。"
+          "detail": "Claude Opus 5.5は、生物学、サイバーセキュリティ、推論抽出などを対象とした安全性分類器を実行します。 生物学： 生物学のセーフガードはClaude Fable 5.1と同じであり、Claude Opus 5にはありません。日常的な健康や教育に関する質問は影響を受けません。生物学の分類器が組織のライフサイエンス業務をブロックする場合は、Life Sciences Verification Programに申請してください。"
         },
         {
           "headline": "ユーザー向けの進捗更新",
@@ -333,7 +333,7 @@
         },
         {
           "headline": "マルチエージェントハーネス向けの時間シグナル",
-          "detail": "Claude Opus 5.5は経過時間に関する情報に非常によく反応し、サブエージェントに委任するリードエージェントなどのマルチエージェント構成では、これを利用して並列化を改善し作業を高速化できます。タスクにかかるべき時間を見積もれる場合は、モデルに時間予算を与えてください。ハーネスがモデルに返す各メッセージの末尾に、その予算に対する経過時間を秒単位で示す短い行（たとえばelapsed 340s / 1200s）を追加させます。"
+          "detail": "Claude Opus 5.5は経過時間に関する情報に非常によく反応します。サブエージェントに委任するリードエージェントなどのマルチエージェント構成では、これを利用して並列化を改善し作業を高速化できます。"
         },
         {
           "headline": "チャットのシステムプロンプトにおける思考の指示",
@@ -355,8 +355,8 @@
       "changes": {
         "label": "Opus 5→5.5",
         "sourceUrl": "https://platform.claude.com/docs/ja/models/opus-5-5/whats-new-opus-5-5.md",
-        "fetchedAt": "2026-11-12T01:45:17.218Z",
-        "contentHash": "4937c179c7facde2",
+        "fetchedAt": "2026-11-23T12:00:05.122Z",
+        "contentHash": "127a374681544d64",
         "tips": [
           {
             "headline": "デフォルトのエフォートはmediumです",
@@ -368,7 +368,7 @@
           },
           {
             "headline": "ツール呼び出し間のテキストが思考ブロックで返される",
-            "detail": "モデルがツール呼び出しの間に書く短いメモは、textブロックではなく進捗更新のthinkingブロックとして届きます。そのため、デフォルトのdisplay: \"omitted\"では、それらをユーザーにストリーミングするアプリケーションは、エラーなしにツール呼び出しの間は何も表示されなくなります。移行ガイドではツール呼び出し間のテキストを受け取る方法を説明しており、ユーザー向けの進捗更新ではそれらをより多く求める方法を扱っています。"
+            "detail": "モデルがツール呼び出しの間に書く短いメモは、textブロックではなく進捗更新のthinkingブロックとして届きます。デフォルトのdisplay: \"omitted\"では、それらをユーザーにストリーミングするアプリケーションは、エラーなしにツール呼び出しの間は何も表示されなくなります。移行ガイドではツール呼び出し間のテキストを受け取る方法を説明しています。"
           },
           {
             "headline": "セーフガードカテゴリの追加",
@@ -384,7 +384,7 @@
     "opus-5": {
       "label": "Opus 5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-opus-5.md",
-      "fetchedAt": "2026-11-12T01:45:17.503Z",
+      "fetchedAt": "2026-11-23T12:00:05.262Z",
       "contentHash": "83069fa662cde354",
       "tips": [
         {
@@ -428,7 +428,7 @@
     "opus-4-8": {
       "label": "Opus 4.8のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-opus-4-8.md",
-      "fetchedAt": "2026-11-12T01:45:17.795Z",
+      "fetchedAt": "2026-11-23T12:00:05.473Z",
       "contentHash": "f03ed07a2f303c2c",
       "tips": [
         {
@@ -480,7 +480,7 @@
     "sonnet-5-5": {
       "label": "Sonnet 5.5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5.md",
-      "fetchedAt": "2026-11-12T01:45:18.089Z",
+      "fetchedAt": "2026-11-23T12:00:05.680Z",
       "contentHash": "4cb0f5f9a1b24678",
       "tips": [
         {
@@ -531,8 +531,8 @@
       "changes": {
         "label": "Sonnet 5→5.5",
         "sourceUrl": "https://platform.claude.com/docs/ja/models/sonnet-5-5/whats-new-sonnet-5-5.md",
-        "fetchedAt": "2026-11-12T01:45:18.379Z",
-        "contentHash": "63ed579a7713879e",
+        "fetchedAt": "2026-11-23T12:00:05.839Z",
+        "contentHash": "01d4169b3e6d5b01",
         "tips": [
           {
             "headline": "エフォートレベルが再調整されています",
@@ -540,7 +540,7 @@
           },
           {
             "headline": "ツール呼び出しの間のテキストは思考ブロックで返されます",
-            "detail": "ツール呼び出しの間で、1〜2文より長いメモは進捗更新のthinkingブロックとして返されます。短い発言はtextのままです。デフォルトのdisplay: \"omitted\"では、進捗更新ブロックのテキストは空になるため、それらのメモをユーザーにストリーミングしているアプリケーションは、エラーなしにツール呼び出しの間で無音になります。betweentoolsで事前の思考をオフにすると、テキストが返されます。"
+            "detail": "ツール呼び出しの間で、1〜2文より長いメモは進捗更新のthinkingブロックとして返されます。短い発言はtextのままです。デフォルトのdisplay: \"omitted\"では、進捗更新ブロックのテキストは空になるため、それらのメモをユーザーにストリーミングしているアプリケーションは、エラーなしにツール呼び出しの間で無音になります。betweentoolsで事前思考をオフにすると、テキストが返されます。"
           },
           {
             "headline": "セーフガードのカテゴリ",
@@ -552,7 +552,7 @@
     "sonnet-5": {
       "label": "Sonnet 5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-sonnet-5.md",
-      "fetchedAt": "2026-11-12T01:45:18.654Z",
+      "fetchedAt": "2026-11-23T12:00:06.030Z",
       "contentHash": "9f875f0922bd9cce",
       "tips": [
         {
@@ -600,12 +600,12 @@
     "haiku-5-5": {
       "label": "Haiku 5.5のコツ",
       "sourceUrl": "https://platform.claude.com/docs/ja/build-with-claude/prompt-engineering/prompting-claude-haiku-5-5.md",
-      "fetchedAt": "2026-11-12T01:45:19.094Z",
-      "contentHash": "5a975b535fdbd647",
+      "fetchedAt": "2026-11-23T12:00:06.161Z",
+      "contentHash": "b812e78721166db8",
       "tips": [
         {
           "headline": "エフォートを使用して思考を制御する",
-          "detail": "「effort」（エフォート）は、Claude Haiku 5.5がどの程度思考するかを制御する主要な手段です。これはClaude Haiku 4.5で使用されていた思考予算（budgettokens）に代わるものであるため、引き継ぐべき古い設定はありません。独自の評価で、以下のレベルのうち2つか3つを比較してください： lowは最も安価で高速なレベルです。チャット、短いツールタスク、シンプルで大量のリクエストに使用してください。"
+          "detail": "「effort」（エフォート）は、Claude Haiku 5.5がどの程度思考するかを制御する主要な手段です。Claude Haiku 4.5では代わりに思考予算（budgettokens）を使用するため、引き継ぐべきエフォート設定はありません。Claude Haiku 5.5では、budgettokensを設定したリクエストは400エラーを返します。"
         },
         {
           "headline": "正確な検索結果",
@@ -613,7 +613,7 @@
         },
         {
           "headline": "JSON出力と独自のツールで適応型思考を使用する",
-          "detail": "思考がオフの場合、構造化出力でJSON出力も要求すると、Claude Haiku 5.5は必要なツール呼び出しをスキップすることがあります。"
+          "detail": "思考がオフの場合、構造化出力でJSON出力も要求すると、Claude Haiku 5.5は必要なツール呼び出しをスキップする可能性があります。"
         },
         {
           "headline": "長いエージェントプロンプトでの早期停止を防ぐ",
@@ -639,8 +639,8 @@
       "changes": {
         "label": "Haiku 4.5→5.5",
         "sourceUrl": "https://platform.claude.com/docs/ja/models/haiku-5-5/whats-new-haiku-5-5.md",
-        "fetchedAt": "2026-11-12T01:45:19.412Z",
-        "contentHash": "3a7085b2a9268a0d",
+        "fetchedAt": "2026-11-23T12:00:06.328Z",
+        "contentHash": "e84797ec06d90119",
         "tips": [
           {
             "headline": "応答が思考ブロックで始まる場合があります",
